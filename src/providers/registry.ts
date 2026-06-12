@@ -1,0 +1,52 @@
+import { providerUnavailable } from "../http/errors";
+import type { Env, ProviderRouteConfig } from "../types";
+import { createOpenAICompatiblePlugin } from "./openai-compatible";
+import type { ProviderCredential, ProviderPlugin } from "./types";
+
+export class ProviderRegistry {
+  private readonly plugins = new Map<string, ProviderPlugin>();
+
+  register(plugin: ProviderPlugin): void {
+    this.plugins.set(plugin.manifest.id, plugin);
+  }
+
+  get(pluginId: string): ProviderPlugin {
+    const plugin = this.plugins.get(pluginId);
+    if (!plugin) {
+      throw providerUnavailable(`Provider plugin not registered: ${pluginId}`);
+    }
+    return plugin;
+  }
+
+  list(): ProviderPlugin[] {
+    return [...this.plugins.values()];
+  }
+}
+
+export function createProviderRegistry(env: Env): ProviderRegistry {
+  const registry = new ProviderRegistry();
+  registry.register(createOpenAICompatiblePlugin(env));
+  return registry;
+}
+
+export function resolveProviderCredential(env: Env, route: ProviderRouteConfig): ProviderCredential {
+  const credentialId = route.credential_id || "env:OPENAI_COMPATIBLE_API_KEY";
+  const secretName = credentialId.startsWith("env:") ? credentialId.slice(4) : credentialId;
+  const apiKey = getEnvString(env, secretName);
+
+  if (!apiKey) {
+    throw providerUnavailable(`Provider credential is not configured: ${credentialId}`);
+  }
+
+  return {
+    id: credentialId,
+    plugin_id: route.plugin_id,
+    api_key: apiKey,
+    base_url: env.OPENAI_COMPATIBLE_BASE_URL
+  };
+}
+
+function getEnvString(env: Env, key: string): string | undefined {
+  const value = (env as unknown as Record<string, unknown>)[key];
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}

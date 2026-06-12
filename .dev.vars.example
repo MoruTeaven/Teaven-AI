@@ -1,0 +1,4 @@
+DEV_API_KEY=dev-only-change-me
+OPENAI_COMPATIBLE_API_KEY=sk-replace-me
+OPENAI_COMPATIBLE_BASE_URL=https://api.openai.com/v1
+OPENAI_COMPATIBLE_DEFAULT_MODEL=gpt-4o-mini
