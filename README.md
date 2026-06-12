@@ -112,6 +112,7 @@ npm run typecheck
 当前 MVP 已实现：
 
 - `GET /health`
+- `GET /admin`
 - `GET /v1/models`
 - `POST /v1/chat/completions`
 - `POST /v1/tasks`
@@ -122,6 +123,29 @@ npm run typecheck
 
 ```http
 Authorization: Bearer dev-only-change-me
+```
+
+### 管理员后台
+
+本地启动后访问：
+
+```text
+http://localhost:8787/admin
+```
+
+管理员后台使用独立的 `ADMIN_TOKEN` 鉴权。页面会把该 token 作为 `Authorization: Bearer <ADMIN_TOKEN>` 调用 `/admin/api/*`。
+
+当前第一版后台支持：
+
+- 网关配置来源、鉴权模式和 Cloudflare 绑定状态概览。
+- 模型、路由和 Provider 插件查看。
+- 最近异步任务列表和按 `task_id` 查询任务详情。
+- `MODEL_CONFIG_JSON` 格式校验。
+
+示例本地环境变量：
+
+```bash
+ADMIN_TOKEN=admin-dev-only-change-me
 ```
 
 默认内置一个 `openai-compatible` Provider Plugin，使用：

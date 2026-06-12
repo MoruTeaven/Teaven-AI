@@ -49,7 +49,7 @@ export function selectRoute(model: ModelConfig): ProviderRouteConfig | undefined
     .sort((left, right) => (left.priority || 100) - (right.priority || 100))[0];
 }
 
-function validateGatewayConfig(config: GatewayConfig): void {
+export function validateGatewayConfig(config: GatewayConfig): void {
   if (!config || typeof config !== "object" || !Array.isArray(config.models)) {
     throw new Error("models must be an array");
   }
