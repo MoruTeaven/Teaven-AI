@@ -3,5 +3,6 @@ main = "src/index.ts"
 compatibility_date = "2026-06-12"
 
 [vars]
+ADMIN_TOKEN = "admin-dev-only-change-me"
 OPENAI_COMPATIBLE_BASE_URL = "https://api.openai.com/v1"
 OPENAI_COMPATIBLE_DEFAULT_MODEL = "gpt-4o-mini"

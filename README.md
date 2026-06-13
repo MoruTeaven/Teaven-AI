@@ -80,6 +80,7 @@ Provider Adapter 还需要声明上游能力和执行模式，例如文本是否
 
 - [技术设计](docs/technical-design.md)
 - [Provider 插件开发指南](docs/provider-plugin-guide.md)
+- [配置说明](docs/configuration.md)
 
 ## 本地开发
 
@@ -153,6 +154,8 @@ ADMIN_TOKEN=admin-dev-only-change-me
 - `OPENAI_COMPATIBLE_API_KEY`
 - `OPENAI_COMPATIBLE_BASE_URL`
 - `OPENAI_COMPATIBLE_DEFAULT_MODEL`
+
+`OPENAI_COMPATIBLE_BASE_URL` 和 `OPENAI_COMPATIBLE_DEFAULT_MODEL` 在当前默认值不变时可以省略；`OPENAI_COMPATIBLE_API_KEY` 是默认聊天补全实际调用上游所需的密钥。更多说明见 [配置说明](docs/configuration.md)。
 
 如果需要配置多个模型和路由，可以通过 `MODEL_CONFIG_JSON` 覆盖默认配置。
 
