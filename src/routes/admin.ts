@@ -24,7 +24,7 @@ export async function handleAdminRequest(
   }
 
   if (!pathname.startsWith("/admin/api/")) {
-    throw notFound("Endpoint not found");
+    throw notFound("接口不存在");
   }
 
   authenticateAdmin(request, env);
@@ -42,7 +42,7 @@ export async function handleAdminRequest(
     return handleGetAdminTask(decodeURIComponent(taskMatch[1]), env, requestId);
   }
 
-  throw notFound("Endpoint not found");
+  throw notFound("接口不存在");
 }
 
 async function handleAdminOverview(env: Env, requestId: string): Promise<Response> {
@@ -56,7 +56,7 @@ async function handleAdminOverview(env: Env, requestId: string): Promise<Respons
       status: "ok",
       gateway: {
         auth_mode: env.AUTH_MODE || "api_key",
-        config_source: env.MODEL_CONFIG_JSON ? "MODEL_CONFIG_JSON" : "environment defaults",
+        config_source: env.MODEL_CONFIG_JSON ? "MODEL_CONFIG_JSON" : "环境默认值",
         task_store: env.AI_GATEWAY_KV ? "kv" : "memory",
         db_bound: Boolean(env.DB),
         kv_bound: Boolean(env.AI_GATEWAY_KV),
@@ -98,7 +98,7 @@ async function handleAdminOverview(env: Env, requestId: string): Promise<Respons
 async function handleGetAdminTask(taskId: string, env: Env, requestId: string): Promise<Response> {
   const task = await getTask(env, taskId);
   if (!task) {
-    throw notFound("Task not found");
+    throw notFound("任务不存在");
   }
 
   return jsonResponse(
@@ -137,7 +137,7 @@ async function handleValidateConfig(request: Request, requestId: string): Promis
     return jsonResponse(
       {
         valid: false,
-        error: error instanceof Error ? error.message : "Invalid config"
+        error: error instanceof Error ? error.message : "配置无效"
       },
       {
         headers: {
@@ -185,16 +185,16 @@ function buildWarnings(env: Env): string[] {
   const warnings: string[] = [];
 
   if (!env.DEV_API_KEY && env.AUTH_MODE !== "none") {
-    warnings.push("DEV_API_KEY is not configured; user API authentication will fail.");
+    warnings.push("未配置 DEV_API_KEY，用户 API 认证将失败。");
   }
   if (!env.OPENAI_COMPATIBLE_API_KEY) {
-    warnings.push("OPENAI_COMPATIBLE_API_KEY is not configured; chat completions will fail for the default provider.");
+    warnings.push("未配置 OPENAI_COMPATIBLE_API_KEY，默认供应商的聊天补全将失败。");
   }
   if (!env.AI_GATEWAY_KV) {
-    warnings.push("AI_GATEWAY_KV is not bound; tasks are stored in memory and may disappear between isolates.");
+    warnings.push("未绑定 AI_GATEWAY_KV，任务将存储在内存中，可能在 isolate 之间丢失。");
   }
   if (!env.DB) {
-    warnings.push("DB is not bound; tenant, API key, quota and billing management are not persistent yet.");
+    warnings.push("未绑定 DB，租户、API key、配额和计费管理尚无法持久化。");
   }
 
   return warnings;
@@ -220,11 +220,11 @@ function htmlResponse(html: string, init: ResponseInit = {}): Response {
 }
 
 const ADMIN_HTML = `<!doctype html>
-<html lang="en">
+<html lang="zh-CN">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Teaven AI Admin</title>
+  <title>Teaven AI 管理后台</title>
   <style>
     :root {
       color-scheme: dark;
@@ -574,46 +574,46 @@ const ADMIN_HTML = `<!doctype html>
     <section class="hero">
       <div>
         <div class="eyebrow">Teaven AI Gateway</div>
-        <h1>Admin Dashboard</h1>
-        <p class="subtitle">Operate the current Worker deployment: inspect models, provider wiring, storage bindings and async tasks.</p>
+        <h1>管理后台</h1>
+        <p class="subtitle">管理当前 Worker 部署：查看模型、供应商接入、存储绑定和异步任务。</p>
       </div>
       <div class="toolbar">
-        <button id="refresh" class="secondary" type="button">Refresh</button>
+        <button id="refresh" class="secondary" type="button">刷新</button>
       </div>
     </section>
 
     <section class="grid">
       <div class="card span-12">
-        <h2>Admin Access</h2>
+        <h2>管理员访问</h2>
         <div class="login" style="margin-top: 14px;">
           <input id="token" type="password" autocomplete="off" placeholder="ADMIN_TOKEN">
-          <button id="save-token" type="button">Connect</button>
-          <button id="clear-token" class="secondary" type="button">Clear</button>
+          <button id="save-token" type="button">连接</button>
+          <button id="clear-token" class="secondary" type="button">清除</button>
         </div>
-        <div id="status" class="status">Enter ADMIN_TOKEN to load the dashboard.</div>
+        <div id="status" class="status">输入 ADMIN_TOKEN 以加载管理后台。</div>
       </div>
 
       <div class="card span-12">
-        <h2>Overview</h2>
+        <h2>概览</h2>
         <div id="stats" class="stat-grid" style="margin-top: 14px;"></div>
         <div id="gateway-meta" class="meta"></div>
       </div>
 
       <div class="card span-12">
-        <h2>Warnings</h2>
+        <h2>告警</h2>
         <div id="warnings" class="warnings"></div>
       </div>
 
       <div class="card span-8">
-        <h2>Models and Routes</h2>
+        <h2>模型与路由</h2>
         <table>
           <thead>
             <tr>
-              <th>Alias</th>
-              <th>Modality</th>
-              <th>Status</th>
-              <th>Stream</th>
-              <th>Routes</th>
+              <th>别名</th>
+              <th>模态</th>
+              <th>状态</th>
+              <th>流式</th>
+              <th>路由</th>
             </tr>
           </thead>
           <tbody id="models"></tbody>
@@ -621,20 +621,20 @@ const ADMIN_HTML = `<!doctype html>
       </div>
 
       <div class="card span-4">
-        <h2>Providers</h2>
+        <h2>供应商</h2>
         <div id="providers" style="margin-top: 14px;"></div>
       </div>
 
       <div class="card span-7">
-        <h2>Recent Tasks</h2>
+        <h2>最近任务</h2>
         <table>
           <thead>
             <tr>
               <th>ID</th>
-              <th>Type</th>
-              <th>Model</th>
-              <th>Status</th>
-              <th>Created</th>
+              <th>类型</th>
+              <th>模型</th>
+              <th>状态</th>
+              <th>创建时间</th>
             </tr>
           </thead>
           <tbody id="tasks"></tbody>
@@ -642,22 +642,22 @@ const ADMIN_HTML = `<!doctype html>
       </div>
 
       <div class="card span-5">
-        <h2>Task Lookup</h2>
+        <h2>任务查询</h2>
         <div class="login" style="grid-template-columns: 1fr auto; margin-top: 14px;">
           <input id="task-id" type="text" placeholder="task_xxx">
-          <button id="lookup-task" type="button">Lookup</button>
+          <button id="lookup-task" type="button">查询</button>
         </div>
-        <pre id="task-output" class="json-view">No task loaded.</pre>
+        <pre id="task-output" class="json-view">尚未加载任务。</pre>
       </div>
 
       <div class="card span-12">
-        <h2>MODEL_CONFIG_JSON Validator</h2>
-        <p class="subtitle">Paste a GatewayConfig JSON object before deploying it as MODEL_CONFIG_JSON.</p>
+        <h2>MODEL_CONFIG_JSON 校验器</h2>
+        <p class="subtitle">在部署为 MODEL_CONFIG_JSON 之前，先粘贴 GatewayConfig JSON 对象进行校验。</p>
         <textarea id="config-json" spellcheck="false" placeholder='{"models":[{"alias":"gpt-4o-mini","modality":"text","supports_stream":true,"status":"active","routes":[{"plugin_id":"openai-compatible","provider_model":"gpt-4o-mini","credential_id":"env:OPENAI_COMPATIBLE_API_KEY","priority":1,"weight":100,"status":"active"}]}]}'></textarea>
         <div class="toolbar" style="margin-top: 12px; justify-content: flex-start;">
-          <button id="validate-config" type="button">Validate Config</button>
+          <button id="validate-config" type="button">校验配置</button>
         </div>
-        <pre id="config-output" class="json-view">No validation run.</pre>
+        <pre id="config-output" class="json-view">尚未执行校验。</pre>
       </div>
     </section>
   </main>
@@ -683,7 +683,7 @@ const ADMIN_HTML = `<!doctype html>
       document.getElementById('clear-token').addEventListener('click', function () {
         localStorage.removeItem(storageKey);
         tokenInput.value = '';
-        setStatus('Token cleared.', 'ok');
+        setStatus('Token 已清除。', 'ok');
       });
       document.getElementById('lookup-task').addEventListener('click', lookupTask);
       document.getElementById('validate-config').addEventListener('click', validateConfig);
@@ -696,7 +696,7 @@ const ADMIN_HTML = `<!doctype html>
         options = options || {};
         var token = tokenInput.value.trim();
         if (!token) {
-          throw new Error('ADMIN_TOKEN is required.');
+          throw new Error('需要填写 ADMIN_TOKEN。');
         }
 
         var headers = Object.assign({}, options.headers || {}, {
@@ -709,7 +709,7 @@ const ADMIN_HTML = `<!doctype html>
         var response = await fetch(path, Object.assign({}, options, { headers: headers }));
         var data = await response.json().catch(function () { return {}; });
         if (!response.ok) {
-          var message = data.error && data.error.message ? data.error.message : 'Request failed with HTTP ' + response.status;
+          var message = data.error && data.error.message ? data.error.message : '请求失败，HTTP 状态码：' + response.status;
           throw new Error(message);
         }
         return data;
@@ -717,11 +717,11 @@ const ADMIN_HTML = `<!doctype html>
 
       async function loadOverview() {
         try {
-          setStatus('Loading dashboard...', '');
+          setStatus('正在加载管理后台...', '');
           var data = await api('/admin/api/overview');
           localStorage.setItem(storageKey, tokenInput.value.trim());
           renderOverview(data);
-          setStatus('Connected. Last refresh: ' + new Date().toLocaleString(), 'ok');
+          setStatus('已连接。最后刷新时间：' + new Date().toLocaleString(), 'ok');
         } catch (error) {
           setStatus(error.message || String(error), 'error');
         }
@@ -730,7 +730,7 @@ const ADMIN_HTML = `<!doctype html>
       async function lookupTask() {
         var taskId = document.getElementById('task-id').value.trim();
         if (!taskId) {
-          taskOutputEl.textContent = 'Enter a task id first.';
+          taskOutputEl.textContent = '请先输入任务 ID。';
           return;
         }
 
@@ -756,32 +756,32 @@ const ADMIN_HTML = `<!doctype html>
       }
 
       function renderOverview(data) {
-        statsEl.innerHTML = renderStat('Models', data.stats.models_total) +
-          renderStat('Active', data.stats.models_active) +
-          renderStat('Routes', data.stats.routes_total) +
-          renderStat('Providers', data.stats.providers_total) +
-          renderStat('Tasks', data.stats.recent_tasks);
+        statsEl.innerHTML = renderStat('模型总数', data.stats.models_total) +
+          renderStat('启用模型', data.stats.models_active) +
+          renderStat('路由总数', data.stats.routes_total) +
+          renderStat('供应商', data.stats.providers_total) +
+          renderStat('最近任务', data.stats.recent_tasks);
 
-        gatewayMetaEl.innerHTML = renderMeta('Auth Mode', data.gateway.auth_mode) +
-          renderMeta('Config Source', data.gateway.config_source) +
-          renderMeta('Task Store', data.gateway.task_store) +
-          renderMeta('Bindings', bindingsText(data.gateway));
+        gatewayMetaEl.innerHTML = renderMeta('认证模式', data.gateway.auth_mode) +
+          renderMeta('配置来源', data.gateway.config_source) +
+          renderMeta('任务存储', taskStoreText(data.gateway.task_store)) +
+          renderMeta('绑定资源', bindingsText(data.gateway));
 
         warningsEl.innerHTML = data.warnings.length
           ? data.warnings.map(function (warning) { return '<div class="warning">' + escapeHtml(warning) + '</div>'; }).join('')
-          : '<span class="pill ok">No active warnings</span>';
+          : '<span class="pill ok">暂无活跃告警</span>';
 
         modelsEl.innerHTML = data.models.length
           ? data.models.map(renderModelRow).join('')
-          : '<tr><td colspan="5" class="empty">No models configured.</td></tr>';
+          : '<tr><td colspan="5" class="empty">尚未配置模型。</td></tr>';
 
         providersEl.innerHTML = data.providers.length
           ? data.providers.map(renderProvider).join('')
-          : '<p class="empty">No providers registered.</p>';
+          : '<p class="empty">尚未注册供应商。</p>';
 
         tasksEl.innerHTML = data.recent_tasks.length
           ? data.recent_tasks.map(renderTaskRow).join('')
-          : '<tr><td colspan="5" class="empty">No recent tasks.</td></tr>';
+          : '<tr><td colspan="5" class="empty">暂无最近任务。</td></tr>';
       }
 
       function renderStat(label, value) {
@@ -795,15 +795,15 @@ const ADMIN_HTML = `<!doctype html>
       function renderModelRow(model) {
         var routes = model.routes.map(function (route) {
           return '<span class="pill">' + escapeHtml(route.plugin_id + ' / ' + route.provider_model) + '</span>' +
-            '<span class="pill">priority ' + escapeHtml(route.priority === null ? 'n/a' : route.priority) + '</span>' +
-            '<span class="pill ' + statusClass(route.status) + '">' + escapeHtml(route.status) + '</span>';
+            '<span class="pill">优先级 ' + escapeHtml(route.priority === null ? '无' : route.priority) + '</span>' +
+            '<span class="pill ' + statusClass(route.status) + '">' + escapeHtml(statusText(route.status)) + '</span>';
         }).join('<br>');
 
         return '<tr>' +
           '<td><code>' + escapeHtml(model.alias) + '</code></td>' +
-          '<td>' + escapeHtml(model.modality) + '</td>' +
-          '<td><span class="pill ' + statusClass(model.status) + '">' + escapeHtml(model.status) + '</span></td>' +
-          '<td>' + (model.supports_stream ? 'yes' : 'no') + '</td>' +
+          '<td>' + escapeHtml(modalityText(model.modality)) + '</td>' +
+          '<td><span class="pill ' + statusClass(model.status) + '">' + escapeHtml(statusText(model.status)) + '</span></td>' +
+          '<td>' + yesNo(model.supports_stream) + '</td>' +
           '<td>' + routes + '</td>' +
           '</tr>';
       }
@@ -816,7 +816,7 @@ const ADMIN_HTML = `<!doctype html>
 
         return '<div style="border: 1px solid var(--line); border-radius: 16px; padding: 14px; margin-bottom: 10px; background: #0b1220;">' +
           '<h3 style="font-size: 15px; margin-bottom: 8px;">' + escapeHtml(provider.name) + '</h3>' +
-          '<div class="pill ' + (provider.configured ? 'ok' : 'danger') + '">' + (provider.configured ? 'configured' : 'missing credential') + '</div>' +
+          '<div class="pill ' + (provider.configured ? 'ok' : 'danger') + '">' + (provider.configured ? '已配置' : '缺少凭据') + '</div>' +
           '<div class="pill">' + escapeHtml(provider.id) + '</div>' +
           '<div class="pill">v' + escapeHtml(provider.version) + '</div>' +
           '<div style="margin-top: 8px;">' + caps + '</div>' +
@@ -826,9 +826,9 @@ const ADMIN_HTML = `<!doctype html>
       function renderTaskRow(task) {
         return '<tr>' +
           '<td><code>' + escapeHtml(task.id) + '</code></td>' +
-          '<td>' + escapeHtml(task.type) + '</td>' +
+          '<td>' + escapeHtml(taskTypeText(task.type)) + '</td>' +
           '<td>' + escapeHtml(task.model) + '</td>' +
-          '<td><span class="pill ' + statusClass(task.status) + '">' + escapeHtml(task.status) + '</span></td>' +
+          '<td><span class="pill ' + statusClass(task.status) + '">' + escapeHtml(statusText(task.status)) + '</span></td>' +
           '<td>' + escapeHtml(task.created_at) + '</td>' +
           '</tr>';
       }
@@ -838,7 +838,68 @@ const ADMIN_HTML = `<!doctype html>
       }
 
       function yesNo(value) {
-        return value ? 'on' : 'off';
+        return value ? '已启用' : '未启用';
+      }
+
+      function taskStoreText(value) {
+        if (value === 'kv') {
+          return 'KV';
+        }
+        if (value === 'memory') {
+          return '内存';
+        }
+        return value;
+      }
+
+      function modalityText(value) {
+        if (value === 'text') {
+          return '文本';
+        }
+        if (value === 'vision') {
+          return '视觉';
+        }
+        if (value === 'audio') {
+          return '音频';
+        }
+        return value;
+      }
+
+      function taskTypeText(value) {
+        if (value === 'chat.completions') {
+          return '聊天补全';
+        }
+        return value;
+      }
+
+      function statusText(status) {
+        if (status === 'active') {
+          return '启用';
+        }
+        if (status === 'succeeded') {
+          return '成功';
+        }
+        if (status === 'running') {
+          return '运行中';
+        }
+        if (status === 'queued') {
+          return '排队中';
+        }
+        if (status === 'hidden') {
+          return '隐藏';
+        }
+        if (status === 'disabled') {
+          return '停用';
+        }
+        if (status === 'failed') {
+          return '失败';
+        }
+        if (status === 'canceled') {
+          return '已取消';
+        }
+        if (status === 'expired') {
+          return '已过期';
+        }
+        return status;
       }
 
       function statusClass(status) {

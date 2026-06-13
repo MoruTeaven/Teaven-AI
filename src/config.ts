@@ -9,9 +9,9 @@ export function loadGatewayConfig(env: Env): GatewayConfig {
       return config;
     } catch (error) {
       if (error instanceof Error) {
-        throw invalidRequest(`Invalid MODEL_CONFIG_JSON: ${error.message}`);
+        throw invalidRequest(`MODEL_CONFIG_JSON 无效：${error.message}`);
       }
-      throw invalidRequest("Invalid MODEL_CONFIG_JSON");
+      throw invalidRequest("MODEL_CONFIG_JSON 无效");
     }
   }
 
@@ -51,15 +51,15 @@ export function selectRoute(model: ModelConfig): ProviderRouteConfig | undefined
 
 export function validateGatewayConfig(config: GatewayConfig): void {
   if (!config || typeof config !== "object" || !Array.isArray(config.models)) {
-    throw new Error("models must be an array");
+    throw new Error("models 必须是数组");
   }
 
   for (const model of config.models) {
     if (typeof model.alias !== "string" || model.alias.length === 0) {
-      throw new Error("model alias is required");
+      throw new Error("model alias 不能为空");
     }
     if (!Array.isArray(model.routes) || model.routes.length === 0) {
-      throw new Error(`model ${model.alias} must have routes`);
+      throw new Error(`model ${model.alias} 必须配置 routes`);
     }
   }
 }
