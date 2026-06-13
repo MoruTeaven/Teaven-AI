@@ -1,6 +1,12 @@
-import { authenticateAdmin } from "../auth/admin";
+import {
+  ADMIN_SESSION_COOKIE,
+  ADMIN_SESSION_TTL_SECONDS,
+  authenticateAdmin,
+  createAdminSession,
+  verifyAdminPassword
+} from "../auth/admin";
 import { loadGatewayConfig, validateGatewayConfig } from "../config";
-import { invalidRequest, notFound } from "../http/errors";
+import { notFound } from "../http/errors";
 import { jsonResponse } from "../http/response";
 import { createProviderRegistry } from "../providers/registry";
 import { getTask, listTasks } from "../tasks/store";
@@ -15,7 +21,35 @@ export async function handleAdminRequest(
   requestId: string,
   pathname: string
 ): Promise<Response> {
+  if (request.method === "GET" && pathname === "/admin/login") {
+    if (await isAdminAuthenticated(request, env)) {
+      return redirectResponse("/admin", requestId);
+    }
+
+    return htmlResponse(renderAdminLoginHtml(), {
+      headers: {
+        "X-Request-Id": requestId
+      }
+    });
+  }
+
+  if (request.method === "POST" && pathname === "/admin/login") {
+    return handleAdminLogin(request, env, requestId);
+  }
+
+  if (request.method === "POST" && pathname === "/admin/logout") {
+    return redirectResponse("/admin/login", requestId, {
+      headers: {
+        "Set-Cookie": serializeAdminSessionCookie(request, "", 0)
+      }
+    });
+  }
+
   if (request.method === "GET" && pathname === "/admin") {
+    if (!(await isAdminAuthenticated(request, env))) {
+      return redirectResponse("/admin/login", requestId);
+    }
+
     return htmlResponse(ADMIN_HTML, {
       headers: {
         "X-Request-Id": requestId
@@ -27,7 +61,7 @@ export async function handleAdminRequest(
     throw notFound("接口不存在");
   }
 
-  authenticateAdmin(request, env);
+  await authenticateAdmin(request, env);
 
   if (request.method === "GET" && pathname === "/admin/api/overview") {
     return handleAdminOverview(env, requestId);
@@ -43,6 +77,78 @@ export async function handleAdminRequest(
   }
 
   throw notFound("接口不存在");
+}
+
+async function handleAdminLogin(request: Request, env: Env, requestId: string): Promise<Response> {
+  try {
+    const form = await request.formData();
+    const password = String(form.get("password") || "").trim();
+    if (!password) {
+      return renderLoginError("请输入管理员密码。", requestId, 400);
+    }
+
+    if (!(await verifyAdminPassword(password, env))) {
+      return renderLoginError("管理员密码不正确。", requestId, 401);
+    }
+
+    const session = await createAdminSession(env);
+    return redirectResponse("/admin", requestId, {
+      headers: {
+        "Set-Cookie": serializeAdminSessionCookie(request, session, ADMIN_SESSION_TTL_SECONDS)
+      }
+    });
+  } catch (error) {
+    return renderLoginError(error instanceof Error ? error.message : "登录失败。", requestId, 500);
+  }
+}
+
+async function isAdminAuthenticated(request: Request, env: Env): Promise<boolean> {
+  try {
+    await authenticateAdmin(request, env);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function renderLoginError(message: string, requestId: string, status: number): Response {
+  return htmlResponse(renderAdminLoginHtml(message), {
+    status,
+    headers: {
+      "X-Request-Id": requestId
+    }
+  });
+}
+
+function redirectResponse(location: string, requestId: string, init: ResponseInit = {}): Response {
+  const headers = new Headers(init.headers);
+  headers.set("Location", location);
+  headers.set("X-Request-Id", requestId);
+
+  return new Response(null, {
+    ...init,
+    status: init.status || 302,
+    headers
+  });
+}
+
+function serializeAdminSessionCookie(request: Request, value: string, maxAge: number): string {
+  const attributes = [
+    `${ADMIN_SESSION_COOKIE}=${value}`,
+    "Path=/admin",
+    `Max-Age=${maxAge}`,
+    "HttpOnly",
+    "SameSite=Lax"
+  ];
+
+  if (maxAge === 0) {
+    attributes.push("Expires=Thu, 01 Jan 1970 00:00:00 GMT");
+  }
+  if (new URL(request.url).protocol === "https:") {
+    attributes.push("Secure");
+  }
+
+  return attributes.join("; ");
 }
 
 async function handleAdminOverview(env: Env, requestId: string): Promise<Response> {
@@ -219,6 +325,171 @@ function htmlResponse(html: string, init: ResponseInit = {}): Response {
   });
 }
 
+function renderAdminLoginHtml(errorMessage = ""): string {
+  const errorHtml = errorMessage ? `<div class="alert">${escapeHtml(errorMessage)}</div>` : "";
+
+  return `<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>登录 Teaven AI 管理后台</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #080b12;
+      --panel: #111827;
+      --line: #273244;
+      --text: #f6f8fb;
+      --muted: #9aa8bd;
+      --accent: #7dd3fc;
+      --accent-strong: #38bdf8;
+      --danger: #fb7185;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      padding: 24px;
+      background:
+        radial-gradient(circle at 20% 15%, rgba(125, 211, 252, 0.2), transparent 26rem),
+        radial-gradient(circle at 80% 85%, rgba(56, 189, 248, 0.12), transparent 24rem),
+        linear-gradient(135deg, #070a10 0%, #0d1320 48%, #111827 100%);
+      color: var(--text);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    .login-shell {
+      width: min(100%, 440px);
+    }
+
+    .eyebrow {
+      color: var(--accent);
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: 0.22em;
+      margin-bottom: 12px;
+      text-transform: uppercase;
+    }
+
+    .card {
+      background: rgba(17, 24, 39, 0.84);
+      border: 1px solid rgba(125, 211, 252, 0.16);
+      border-radius: 26px;
+      box-shadow: 0 28px 90px rgba(0, 0, 0, 0.3);
+      padding: 28px;
+      backdrop-filter: blur(18px);
+    }
+
+    h1,
+    p {
+      margin: 0;
+    }
+
+    h1 {
+      font-size: clamp(34px, 9vw, 58px);
+      letter-spacing: -0.06em;
+      line-height: 0.95;
+    }
+
+    p {
+      color: var(--muted);
+      margin-top: 14px;
+      line-height: 1.65;
+    }
+
+    form {
+      display: grid;
+      gap: 12px;
+      margin-top: 26px;
+    }
+
+    label {
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    input,
+    button {
+      width: 100%;
+      font: inherit;
+    }
+
+    input {
+      color: var(--text);
+      background: #0b1220;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      outline: none;
+      padding: 13px 14px;
+    }
+
+    input:focus {
+      border-color: var(--accent-strong);
+      box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.12);
+    }
+
+    button {
+      border: 0;
+      border-radius: 999px;
+      color: #06111f;
+      background: var(--accent);
+      cursor: pointer;
+      font-weight: 900;
+      padding: 13px 16px;
+      transition: transform 150ms ease, background 150ms ease;
+    }
+
+    button:hover {
+      background: var(--accent-strong);
+      transform: translateY(-1px);
+    }
+
+    .alert {
+      margin-top: 16px;
+      border: 1px solid rgba(251, 113, 133, 0.35);
+      border-radius: 16px;
+      background: rgba(251, 113, 133, 0.1);
+      color: #fecdd3;
+      padding: 12px 14px;
+      font-size: 13px;
+    }
+  </style>
+</head>
+<body>
+  <main class="login-shell">
+    <section class="card">
+      <div class="eyebrow">Teaven AI Gateway</div>
+      <h1>管理员登录</h1>
+      <p>登录成功后将自动进入管理后台。</p>
+      ${errorHtml}
+      <form action="/admin/login" method="post">
+        <label for="password">管理员密码</label>
+        <input id="password" name="password" type="password" autocomplete="current-password" autofocus required>
+        <button type="submit">登录后台</button>
+      </form>
+    </section>
+  </main>
+</body>
+</html>`;
+}
+
+function escapeHtml(value: unknown): string {
+  return String(value === undefined || value === null ? "" : value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
 const ADMIN_HTML = `<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -313,6 +584,10 @@ const ADMIN_HTML = `<!doctype html>
       gap: 10px;
       justify-content: flex-end;
       flex-wrap: wrap;
+    }
+
+    .toolbar form {
+      margin: 0;
     }
 
     .grid {
@@ -579,22 +854,16 @@ const ADMIN_HTML = `<!doctype html>
       </div>
       <div class="toolbar">
         <button id="refresh" class="secondary" type="button">刷新</button>
+        <form action="/admin/logout" method="post">
+          <button class="secondary" type="submit">退出登录</button>
+        </form>
       </div>
     </section>
 
     <section class="grid">
       <div class="card span-12">
-        <h2>管理员访问</h2>
-        <div class="login" style="margin-top: 14px;">
-          <input id="token" type="password" autocomplete="off" placeholder="ADMIN_TOKEN">
-          <button id="save-token" type="button">连接</button>
-          <button id="clear-token" class="secondary" type="button">清除</button>
-        </div>
-        <div id="status" class="status">输入 ADMIN_TOKEN 以加载管理后台。</div>
-      </div>
-
-      <div class="card span-12">
         <h2>概览</h2>
+        <div id="status" class="status">正在加载管理后台...</div>
         <div id="stats" class="stat-grid" style="margin-top: 14px;"></div>
         <div id="gateway-meta" class="meta"></div>
       </div>
@@ -664,8 +933,6 @@ const ADMIN_HTML = `<!doctype html>
 
   <script>
     (function () {
-      var storageKey = 'teaven_admin_token';
-      var tokenInput = document.getElementById('token');
       var statusEl = document.getElementById('status');
       var statsEl = document.getElementById('stats');
       var gatewayMetaEl = document.getElementById('gateway-meta');
@@ -676,38 +943,25 @@ const ADMIN_HTML = `<!doctype html>
       var taskOutputEl = document.getElementById('task-output');
       var configOutputEl = document.getElementById('config-output');
 
-      tokenInput.value = localStorage.getItem(storageKey) || '';
-
-      document.getElementById('save-token').addEventListener('click', loadOverview);
       document.getElementById('refresh').addEventListener('click', loadOverview);
-      document.getElementById('clear-token').addEventListener('click', function () {
-        localStorage.removeItem(storageKey);
-        tokenInput.value = '';
-        setStatus('Token 已清除。', 'ok');
-      });
       document.getElementById('lookup-task').addEventListener('click', lookupTask);
       document.getElementById('validate-config').addEventListener('click', validateConfig);
 
-      if (tokenInput.value) {
-        loadOverview();
-      }
+      loadOverview();
 
       async function api(path, options) {
         options = options || {};
-        var token = tokenInput.value.trim();
-        if (!token) {
-          throw new Error('需要填写 ADMIN_TOKEN。');
-        }
-
-        var headers = Object.assign({}, options.headers || {}, {
-          Authorization: 'Bearer ' + token
-        });
+        var headers = Object.assign({}, options.headers || {});
         if (options.body && !headers['Content-Type']) {
           headers['Content-Type'] = 'application/json';
         }
 
-        var response = await fetch(path, Object.assign({}, options, { headers: headers }));
+        var response = await fetch(path, Object.assign({}, options, { headers: headers, credentials: 'same-origin' }));
         var data = await response.json().catch(function () { return {}; });
+        if (response.status === 401) {
+          window.location.assign('/admin/login');
+          throw new Error('登录已过期，请重新登录。');
+        }
         if (!response.ok) {
           var message = data.error && data.error.message ? data.error.message : '请求失败，HTTP 状态码：' + response.status;
           throw new Error(message);
@@ -719,7 +973,6 @@ const ADMIN_HTML = `<!doctype html>
         try {
           setStatus('正在加载管理后台...', '');
           var data = await api('/admin/api/overview');
-          localStorage.setItem(storageKey, tokenInput.value.trim());
           renderOverview(data);
           setStatus('已连接。最后刷新时间：' + new Date().toLocaleString(), 'ok');
         } catch (error) {

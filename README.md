@@ -133,7 +133,7 @@ Authorization: Bearer dev-only-change-me
 http://localhost:8787/admin
 ```
 
-管理员后台使用独立的 `ADMIN_TOKEN` 鉴权。页面会把该 token 作为 `Authorization: Bearer <ADMIN_TOKEN>` 调用 `/admin/api/*`。
+管理员后台使用独立的 `ADMIN_TOKEN` 作为管理员密码。访问 `/admin` 会先跳转到登录页；登录成功后服务端写入 HttpOnly 会话 Cookie，并自动进入管理后台。
 
 当前第一版后台支持：
 
