@@ -38,19 +38,19 @@ OPENAI_COMPATIBLE_API_KEY=sk-replace-me
 
 ## 配置分层
 
-目标配置顺序应该是先配置协议和上游，再配置模型：
+目标配置顺序应该是先配置协议和上游，再在上游下添加模型：
 
-1. 选择协议或 Provider Plugin，例如 `openai-compatible`、异步轮询任务协议、异步 webhook 任务协议或私有协议插件。
-2. 配置上游实例，把协议、endpoint、区域、凭证和健康检查状态绑定到一个稳定的 `upstream_id`。
-3. 配置平台模型别名，把用户看到的 `model` 路由到某个 `upstream_id` 上的真实上游模型名。
+1. 选择协议类型和 Provider Plugin，例如 OpenAI 兼容格式、异步轮询任务协议、异步 webhook 任务协议或私有协议插件。
+2. 配置上游实例，把协议类型、endpoint、区域、凭证和健康检查状态绑定到一个稳定的上游 ID。
+3. 在上游实例下添加模型条目，只填写平台模型别名、上游真实模型名和模型能力。
 
-这样可以把“怎么调用某类上游”和“这次实际调用哪个模型”拆开。同一个 OpenAI 兼容协议插件可以配置多个上游，例如 OpenAI 官方、硅基流动兼容接口、私有 vLLM 网关；同一个上游也可以承载多个平台模型别名。
+这样可以把“怎么调用某类上游”和“这次实际调用哪个模型”拆开。同一个 OpenAI 兼容协议插件可以配置多个上游，例如 OpenAI 官方、硅基流动兼容接口、私有 vLLM 网关；同一个上游也可以承载多个平台模型别名。模型添加时不再单独填写密钥、域名或 base URL，这些只属于上游实例。
 
 | 层级 | 保存内容 | 示例 | 用户是否可见 |
 | --- | --- | --- | --- |
 | 协议或插件 | 协议转换、流式解析、任务状态映射、错误归一。 | `openai-compatible`、`modelark` | 否 |
-| 上游实例 | 使用哪个插件、base URL、凭证引用、区域、协议参数、状态。 | `openai-main`、`siliconflow-cn` | 否 |
-| 模型别名 | 对外模型名、能力、路由优先级和上游真实模型名。 | `fast-chat` -> `siliconflow-cn` / `Qwen/Qwen2.5-72B-Instruct` | 是 |
+| 上游实例 | 协议类型、插件、base URL、凭证引用、区域、协议参数、状态。 | `openai-main`、`siliconflow-cn` | 否 |
+| 上游模型 | 对外模型名、上游真实模型名、能力、优先级和权重，不含密钥和域名。 | `fast-chat` -> `Qwen/Qwen2.5-72B-Instruct` | 别名可见 |
 
 目标配置示例：
 
@@ -60,32 +60,60 @@ OPENAI_COMPATIBLE_API_KEY=sk-replace-me
     {
       "id": "openai-main",
       "name": "OpenAI official",
+      "protocol_type": "openai-compatible",
       "plugin_id": "openai-compatible",
-      "protocol": "openai-chat-completions",
       "base_url": "https://api.openai.com/v1",
       "credential_id": "env:OPENAI_API_KEY",
-      "status": "active"
+      "status": "active",
+      "models": [
+        {
+          "alias": "gpt-4o-mini",
+          "provider_model": "gpt-4o-mini",
+          "modality": "text",
+          "supports_stream": true,
+          "priority": 1,
+          "weight": 100,
+          "status": "active"
+        }
+      ]
     },
     {
       "id": "siliconflow-cn",
       "name": "SiliconFlow CN",
+      "protocol_type": "openai-compatible",
       "plugin_id": "openai-compatible",
-      "protocol": "openai-chat-completions",
       "base_url": "https://api.siliconflow.cn/v1",
       "credential_id": "env:SILICONFLOW_API_KEY",
-      "status": "active"
-    }
-  ],
-  "models": [
-    {
-      "alias": "fast-chat",
-      "modality": "text",
-      "supports_stream": true,
       "status": "active",
-      "routes": [
+      "models": [
         {
-          "upstream_id": "siliconflow-cn",
+          "alias": "fast-chat",
           "provider_model": "Qwen/Qwen2.5-72B-Instruct",
+          "modality": "text",
+          "supports_stream": true,
+          "priority": 1,
+          "weight": 100,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "internal-llm",
+      "name": "Internal LLM",
+      "protocol_type": "private",
+      "plugin_id": "internal-llm",
+      "base_url": "https://llm.internal.example",
+      "credential_id": "env:INTERNAL_LLM_TOKEN",
+      "config": {
+        "signing": "hmac-v1"
+      },
+      "status": "active",
+      "models": [
+        {
+          "alias": "private-chat",
+          "provider_model": "chat-prod",
+          "modality": "text",
+          "supports_stream": false,
           "priority": 1,
           "weight": 100,
           "status": "active"
@@ -96,7 +124,7 @@ OPENAI_COMPATIBLE_API_KEY=sk-replace-me
 }
 ```
 
-当前代码里的 `GatewayConfig` 还没有独立的 `upstreams` 数组，`routes[]` 暂时把 `plugin_id`、`provider`、`credential_id` 和 `provider_model` 写在一起。实施上游实例层时，应先确认是否已有线上 KV 或 `MODEL_CONFIG_JSON` 持久化配置；如果没有已发布配置，可以直接切换到上面的目标结构，如果已有配置，则需要明确一次迁移策略。
+当前代码里的 `GatewayConfig` 还没有独立的 `upstreams` 数组，`routes[]` 暂时把 `plugin_id`、`provider`、`credential_id` 和 `provider_model` 写在一起。实施上游实例层时，应把 `upstreams[].models[]` 归一化为运行时可查询的模型路由；如果没有已发布配置，可以直接切换到上面的目标结构，如果已有 KV 或 `MODEL_CONFIG_JSON` 持久化配置，则需要明确一次迁移策略。
 
 ## OpenAI 兼容配置
 
@@ -110,7 +138,7 @@ OPENAI_COMPATIBLE_API_KEY=sk-replace-me
 4. 网关读取 route 的 `credential_id`，默认是 `env:OPENAI_COMPATIBLE_API_KEY`。
 5. 网关把请求转发到 `OPENAI_COMPATIBLE_BASE_URL + /chat/completions`，并把请求体里的 `model` 改成 route 的 `provider_model`。
 
-目标结构中，第 4 步应改为读取 route 的 `upstream_id`，再从上游实例读取 `plugin_id`、`base_url`、`credential_id` 和协议参数。模型路由不再直接保存 endpoint 和凭证。
+目标结构中，第 4 步应改为找到承载该模型别名的上游模型条目，再从所属上游实例读取 `protocol_type`、`plugin_id`、`base_url`、`credential_id` 和协议参数。模型条目不再直接保存 endpoint 和凭证。
 
 默认情况下，不配置 `MODEL_CONFIG_JSON` 时等价于下面这份配置：
 
@@ -155,14 +183,14 @@ OPENAI_COMPATIBLE_DEFAULT_MODEL = "gpt-4o-mini"
 | 只接 OpenAI 官方接口 | 只配置 `OPENAI_COMPATIBLE_API_KEY` 即可。 |
 | 改默认模型 | 设置 `OPENAI_COMPATIBLE_DEFAULT_MODEL`，例如 `gpt-4.1-mini`。 |
 | 接其他 OpenAI 兼容服务 | 设置 `OPENAI_COMPATIBLE_BASE_URL`、`OPENAI_COMPATIBLE_DEFAULT_MODEL` 和对应 API Key。 |
-| 暴露多个模型别名 | 配置 `MODEL_CONFIG_JSON`。 |
+| 暴露多个模型别名 | 当前 MVP 配置 `MODEL_CONFIG_JSON`；目标结构是在对应上游的 `models[]` 下添加模型条目。 |
 | 不想在本地传 Bearer Token | 设置 `AUTH_MODE=none`。不要在线上使用。 |
 
 ## MODEL_CONFIG_JSON
 
 `MODEL_CONFIG_JSON` 当前用于替代自动生成的默认模型配置。它适合配置多个模型别名、多个路由或不同上游模型名。
 
-字段含义：
+当前 MVP 扁平格式字段含义：
 
 | 字段 | 位置 | 含义 |
 | --- | --- | --- |
@@ -182,17 +210,23 @@ OPENAI_COMPATIBLE_DEFAULT_MODEL = "gpt-4o-mini"
 
 | 字段 | 位置 | 含义 |
 | --- | --- | --- |
-| `upstreams` | 根对象 | 上游实例数组，模型路由通过 `upstream_id` 引用。 |
+| `upstreams` | 根对象 | 上游实例数组。 |
 | `id` | upstream | 上游实例 ID，例如 `openai-main`。 |
 | `name` | upstream | 管理后台展示名。 |
+| `protocol_type` | upstream | 协议类型，例如 `openai-compatible`、`private`、`async-polling-task`。 |
 | `plugin_id` | upstream | 处理该上游协议的 Provider Plugin ID。 |
-| `protocol` | upstream | 协议或接口形态，例如 `openai-chat-completions`、`async-polling-task`。 |
 | `base_url` | upstream | 上游 API Base URL。 |
 | `credential_id` | upstream | 上游凭证位置或凭证记录 ID。 |
 | `config` | upstream | 协议相关的非密钥配置，例如 region、api_version、poll_interval_seconds。 |
-| `upstream_id` | route | 路由目标上游实例。实施后应替代 route 里的 `plugin_id`、`provider` 和 `credential_id`。 |
+| `models` | upstream | 添加到该上游实例下的模型条目数组。 |
+| `alias` | upstream model | 对用户暴露的模型名。 |
+| `provider_model` | upstream model | 上游真实模型名。 |
+| `modality` | upstream model | 模型类型。 |
+| `supports_stream` | upstream model | 是否允许 `stream: true`。 |
+| `priority` | upstream model | 同一别名跨多个上游时的优先级。 |
+| `weight` | upstream model | 同一优先级下的权重。 |
 
-示例：对外暴露 `fast-chat`，实际调用上游 `gpt-4o-mini`：
+当前 MVP 扁平格式示例：对外暴露 `fast-chat`，实际调用上游 `gpt-4o-mini`：
 
 ```json
 {
