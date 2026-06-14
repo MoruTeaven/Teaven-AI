@@ -6,14 +6,16 @@ import {
   verifyAdminPassword
 } from "../auth/admin";
 import { loadGatewayConfig, validateGatewayConfig } from "../config";
-import { notFound } from "../http/errors";
+import { conflict, notFound } from "../http/errors";
 import { jsonResponse } from "../http/response";
-import { createProviderRegistry } from "../providers/registry";
-import { getTask, listTasks } from "../tasks/store";
-import type { AsyncTaskRecord, Env, GatewayConfig, ModelConfig } from "../types";
+import { createProviderRegistry, resolveProviderCredential } from "../providers/registry";
+import type { ProviderPluginManifest } from "../providers/types";
+import { getTask, listTasks, saveTask } from "../tasks/store";
+import type { AsyncTaskRecord, AsyncTaskStatus, Env, GatewayConfig, ModelConfig, ProviderRouteConfig } from "../types";
 import { readJsonObject, requireString } from "../utils/request";
 
-const RECENT_TASK_LIMIT = 25;
+const DEFAULT_TASK_LIMIT = 50;
+const MAX_TASK_LIMIT = 100;
 
 export async function handleAdminRequest(
   request: Request,
@@ -63,17 +65,37 @@ export async function handleAdminRequest(
 
   await authenticateAdmin(request, env);
 
+  const url = new URL(request.url);
+
   if (request.method === "GET" && pathname === "/admin/api/overview") {
     return handleAdminOverview(env, requestId);
+  }
+
+  if (request.method === "GET" && pathname === "/admin/api/config") {
+    return handleAdminConfig(env, requestId);
   }
 
   if (request.method === "POST" && pathname === "/admin/api/config/validate") {
     return handleValidateConfig(request, requestId);
   }
 
+  if (request.method === "GET" && pathname === "/admin/api/tasks") {
+    return handleListAdminTasks(url.searchParams, env, requestId);
+  }
+
+  const taskCancelMatch = pathname.match(/^\/admin\/api\/tasks\/([^/]+)\/cancel$/);
+  if (request.method === "POST" && taskCancelMatch) {
+    return handleCancelAdminTask(decodeURIComponent(taskCancelMatch[1]), env, requestId);
+  }
+
   const taskMatch = pathname.match(/^\/admin\/api\/tasks\/([^/]+)$/);
   if (request.method === "GET" && taskMatch) {
     return handleGetAdminTask(decodeURIComponent(taskMatch[1]), env, requestId);
+  }
+
+  const providerHealthMatch = pathname.match(/^\/admin\/api\/providers\/([^/]+)\/health$/);
+  if (request.method === "GET" && providerHealthMatch) {
+    return handleProviderHealth(decodeURIComponent(providerHealthMatch[1]), env, requestId);
   }
 
   throw notFound("接口不存在");
@@ -154,44 +176,97 @@ function serializeAdminSessionCookie(request: Request, value: string, maxAge: nu
 async function handleAdminOverview(env: Env, requestId: string): Promise<Response> {
   const config = loadGatewayConfig(env);
   const registry = createProviderRegistry(env);
-  const recentTasks = await listTasks(env, RECENT_TASK_LIMIT);
-  const routesTotal = config.models.reduce((count, model) => count + model.routes.length, 0);
+  const tasks = await listTasks(env, MAX_TASK_LIMIT);
+  const routeStats = summarizeRoutes(config, env);
+  const taskStats = summarizeTasks(tasks);
 
   return jsonResponse(
     {
       status: "ok",
-      gateway: {
-        auth_mode: env.AUTH_MODE || "api_key",
-        config_source: env.MODEL_CONFIG_JSON ? "MODEL_CONFIG_JSON" : "环境默认值",
-        task_store: env.AI_GATEWAY_KV ? "kv" : "memory",
-        db_bound: Boolean(env.DB),
-        kv_bound: Boolean(env.AI_GATEWAY_KV),
-        queue_bound: Boolean(env.TASK_QUEUE),
-        r2_bound: Boolean(env.FILES)
-      },
+      generated_at: new Date().toISOString(),
+      gateway: buildGatewayInfo(env),
       stats: {
         models_total: config.models.length,
         models_active: config.models.filter((model) => model.status !== "disabled").length,
-        routes_total: routesTotal,
+        routes_total: routeStats.total,
+        routes_active: routeStats.active,
+        routes_configured: routeStats.configured,
         providers_total: registry.list().length,
-        recent_tasks: recentTasks.length
+        recent_tasks: tasks.length,
+        tasks_running: taskStats.running,
+        tasks_failed: taskStats.failed
       },
-      warnings: buildWarnings(env),
-      models: config.models.map(publicModel),
-      providers: registry.list().map((plugin) => ({
-        id: plugin.manifest.id,
-        name: plugin.manifest.name,
-        version: plugin.manifest.version,
-        runtime: plugin.manifest.runtime,
-        capabilities: plugin.manifest.capabilities,
-        configured: isProviderConfigured(env, plugin.manifest.id)
-      })),
+      task_stats: taskStats,
+      warnings: buildWarnings(env, config),
+      models: config.models.map((model) => publicModel(model, env)),
+      providers: registry.list().map((plugin) => publicProvider(plugin.manifest, config, env)),
       provider_config: {
         openai_compatible_base_url: env.OPENAI_COMPATIBLE_BASE_URL || "https://api.openai.com/v1",
         openai_compatible_default_model: env.OPENAI_COMPATIBLE_DEFAULT_MODEL || "gpt-4o-mini",
         openai_compatible_api_key_configured: Boolean(env.OPENAI_COMPATIBLE_API_KEY)
       },
-      recent_tasks: recentTasks.map(publicTaskSummary)
+      feature_matrix: buildFeatureMatrix(env),
+      endpoints: buildEndpointList(),
+      recent_tasks: tasks.slice(0, 25).map(publicTaskSummary)
+    },
+    {
+      headers: {
+        "X-Request-Id": requestId
+      }
+    }
+  );
+}
+
+async function handleAdminConfig(env: Env, requestId: string): Promise<Response> {
+  const config = loadGatewayConfig(env);
+  const routes = config.models.flatMap((model) => model.routes.map((route) => ({ model, route })));
+
+  return jsonResponse(
+    {
+      source: env.MODEL_CONFIG_JSON ? "MODEL_CONFIG_JSON" : "环境默认值",
+      valid: true,
+      config,
+      config_json: JSON.stringify(config, null, 2),
+      summary: {
+        models_total: config.models.length,
+        routes_total: routes.length,
+        routes_configured: routes.filter(({ route }) => isRouteCredentialConfigured(env, route)).length
+      },
+      example_chat_request: {
+        endpoint: "/v1/chat/completions",
+        method: "POST",
+        headers: {
+          Authorization: "Bearer <DEV_API_KEY>",
+          "Content-Type": "application/json"
+        },
+        body: {
+          model: config.models[0]?.alias || "gpt-4o-mini",
+          messages: [{ role: "user", content: "hello" }],
+          stream: false
+        }
+      }
+    },
+    {
+      headers: {
+        "X-Request-Id": requestId
+      }
+    }
+  );
+}
+
+async function handleListAdminTasks(searchParams: URLSearchParams, env: Env, requestId: string): Promise<Response> {
+  const limit = normalizeTaskLimit(searchParams.get("limit"));
+  const allTasks = await listTasks(env, MAX_TASK_LIMIT);
+  const tasks = filterTasks(allTasks, searchParams).slice(0, limit);
+
+  return jsonResponse(
+    {
+      object: "list",
+      limit,
+      returned: tasks.length,
+      available_sample: allTasks.length,
+      data: tasks.map(publicTaskSummary),
+      stats: summarizeTasks(allTasks)
     },
     {
       headers: {
@@ -210,6 +285,71 @@ async function handleGetAdminTask(taskId: string, env: Env, requestId: string): 
   return jsonResponse(
     {
       task
+    },
+    {
+      headers: {
+        "X-Request-Id": requestId
+      }
+    }
+  );
+}
+
+async function handleCancelAdminTask(taskId: string, env: Env, requestId: string): Promise<Response> {
+  const task = await getTask(env, taskId);
+  if (!task) {
+    throw notFound("任务不存在");
+  }
+
+  if (!isCancelableTask(task)) {
+    throw conflict(`任务当前状态不可取消：${task.status}`);
+  }
+
+  const now = new Date().toISOString();
+  task.status = "canceled";
+  task.updated_at = now;
+  task.completed_at = now;
+  await saveTask(env, task);
+
+  return jsonResponse(
+    {
+      task: publicTaskSummary(task)
+    },
+    {
+      headers: {
+        "X-Request-Id": requestId
+      }
+    }
+  );
+}
+
+async function handleProviderHealth(pluginId: string, env: Env, requestId: string): Promise<Response> {
+  const config = loadGatewayConfig(env);
+  const registry = createProviderRegistry(env);
+  const plugin = registry.get(pluginId);
+  const health = buildProviderHealth(plugin.manifest, config, env);
+  const candidate = firstConfiguredRoute(config, env, pluginId);
+
+  if (candidate) {
+    const adapter = plugin.createAdapter(env);
+    if (adapter.healthCheck) {
+      try {
+        await adapter.healthCheck({
+          env,
+          request_id: requestId,
+          route: candidate,
+          credential: resolveProviderCredential(env, candidate)
+        });
+        health.adapter_check = "passed";
+      } catch (error) {
+        health.status = "error";
+        health.adapter_check = error instanceof Error ? error.message : "health check failed";
+      }
+    }
+  }
+
+  return jsonResponse(
+    {
+      provider: health
     },
     {
       headers: {
@@ -254,7 +394,11 @@ async function handleValidateConfig(request: Request, requestId: string): Promis
   }
 }
 
-function publicModel(model: ModelConfig): Record<string, unknown> {
+function publicModel(model: ModelConfig, env: Env): Record<string, unknown> {
+  const selectedRoute = model.routes
+    .filter((route) => route.status !== "disabled")
+    .sort((left, right) => (left.priority || 100) - (right.priority || 100))[0];
+
   return {
     alias: model.alias,
     modality: model.modality,
@@ -265,11 +409,17 @@ function publicModel(model: ModelConfig): Record<string, unknown> {
       provider: route.provider,
       provider_model: route.provider_model,
       credential_id: route.credential_id || null,
+      credential_configured: isRouteCredentialConfigured(env, route),
       priority: route.priority ?? null,
       weight: route.weight ?? null,
-      status: route.status || "active"
+      status: route.status || "active",
+      selected: route === selectedRoute
     }))
   };
+}
+
+function publicProvider(manifest: ProviderPluginManifest, config: GatewayConfig, env: Env): Record<string, unknown> {
+  return buildProviderHealth(manifest, config, env);
 }
 
 function publicTaskSummary(task: AsyncTaskRecord): Record<string, unknown> {
@@ -280,6 +430,9 @@ function publicTaskSummary(task: AsyncTaskRecord): Record<string, unknown> {
     type: task.type,
     model: task.model,
     status: task.status,
+    cancelable: isCancelableTask(task),
+    store_output: task.store_output,
+    callback_url: task.callback_url || null,
     created_at: task.created_at,
     updated_at: task.updated_at,
     completed_at: task.completed_at,
@@ -287,9 +440,27 @@ function publicTaskSummary(task: AsyncTaskRecord): Record<string, unknown> {
   };
 }
 
-function buildWarnings(env: Env): string[] {
+function buildGatewayInfo(env: Env): Record<string, unknown> {
+  return {
+    auth_mode: env.AUTH_MODE || "api_key",
+    admin_session_ttl_seconds: ADMIN_SESSION_TTL_SECONDS,
+    config_source: env.MODEL_CONFIG_JSON ? "MODEL_CONFIG_JSON" : "环境默认值",
+    task_store: env.AI_GATEWAY_KV ? "kv" : "memory",
+    db_bound: Boolean(env.DB),
+    kv_bound: Boolean(env.AI_GATEWAY_KV),
+    queue_bound: Boolean(env.TASK_QUEUE),
+    r2_bound: Boolean(env.FILES),
+    dev_api_key_configured: Boolean(env.DEV_API_KEY),
+    admin_auth_configured: Boolean(env.ADMIN_TOKEN)
+  };
+}
+
+function buildWarnings(env: Env, config: GatewayConfig): string[] {
   const warnings: string[] = [];
 
+  if (!env.ADMIN_TOKEN) {
+    warnings.push("未配置 ADMIN_TOKEN，管理后台无法登录。");
+  }
   if (!env.DEV_API_KEY && env.AUTH_MODE !== "none") {
     warnings.push("未配置 DEV_API_KEY，用户 API 认证将失败。");
   }
@@ -302,16 +473,217 @@ function buildWarnings(env: Env): string[] {
   if (!env.DB) {
     warnings.push("未绑定 DB，租户、API key、配额和计费管理尚无法持久化。");
   }
+  if (!env.TASK_QUEUE) {
+    warnings.push("未绑定 TASK_QUEUE，异步任务只会入库，不会被后台队列处理。");
+  }
+  if (!env.FILES) {
+    warnings.push("未绑定 FILES，异步任务输出转存 R2 的能力尚不可用。");
+  }
+
+  for (const model of config.models) {
+    if (model.status === "disabled") {
+      continue;
+    }
+
+    const activeRoutes = model.routes.filter((route) => route.status !== "disabled");
+    if (activeRoutes.length === 0) {
+      warnings.push(`模型 ${model.alias} 没有可用路由。`);
+    }
+    for (const route of activeRoutes) {
+      if (!isRouteCredentialConfigured(env, route)) {
+        warnings.push(`模型 ${model.alias} 的路由 ${route.plugin_id}/${route.provider_model} 缺少凭证。`);
+      }
+    }
+  }
 
   return warnings;
 }
 
-function isProviderConfigured(env: Env, pluginId: string): boolean {
-  if (pluginId === "openai-compatible") {
-    return Boolean(env.OPENAI_COMPATIBLE_API_KEY);
+function buildProviderHealth(manifest: ProviderPluginManifest, config: GatewayConfig, env: Env): Record<string, unknown> {
+  const routes = config.models.flatMap((model) =>
+    model.routes
+      .filter((route) => route.plugin_id === manifest.id)
+      .map((route) => ({ model_alias: model.alias, route }))
+  );
+  const activeRoutes = routes.filter(({ route }) => route.status !== "disabled");
+  const configuredRoutes = activeRoutes.filter(({ route }) => isRouteCredentialConfigured(env, route));
+  const status = activeRoutes.length === 0 ? "warning" : configuredRoutes.length === activeRoutes.length ? "ok" : "error";
+
+  return {
+    id: manifest.id,
+    name: manifest.name,
+    version: manifest.version,
+    runtime: manifest.runtime,
+    status,
+    capabilities: manifest.capabilities,
+    configured: status === "ok",
+    routes_total: routes.length,
+    routes_active: activeRoutes.length,
+    routes_configured: configuredRoutes.length,
+    routes: routes.map(({ model_alias, route }) => ({
+      model_alias,
+      provider_model: route.provider_model,
+      credential_id: route.credential_id || null,
+      credential_configured: isRouteCredentialConfigured(env, route),
+      status: route.status || "active"
+    })),
+    adapter_check: "not_run"
+  };
+}
+
+function buildFeatureMatrix(env: Env): Array<Record<string, unknown>> {
+  return [
+    {
+      name: "管理后台登录",
+      status: env.ADMIN_TOKEN ? "ready" : "blocked",
+      detail: env.ADMIN_TOKEN ? "已启用 HttpOnly 会话" : "需要 ADMIN_TOKEN"
+    },
+    {
+      name: "用户 API 鉴权",
+      status: env.AUTH_MODE === "none" || env.DEV_API_KEY ? "ready" : "blocked",
+      detail: env.AUTH_MODE === "none" ? "AUTH_MODE=none" : env.DEV_API_KEY ? "DEV_API_KEY 已配置" : "需要 DEV_API_KEY"
+    },
+    {
+      name: "模型路由",
+      status: env.MODEL_CONFIG_JSON ? "ready" : "partial",
+      detail: env.MODEL_CONFIG_JSON ? "使用 MODEL_CONFIG_JSON" : "使用默认单模型路由"
+    },
+    {
+      name: "任务持久化",
+      status: env.AI_GATEWAY_KV ? "ready" : "partial",
+      detail: env.AI_GATEWAY_KV ? "AI_GATEWAY_KV 已绑定" : "当前为内存存储"
+    },
+    {
+      name: "异步任务执行",
+      status: env.TASK_QUEUE ? "ready" : "blocked",
+      detail: env.TASK_QUEUE ? "TASK_QUEUE 已绑定" : "缺少 TASK_QUEUE"
+    },
+    {
+      name: "文件转存",
+      status: env.FILES ? "ready" : "blocked",
+      detail: env.FILES ? "FILES R2 已绑定" : "缺少 FILES 绑定"
+    },
+    {
+      name: "租户与计费",
+      status: env.DB ? "planned" : "blocked",
+      detail: env.DB ? "DB 已绑定，数据模型待实现" : "需要 DB 和数据模型"
+    }
+  ];
+}
+
+function buildEndpointList(): Array<Record<string, string>> {
+  return [
+    { method: "GET", path: "/health", auth: "无" },
+    { method: "GET", path: "/v1/models", auth: "DEV_API_KEY" },
+    { method: "POST", path: "/v1/chat/completions", auth: "DEV_API_KEY" },
+    { method: "POST", path: "/v1/tasks", auth: "DEV_API_KEY" },
+    { method: "GET", path: "/v1/tasks/{task_id}", auth: "DEV_API_KEY" },
+    { method: "POST", path: "/v1/tasks/{task_id}/cancel", auth: "DEV_API_KEY" },
+    { method: "GET", path: "/admin/api/*", auth: "管理员会话" }
+  ];
+}
+
+function summarizeRoutes(config: GatewayConfig, env: Env): Record<string, number> {
+  let total = 0;
+  let active = 0;
+  let configured = 0;
+
+  for (const model of config.models) {
+    for (const route of model.routes) {
+      total += 1;
+      if (route.status !== "disabled") {
+        active += 1;
+      }
+      if (route.status !== "disabled" && isRouteCredentialConfigured(env, route)) {
+        configured += 1;
+      }
+    }
   }
 
-  return false;
+  return { total, active, configured };
+}
+
+function summarizeTasks(tasks: AsyncTaskRecord[]): Record<AsyncTaskStatus | "total" | "running" | "failed", number> {
+  const stats: Record<AsyncTaskStatus | "total" | "running" | "failed", number> = {
+    total: tasks.length,
+    queued: 0,
+    running: 0,
+    succeeded: 0,
+    failed: 0,
+    canceled: 0,
+    expired: 0
+  };
+
+  for (const task of tasks) {
+    stats[task.status] += 1;
+  }
+
+  return stats;
+}
+
+function filterTasks(tasks: AsyncTaskRecord[], searchParams: URLSearchParams): AsyncTaskRecord[] {
+  const status = searchParams.get("status") || "";
+  const model = searchParams.get("model") || "";
+  const type = searchParams.get("type") || "";
+  const query = (searchParams.get("q") || "").toLowerCase();
+
+  return tasks.filter((task) => {
+    if (status && task.status !== status) {
+      return false;
+    }
+    if (model && task.model !== model) {
+      return false;
+    }
+    if (type && task.type !== type) {
+      return false;
+    }
+    if (query && !`${task.id} ${task.tenant_id} ${task.api_key_id} ${task.model} ${task.type}`.toLowerCase().includes(query)) {
+      return false;
+    }
+    return true;
+  });
+}
+
+function normalizeTaskLimit(value: string | null): number {
+  if (!value) {
+    return DEFAULT_TASK_LIMIT;
+  }
+
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    return DEFAULT_TASK_LIMIT;
+  }
+
+  return Math.min(Math.max(Math.trunc(parsed), 1), MAX_TASK_LIMIT);
+}
+
+function firstConfiguredRoute(config: GatewayConfig, env: Env, pluginId: string): ProviderRouteConfig | undefined {
+  for (const model of config.models) {
+    for (const route of model.routes) {
+      if (route.plugin_id === pluginId && route.status !== "disabled" && isRouteCredentialConfigured(env, route)) {
+        return route;
+      }
+    }
+  }
+
+  return undefined;
+}
+
+function isRouteCredentialConfigured(env: Env | undefined, route: ProviderRouteConfig): boolean {
+  if (!env) {
+    return false;
+  }
+
+  try {
+    resolveProviderCredential(env, route);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function isCancelableTask(task: AsyncTaskRecord): boolean {
+  return task.status === "queued" || task.status === "running";
 }
 
 function htmlResponse(html: string, init: ResponseInit = {}): Response {
@@ -667,6 +1039,17 @@ const ADMIN_HTML = `<!doctype html>
       border: 1px solid var(--line);
     }
 
+    button.danger {
+      color: #fff1f2;
+      background: rgba(251, 113, 133, 0.18);
+      border: 1px solid rgba(251, 113, 133, 0.4);
+    }
+
+    button.compact {
+      padding: 7px 10px;
+      font-size: 12px;
+    }
+
     .status {
       margin-top: 10px;
       min-height: 22px;
@@ -726,6 +1109,60 @@ const ADMIN_HTML = `<!doctype html>
 
     .meta strong {
       word-break: break-word;
+    }
+
+    .form-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 14px;
+      align-items: end;
+    }
+
+    .form-grid label {
+      color: var(--muted);
+      display: grid;
+      gap: 6px;
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    select {
+      width: 100%;
+      color: var(--text);
+      background: #0b1220;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      outline: none;
+      padding: 12px 14px;
+    }
+
+    .table-wrap {
+      overflow-x: auto;
+    }
+
+    .stack {
+      display: grid;
+      gap: 10px;
+      margin-top: 14px;
+    }
+
+    .panel {
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      padding: 14px;
+      background: #0b1220;
+    }
+
+    .panel h3 {
+      font-size: 15px;
+      margin-bottom: 8px;
+    }
+
+    .actions {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
     }
 
     table {
@@ -814,6 +1251,7 @@ const ADMIN_HTML = `<!doctype html>
 
       .hero,
       .login,
+      .form-grid,
       .meta,
       .stat-grid {
         grid-template-columns: 1fr;
@@ -874,19 +1312,31 @@ const ADMIN_HTML = `<!doctype html>
       </div>
 
       <div class="card span-8">
+        <h2>功能状态</h2>
+        <div id="features" class="meta"></div>
+      </div>
+
+      <div class="card span-4">
+        <h2>接口清单</h2>
+        <div id="endpoints" class="stack"></div>
+      </div>
+
+      <div class="card span-8">
         <h2>模型与路由</h2>
-        <table>
-          <thead>
-            <tr>
-              <th>别名</th>
-              <th>模态</th>
-              <th>状态</th>
-              <th>流式</th>
-              <th>路由</th>
-            </tr>
-          </thead>
-          <tbody id="models"></tbody>
-        </table>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>别名</th>
+                <th>模态</th>
+                <th>状态</th>
+                <th>流式</th>
+                <th>路由</th>
+              </tr>
+            </thead>
+            <tbody id="models"></tbody>
+          </table>
+        </div>
       </div>
 
       <div class="card span-4">
@@ -894,24 +1344,51 @@ const ADMIN_HTML = `<!doctype html>
         <div id="providers" style="margin-top: 14px;"></div>
       </div>
 
-      <div class="card span-7">
-        <h2>最近任务</h2>
-        <table>
-          <thead>
-            <tr>
-              <th>ID</th>
-              <th>类型</th>
-              <th>模型</th>
-              <th>状态</th>
-              <th>创建时间</th>
-            </tr>
-          </thead>
-          <tbody id="tasks"></tbody>
-        </table>
+      <div class="card span-8">
+        <h2>任务管理</h2>
+        <div class="form-grid">
+          <label>状态
+            <select id="task-status-filter">
+              <option value="">全部</option>
+              <option value="queued">排队中</option>
+              <option value="running">运行中</option>
+              <option value="succeeded">成功</option>
+              <option value="failed">失败</option>
+              <option value="canceled">已取消</option>
+              <option value="expired">已过期</option>
+            </select>
+          </label>
+          <label>关键词
+            <input id="task-query" type="text" placeholder="任务 ID / 模型 / 租户">
+          </label>
+          <label>数量
+            <select id="task-limit">
+              <option value="25">25</option>
+              <option value="50" selected>50</option>
+              <option value="100">100</option>
+            </select>
+          </label>
+          <button id="reload-tasks" type="button">加载任务</button>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>类型</th>
+                <th>模型</th>
+                <th>状态</th>
+                <th>创建时间</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody id="tasks"></tbody>
+          </table>
+        </div>
       </div>
 
-      <div class="card span-5">
-        <h2>任务查询</h2>
+      <div class="card span-4">
+        <h2>任务详情</h2>
         <div class="login" style="grid-template-columns: 1fr auto; margin-top: 14px;">
           <input id="task-id" type="text" placeholder="task_xxx">
           <button id="lookup-task" type="button">查询</button>
@@ -919,11 +1396,24 @@ const ADMIN_HTML = `<!doctype html>
         <pre id="task-output" class="json-view">尚未加载任务。</pre>
       </div>
 
+      <div class="card span-6">
+        <h2>当前模型配置</h2>
+        <p class="subtitle">这里展示 Worker 当前实际加载的 GatewayConfig，不包含任何密钥明文。</p>
+        <pre id="current-config" class="json-view">正在加载配置...</pre>
+      </div>
+
+      <div class="card span-6">
+        <h2>API 调用示例</h2>
+        <p class="subtitle">用于快速验证当前模型别名和用户 API 鉴权。</p>
+        <pre id="example-request" class="json-view">正在生成示例...</pre>
+      </div>
+
       <div class="card span-12">
         <h2>MODEL_CONFIG_JSON 校验器</h2>
         <p class="subtitle">在部署为 MODEL_CONFIG_JSON 之前，先粘贴 GatewayConfig JSON 对象进行校验。</p>
         <textarea id="config-json" spellcheck="false" placeholder='{"models":[{"alias":"gpt-4o-mini","modality":"text","supports_stream":true,"status":"active","routes":[{"plugin_id":"openai-compatible","provider_model":"gpt-4o-mini","credential_id":"env:OPENAI_COMPATIBLE_API_KEY","priority":1,"weight":100,"status":"active"}]}]}'></textarea>
         <div class="toolbar" style="margin-top: 12px; justify-content: flex-start;">
+          <button id="load-current-config" class="secondary" type="button">填入当前配置</button>
           <button id="validate-config" type="button">校验配置</button>
         </div>
         <pre id="config-output" class="json-view">尚未执行校验。</pre>
@@ -937,17 +1427,27 @@ const ADMIN_HTML = `<!doctype html>
       var statsEl = document.getElementById('stats');
       var gatewayMetaEl = document.getElementById('gateway-meta');
       var warningsEl = document.getElementById('warnings');
+      var featuresEl = document.getElementById('features');
+      var endpointsEl = document.getElementById('endpoints');
       var modelsEl = document.getElementById('models');
       var providersEl = document.getElementById('providers');
       var tasksEl = document.getElementById('tasks');
       var taskOutputEl = document.getElementById('task-output');
+      var currentConfigEl = document.getElementById('current-config');
+      var exampleRequestEl = document.getElementById('example-request');
       var configOutputEl = document.getElementById('config-output');
+      var configJsonEl = document.getElementById('config-json');
+      var currentConfigJson = '';
 
-      document.getElementById('refresh').addEventListener('click', loadOverview);
+      document.getElementById('refresh').addEventListener('click', loadAll);
       document.getElementById('lookup-task').addEventListener('click', lookupTask);
+      document.getElementById('reload-tasks').addEventListener('click', loadTasks);
+      document.getElementById('load-current-config').addEventListener('click', fillCurrentConfig);
       document.getElementById('validate-config').addEventListener('click', validateConfig);
+      providersEl.addEventListener('click', handleProviderAction);
+      tasksEl.addEventListener('click', handleTaskAction);
 
-      loadOverview();
+      loadAll();
 
       async function api(path, options) {
         options = options || {};
@@ -969,6 +1469,19 @@ const ADMIN_HTML = `<!doctype html>
         return data;
       }
 
+      async function loadAll() {
+        try {
+          setStatus('正在加载管理后台...', '');
+          var overview = await api('/admin/api/overview');
+          renderOverview(overview);
+          await loadConfig(false);
+          await loadTasks(false);
+          setStatus('已连接。最后刷新时间：' + new Date().toLocaleString(), 'ok');
+        } catch (error) {
+          setStatus(error.message || String(error), 'error');
+        }
+      }
+
       async function loadOverview() {
         try {
           setStatus('正在加载管理后台...', '');
@@ -977,6 +1490,53 @@ const ADMIN_HTML = `<!doctype html>
           setStatus('已连接。最后刷新时间：' + new Date().toLocaleString(), 'ok');
         } catch (error) {
           setStatus(error.message || String(error), 'error');
+        }
+      }
+
+      async function loadConfig(showStatus) {
+        try {
+          var data = await api('/admin/api/config');
+          currentConfigJson = data.config_json || '';
+          currentConfigEl.textContent = currentConfigJson;
+          exampleRequestEl.textContent = renderExampleRequest(data.example_chat_request);
+          if (!configJsonEl.value.trim()) {
+            configJsonEl.value = currentConfigJson;
+          }
+          if (showStatus !== false) {
+            setStatus('配置已刷新。', 'ok');
+          }
+        } catch (error) {
+          currentConfigEl.textContent = error.message || String(error);
+          if (showStatus !== false) {
+            setStatus(error.message || String(error), 'error');
+          }
+        }
+      }
+
+      async function loadTasks(showStatus) {
+        var params = new URLSearchParams();
+        var status = document.getElementById('task-status-filter').value;
+        var query = document.getElementById('task-query').value.trim();
+        var limit = document.getElementById('task-limit').value;
+        params.set('limit', limit);
+        if (status) {
+          params.set('status', status);
+        }
+        if (query) {
+          params.set('q', query);
+        }
+
+        try {
+          var data = await api('/admin/api/tasks?' + params.toString());
+          renderTasks(data.data || []);
+          if (showStatus !== false) {
+            setStatus('任务列表已刷新，共返回 ' + data.returned + ' 条。', 'ok');
+          }
+        } catch (error) {
+          tasksEl.innerHTML = '<tr><td colspan="6" class="empty">' + escapeHtml(error.message || String(error)) + '</td></tr>';
+          if (showStatus !== false) {
+            setStatus(error.message || String(error), 'error');
+          }
         }
       }
 
@@ -996,7 +1556,7 @@ const ADMIN_HTML = `<!doctype html>
       }
 
       async function validateConfig() {
-        var configJson = document.getElementById('config-json').value;
+        var configJson = configJsonEl.value;
         try {
           var data = await api('/admin/api/config/validate', {
             method: 'POST',
@@ -1008,21 +1568,88 @@ const ADMIN_HTML = `<!doctype html>
         }
       }
 
+      function fillCurrentConfig() {
+        configJsonEl.value = currentConfigJson;
+        configOutputEl.textContent = '已填入当前配置，可直接校验或复制到 MODEL_CONFIG_JSON。';
+      }
+
+      async function handleProviderAction(event) {
+        var button = event.target.closest('[data-provider-health]');
+        if (!button) {
+          return;
+        }
+
+        var providerId = button.getAttribute('data-provider-health');
+        button.disabled = true;
+        try {
+          var data = await api('/admin/api/providers/' + encodeURIComponent(providerId) + '/health');
+          await loadOverview();
+          setStatus('Provider 检查完成：' + data.provider.name + ' / ' + providerStatusText(data.provider.status), data.provider.status === 'ok' ? 'ok' : 'error');
+        } catch (error) {
+          setStatus(error.message || String(error), 'error');
+        } finally {
+          button.disabled = false;
+        }
+      }
+
+      async function handleTaskAction(event) {
+        var viewButton = event.target.closest('[data-task-view]');
+        var cancelButton = event.target.closest('[data-task-cancel]');
+        if (viewButton) {
+          document.getElementById('task-id').value = viewButton.getAttribute('data-task-view') || '';
+          await lookupTask();
+          return;
+        }
+        if (!cancelButton) {
+          return;
+        }
+
+        var taskId = cancelButton.getAttribute('data-task-cancel') || '';
+        if (!window.confirm('确定取消任务 ' + taskId + '？')) {
+          return;
+        }
+
+        cancelButton.disabled = true;
+        try {
+          var data = await api('/admin/api/tasks/' + encodeURIComponent(taskId) + '/cancel', { method: 'POST' });
+          taskOutputEl.textContent = JSON.stringify(data.task, null, 2);
+          await loadTasks(false);
+          setStatus('任务已取消：' + taskId, 'ok');
+        } catch (error) {
+          setStatus(error.message || String(error), 'error');
+        } finally {
+          cancelButton.disabled = false;
+        }
+      }
+
       function renderOverview(data) {
         statsEl.innerHTML = renderStat('模型总数', data.stats.models_total) +
           renderStat('启用模型', data.stats.models_active) +
           renderStat('路由总数', data.stats.routes_total) +
+          renderStat('可用路由', data.stats.routes_configured) +
           renderStat('供应商', data.stats.providers_total) +
-          renderStat('最近任务', data.stats.recent_tasks);
+          renderStat('任务样本', data.stats.recent_tasks) +
+          renderStat('运行中', data.stats.tasks_running) +
+          renderStat('失败任务', data.stats.tasks_failed);
 
         gatewayMetaEl.innerHTML = renderMeta('认证模式', data.gateway.auth_mode) +
           renderMeta('配置来源', data.gateway.config_source) +
           renderMeta('任务存储', taskStoreText(data.gateway.task_store)) +
+          renderMeta('后台会话', Math.round(data.gateway.admin_session_ttl_seconds / 3600) + ' 小时') +
+          renderMeta('用户 API Key', data.gateway.dev_api_key_configured ? '已配置' : '未配置') +
           renderMeta('绑定资源', bindingsText(data.gateway));
 
         warningsEl.innerHTML = data.warnings.length
           ? data.warnings.map(function (warning) { return '<div class="warning">' + escapeHtml(warning) + '</div>'; }).join('')
           : '<span class="pill ok">暂无活跃告警</span>';
+
+        featuresEl.innerHTML = data.feature_matrix.length
+          ? data.feature_matrix.map(renderFeature).join('')
+          : '<div><span>功能状态</span><strong>暂无数据</strong></div>';
+
+        endpointsEl.innerHTML = data.endpoints.length
+          ? data.endpoints.map(renderEndpoint).join('')
+          : '<p class="empty">暂无接口信息。</p>';
 
         modelsEl.innerHTML = data.models.length
           ? data.models.map(renderModelRow).join('')
@@ -1034,7 +1661,7 @@ const ADMIN_HTML = `<!doctype html>
 
         tasksEl.innerHTML = data.recent_tasks.length
           ? data.recent_tasks.map(renderTaskRow).join('')
-          : '<tr><td colspan="5" class="empty">暂无最近任务。</td></tr>';
+          : '<tr><td colspan="6" class="empty">暂无最近任务。</td></tr>';
       }
 
       function renderStat(label, value) {
@@ -1045,9 +1672,19 @@ const ADMIN_HTML = `<!doctype html>
         return '<div><span>' + escapeHtml(label) + '</span><strong>' + escapeHtml(value) + '</strong></div>';
       }
 
+      function renderFeature(feature) {
+        return '<div><span>' + escapeHtml(feature.name) + '</span><strong><span class="pill ' + featureStatusClass(feature.status) + '">' + escapeHtml(featureStatusText(feature.status)) + '</span> ' + escapeHtml(feature.detail) + '</strong></div>';
+      }
+
+      function renderEndpoint(endpoint) {
+        return '<div class="panel"><div class="pill">' + escapeHtml(endpoint.method) + '</div><code>' + escapeHtml(endpoint.path) + '</code><div class="status">认证：' + escapeHtml(endpoint.auth) + '</div></div>';
+      }
+
       function renderModelRow(model) {
         var routes = model.routes.map(function (route) {
           return '<span class="pill">' + escapeHtml(route.plugin_id + ' / ' + route.provider_model) + '</span>' +
+            (route.selected ? '<span class="pill ok">当前路由</span>' : '') +
+            '<span class="pill ' + (route.credential_configured ? 'ok' : 'danger') + '">' + (route.credential_configured ? '凭证已配置' : '缺少凭证') + '</span>' +
             '<span class="pill">优先级 ' + escapeHtml(route.priority === null ? '无' : route.priority) + '</span>' +
             '<span class="pill ' + statusClass(route.status) + '">' + escapeHtml(statusText(route.status)) + '</span>';
         }).join('<br>');
@@ -1066,23 +1703,43 @@ const ADMIN_HTML = `<!doctype html>
           var capability = provider.capabilities[name];
           return '<span class="pill">' + escapeHtml(name + ': ' + capability.execution_mode) + '</span>';
         }).join('');
+        var routes = provider.routes && provider.routes.length
+          ? provider.routes.map(function (route) {
+              return '<div class="status"><code>' + escapeHtml(route.model_alias) + '</code> -> ' + escapeHtml(route.provider_model) + ' <span class="pill ' + (route.credential_configured ? 'ok' : 'danger') + '">' + (route.credential_configured ? '凭证已配置' : '缺少凭证') + '</span></div>';
+            }).join('')
+          : '<div class="status">当前没有模型路由使用该 Provider。</div>';
 
-        return '<div style="border: 1px solid var(--line); border-radius: 16px; padding: 14px; margin-bottom: 10px; background: #0b1220;">' +
-          '<h3 style="font-size: 15px; margin-bottom: 8px;">' + escapeHtml(provider.name) + '</h3>' +
-          '<div class="pill ' + (provider.configured ? 'ok' : 'danger') + '">' + (provider.configured ? '已配置' : '缺少凭据') + '</div>' +
+        return '<div class="panel">' +
+          '<h3>' + escapeHtml(provider.name) + '</h3>' +
+          '<div class="pill ' + providerStatusClass(provider.status) + '">' + escapeHtml(providerStatusText(provider.status)) + '</div>' +
           '<div class="pill">' + escapeHtml(provider.id) + '</div>' +
           '<div class="pill">v' + escapeHtml(provider.version) + '</div>' +
+          '<div class="pill">路由 ' + escapeHtml(provider.routes_configured + '/' + provider.routes_active) + '</div>' +
           '<div style="margin-top: 8px;">' + caps + '</div>' +
+          routes +
+          '<div class="actions" style="margin-top: 10px;"><button class="secondary compact" type="button" data-provider-health="' + escapeHtml(provider.id) + '">检查 Provider</button></div>' +
           '</div>';
       }
 
+      function renderTasks(tasks) {
+        tasksEl.innerHTML = tasks.length
+          ? tasks.map(renderTaskRow).join('')
+          : '<tr><td colspan="6" class="empty">暂无匹配任务。</td></tr>';
+      }
+
       function renderTaskRow(task) {
+        var actions = '<button class="secondary compact" type="button" data-task-view="' + escapeHtml(task.id) + '">详情</button>';
+        if (task.cancelable) {
+          actions += '<button class="danger compact" type="button" data-task-cancel="' + escapeHtml(task.id) + '">取消</button>';
+        }
+
         return '<tr>' +
           '<td><code>' + escapeHtml(task.id) + '</code></td>' +
           '<td>' + escapeHtml(taskTypeText(task.type)) + '</td>' +
           '<td>' + escapeHtml(task.model) + '</td>' +
           '<td><span class="pill ' + statusClass(task.status) + '">' + escapeHtml(statusText(task.status)) + '</span></td>' +
           '<td>' + escapeHtml(task.created_at) + '</td>' +
+          '<td><div class="actions">' + actions + '</div></td>' +
           '</tr>';
       }
 
@@ -1166,6 +1823,74 @@ const ADMIN_HTML = `<!doctype html>
           return 'danger';
         }
         return '';
+      }
+
+      function providerStatusText(status) {
+        if (status === 'ok') {
+          return '可用';
+        }
+        if (status === 'warning') {
+          return '未使用';
+        }
+        if (status === 'error') {
+          return '异常';
+        }
+        return status;
+      }
+
+      function providerStatusClass(status) {
+        if (status === 'ok') {
+          return 'ok';
+        }
+        if (status === 'warning') {
+          return 'warn';
+        }
+        if (status === 'error') {
+          return 'danger';
+        }
+        return '';
+      }
+
+      function featureStatusText(status) {
+        if (status === 'ready') {
+          return '就绪';
+        }
+        if (status === 'partial') {
+          return '部分可用';
+        }
+        if (status === 'planned') {
+          return '待实现';
+        }
+        if (status === 'blocked') {
+          return '阻塞';
+        }
+        return status;
+      }
+
+      function featureStatusClass(status) {
+        if (status === 'ready') {
+          return 'ok';
+        }
+        if (status === 'partial' || status === 'planned') {
+          return 'warn';
+        }
+        if (status === 'blocked') {
+          return 'danger';
+        }
+        return '';
+      }
+
+      function renderExampleRequest(request) {
+        if (!request) {
+          return '暂无可用示例。';
+        }
+
+        return [
+          'curl -X ' + request.method + ' "' + location.origin + request.endpoint + '"',
+          '  -H "Authorization: Bearer <DEV_API_KEY>"',
+          '  -H "Content-Type: application/json"',
+          "  -d '" + JSON.stringify(request.body, null, 2) + "'"
+        ].join('\n');
       }
 
       function setStatus(message, kind) {
