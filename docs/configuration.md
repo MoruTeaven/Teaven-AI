@@ -153,7 +153,7 @@ OPENAI_COMPATIBLE_DEFAULT_MODEL = "gpt-4o-mini"
 
 | 绑定 | 当前作用 |
 | --- | --- |
-| `AI_GATEWAY_KV` | 保存异步任务记录。未绑定时退回内存存储，跨 isolate 可能丢失。 |
+| `AI_GATEWAY_KV` | 保存后台模型配置、用户、API Key 哈希、用量记录和异步任务记录。未绑定时退回内存存储，跨 isolate 可能丢失。 |
 | `TASK_QUEUE` | 创建异步任务后发送队列消息。未绑定时只保存任务，不入队。 |
 | `DB` | 当前 MVP 主要用于后台状态和告警展示，租户、API Key、配额和计费持久化尚未实现。 |
 | `FILES` | 当前 MVP 主要用于后台状态展示，R2 文件转存能力尚未完整接入。 |

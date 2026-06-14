@@ -1,7 +1,14 @@
 import { invalidRequest } from "./http/errors";
+import { clearManagedGatewayConfig, loadManagedGatewayConfig, saveManagedGatewayConfig } from "./admin/store";
 import type { Env, GatewayConfig, ModelConfig, ProviderRouteConfig } from "./types";
 
-export function loadGatewayConfig(env: Env): GatewayConfig {
+export async function loadGatewayConfig(env: Env): Promise<GatewayConfig> {
+  const managedConfig = await loadManagedGatewayConfig(env);
+  if (managedConfig) {
+    validateGatewayConfig(managedConfig);
+    return managedConfig;
+  }
+
   if (env.MODEL_CONFIG_JSON) {
     try {
       const config = JSON.parse(env.MODEL_CONFIG_JSON) as GatewayConfig;
@@ -37,6 +44,15 @@ export function loadGatewayConfig(env: Env): GatewayConfig {
       }
     ]
   };
+}
+
+export async function saveGatewayConfig(env: Env, config: GatewayConfig): Promise<void> {
+  validateGatewayConfig(config);
+  await saveManagedGatewayConfig(env, config);
+}
+
+export async function resetGatewayConfig(env: Env): Promise<void> {
+  await clearManagedGatewayConfig(env);
 }
 
 export function findModel(config: GatewayConfig, alias: string): ModelConfig | undefined {

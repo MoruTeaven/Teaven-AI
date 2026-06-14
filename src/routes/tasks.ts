@@ -1,5 +1,6 @@
 import { conflict, invalidRequest, notFound } from "../http/errors";
 import { jsonResponse } from "../http/response";
+import { recordTaskUsage } from "../admin/store";
 import { getTask, saveTask } from "../tasks/store";
 import type { AsyncTaskRecord, AuthContext, Env } from "../types";
 import { createId } from "../utils/ids";
@@ -8,6 +9,7 @@ import { optionalString, readJsonObject, requireObject, requireString } from "..
 const DEFAULT_STORAGE_TTL_SECONDS = 24 * 60 * 60;
 
 export async function handleCreateTask(request: Request, env: Env, auth: AuthContext, requestId: string): Promise<Response> {
+  const startedAt = Date.now();
   const body = await readJsonObject(request);
   const type = requireString(body.type, "type");
   const model = requireString(body.model, "model");
@@ -46,6 +48,8 @@ export async function handleCreateTask(request: Request, env: Env, auth: AuthCon
   if (env.TASK_QUEUE) {
     await env.TASK_QUEUE.send({ task_id: task.id });
   }
+
+  await recordTaskUsage(env, task, 202, Date.now() - startedAt);
 
   return jsonResponse(publicTask(task), {
     status: 202,

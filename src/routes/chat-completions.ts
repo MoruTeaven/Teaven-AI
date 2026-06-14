@@ -1,6 +1,7 @@
 import { findModel, loadGatewayConfig, selectRoute } from "../config";
 import { invalidRequest, permissionDenied, providerUnavailable } from "../http/errors";
 import { createProviderRegistry, resolveProviderCredential } from "../providers/registry";
+import { recordChatUsage } from "../admin/store";
 import type { AuthContext, ChatCompletionRequest, Env } from "../types";
 import { readJsonObject, requireString } from "../utils/request";
 
@@ -10,6 +11,7 @@ export async function handleChatCompletions(
   auth: AuthContext,
   requestId: string
 ): Promise<Response> {
+  const startedAt = Date.now();
   const body = await readJsonObject(request);
   const modelName = requireString(body.model, "model");
 
@@ -25,7 +27,7 @@ export async function handleChatCompletions(
     throw permissionDenied(`API key cannot access model: ${modelName}`);
   }
 
-  const config = loadGatewayConfig(env);
+  const config = await loadGatewayConfig(env);
   const model = findModel(config, modelName);
   if (!model) {
     throw invalidRequest(`Unknown model: ${modelName}`, "model", "model_not_found");
@@ -52,11 +54,35 @@ export async function handleChatCompletions(
   }
 
   const credential = resolveProviderCredential(env, route);
-  return adapter.chatCompletions(body as ChatCompletionRequest, {
+  const response = await adapter.chatCompletions(body as ChatCompletionRequest, {
     env,
     request_id: requestId,
     route,
     credential,
     signal: request.signal
   });
+
+  await recordChatUsage(env, {
+    request_id: requestId,
+    tenant_id: auth.tenant_id,
+    api_key_id: auth.api_key_id,
+    endpoint: "/v1/chat/completions",
+    model: modelName,
+    route,
+    status_code: response.status,
+    latency_ms: Date.now() - startedAt,
+    stream: body.stream === true,
+    usage: body.stream === true ? undefined : await readUsage(response.clone())
+  });
+
+  return response;
+}
+
+async function readUsage(response: Response): Promise<unknown> {
+  try {
+    const data = (await response.json()) as { usage?: unknown };
+    return data.usage;
+  } catch {
+    return undefined;
+  }
 }

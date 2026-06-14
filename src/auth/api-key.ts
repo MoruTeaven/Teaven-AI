@@ -1,4 +1,5 @@
 import { invalidApiKey } from "../http/errors";
+import { findAdminApiKeyByToken, getAdminUser, touchAdminApiKey } from "../admin/store";
 import type { AuthContext, Env } from "../types";
 
 export async function authenticate(request: Request, env: Env): Promise<AuthContext> {
@@ -16,16 +17,35 @@ export async function authenticate(request: Request, env: Env): Promise<AuthCont
   }
 
   const token = match[1];
-  if (!env.DEV_API_KEY) {
-    throw invalidApiKey("API key authentication is not configured");
+  if (env.DEV_API_KEY && token === env.DEV_API_KEY) {
+    return {
+      tenant_id: "dev_tenant",
+      api_key_id: "dev_key"
+    };
   }
 
-  if (token !== env.DEV_API_KEY) {
-    throw invalidApiKey();
+  const managedKey = await findAdminApiKeyByToken(env, token);
+  if (!managedKey) {
+    throw invalidApiKey(env.DEV_API_KEY ? undefined : "API key authentication is not configured");
   }
+
+  if (managedKey.status !== "active") {
+    throw invalidApiKey("API key is disabled");
+  }
+  if (managedKey.expires_at && managedKey.expires_at < new Date().toISOString()) {
+    throw invalidApiKey("API key is expired");
+  }
+
+  const user = await getAdminUser(env, managedKey.user_id);
+  if (!user || user.status !== "active") {
+    throw invalidApiKey("API key user is disabled");
+  }
+
+  await touchAdminApiKey(env, managedKey);
 
   return {
-    tenant_id: "dev_tenant",
-    api_key_id: "dev_key"
+    tenant_id: managedKey.tenant_id,
+    api_key_id: managedKey.id,
+    allowed_models: managedKey.allowed_models
   };
 }

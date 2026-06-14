@@ -5,9 +5,21 @@ import {
   createAdminSession,
   verifyAdminPassword
 } from "../auth/admin";
-import { loadGatewayConfig, validateGatewayConfig } from "../config";
-import { conflict, notFound } from "../http/errors";
+import { loadGatewayConfig, resetGatewayConfig, saveGatewayConfig, validateGatewayConfig } from "../config";
+import { conflict, invalidRequest, notFound } from "../http/errors";
 import { jsonResponse } from "../http/response";
+import {
+  type AdminApiKey,
+  createAdminApiKey,
+  createAdminUser,
+  getAdminApiKey,
+  getAdminUser,
+  listAdminApiKeys,
+  listAdminUsers,
+  saveAdminApiKey,
+  saveAdminUser,
+  summarizeUsage
+} from "../admin/store";
 import { createProviderRegistry, resolveProviderCredential } from "../providers/registry";
 import type { ProviderPluginManifest } from "../providers/types";
 import { getTask, listTasks, saveTask } from "../tasks/store";
@@ -52,7 +64,7 @@ export async function handleAdminRequest(
       return redirectResponse("/admin/login", requestId);
     }
 
-    return htmlResponse(ADMIN_HTML, {
+    return htmlResponse(ADMIN_APP_HTML, {
       headers: {
         "X-Request-Id": requestId
       }
@@ -77,6 +89,60 @@ export async function handleAdminRequest(
 
   if (request.method === "POST" && pathname === "/admin/api/config/validate") {
     return handleValidateConfig(request, requestId);
+  }
+
+  if (request.method === "GET" && pathname === "/admin/api/models") {
+    return handleListAdminModels(env, requestId);
+  }
+
+  if (request.method === "POST" && pathname === "/admin/api/models") {
+    return handleUpsertAdminModel(request, env, requestId);
+  }
+
+  if (request.method === "POST" && pathname === "/admin/api/models/reset") {
+    return handleResetAdminModels(env, requestId);
+  }
+
+  const modelMatch = pathname.match(/^\/admin\/api\/models\/([^/]+)$/);
+  if (modelMatch) {
+    const alias = decodeURIComponent(modelMatch[1]);
+    if (request.method === "PUT") {
+      return handleUpsertAdminModel(request, env, requestId, alias);
+    }
+    if (request.method === "DELETE") {
+      return handleDeleteAdminModel(alias, env, requestId);
+    }
+  }
+
+  if (request.method === "GET" && pathname === "/admin/api/users") {
+    return handleListAdminUsers(env, requestId);
+  }
+
+  if (request.method === "POST" && pathname === "/admin/api/users") {
+    return handleCreateAdminUser(request, env, requestId);
+  }
+
+  const userApiKeyMatch = pathname.match(/^\/admin\/api\/users\/([^/]+)\/api-keys$/);
+  if (request.method === "POST" && userApiKeyMatch) {
+    return handleCreateAdminUserApiKey(decodeURIComponent(userApiKeyMatch[1]), request, env, requestId);
+  }
+
+  const userMatch = pathname.match(/^\/admin\/api\/users\/([^/]+)$/);
+  if (request.method === "PATCH" && userMatch) {
+    return handleUpdateAdminUser(decodeURIComponent(userMatch[1]), request, env, requestId);
+  }
+
+  if (request.method === "GET" && pathname === "/admin/api/api-keys") {
+    return handleListAdminApiKeys(env, requestId);
+  }
+
+  const apiKeyMatch = pathname.match(/^\/admin\/api\/api-keys\/([^/]+)$/);
+  if (request.method === "PATCH" && apiKeyMatch) {
+    return handleUpdateAdminApiKey(decodeURIComponent(apiKeyMatch[1]), request, env, requestId);
+  }
+
+  if (request.method === "GET" && pathname === "/admin/api/usage") {
+    return handleAdminUsage(env, requestId);
   }
 
   if (request.method === "GET" && pathname === "/admin/api/tasks") {
@@ -174,9 +240,14 @@ function serializeAdminSessionCookie(request: Request, value: string, maxAge: nu
 }
 
 async function handleAdminOverview(env: Env, requestId: string): Promise<Response> {
-  const config = loadGatewayConfig(env);
+  const config = await loadGatewayConfig(env);
   const registry = createProviderRegistry(env);
-  const tasks = await listTasks(env, MAX_TASK_LIMIT);
+  const [tasks, users, apiKeys, usage] = await Promise.all([
+    listTasks(env, MAX_TASK_LIMIT),
+    listAdminUsers(env),
+    listAdminApiKeys(env),
+    summarizeUsage(env)
+  ]);
   const routeStats = summarizeRoutes(config, env);
   const taskStats = summarizeTasks(tasks);
 
@@ -194,9 +265,14 @@ async function handleAdminOverview(env: Env, requestId: string): Promise<Respons
         providers_total: registry.list().length,
         recent_tasks: tasks.length,
         tasks_running: taskStats.running,
-        tasks_failed: taskStats.failed
+        tasks_failed: taskStats.failed,
+        users_total: users.length,
+        api_keys_active: apiKeys.filter((apiKey) => apiKey.status === "active").length,
+        usage_requests: usage.total_requests,
+        usage_tokens: usage.total_tokens
       },
       task_stats: taskStats,
+      usage_summary: usage,
       warnings: buildWarnings(env, config),
       models: config.models.map((model) => publicModel(model, env)),
       providers: registry.list().map((plugin) => publicProvider(plugin.manifest, config, env)),
@@ -218,7 +294,7 @@ async function handleAdminOverview(env: Env, requestId: string): Promise<Respons
 }
 
 async function handleAdminConfig(env: Env, requestId: string): Promise<Response> {
-  const config = loadGatewayConfig(env);
+  const config = await loadGatewayConfig(env);
   const routes = config.models.flatMap((model) => model.routes.map((route) => ({ model, route })));
 
   return jsonResponse(
@@ -245,6 +321,253 @@ async function handleAdminConfig(env: Env, requestId: string): Promise<Response>
           stream: false
         }
       }
+    },
+    {
+      headers: {
+        "X-Request-Id": requestId
+      }
+    }
+  );
+}
+
+async function handleListAdminModels(env: Env, requestId: string): Promise<Response> {
+  const config = await loadGatewayConfig(env);
+  return jsonResponse(
+    {
+      object: "list",
+      data: config.models.map((model) => publicModel(model, env))
+    },
+    {
+      headers: {
+        "X-Request-Id": requestId
+      }
+    }
+  );
+}
+
+async function handleUpsertAdminModel(request: Request, env: Env, requestId: string, expectedAlias?: string): Promise<Response> {
+  const body = await readJsonObject(request);
+  const model = normalizeModelInput(body.model ?? body);
+  if (expectedAlias && model.alias !== expectedAlias) {
+    throw invalidRequest("模型别名不能与路径不一致", "alias");
+  }
+
+  const config = await loadGatewayConfig(env);
+  const nextModels = config.models.filter((item) => item.alias !== model.alias);
+  nextModels.push(model);
+  nextModels.sort((left, right) => left.alias.localeCompare(right.alias));
+  const nextConfig = { models: nextModels };
+  await saveGatewayConfig(env, nextConfig);
+
+  return jsonResponse(
+    {
+      model: publicModel(model, env),
+      config_source: env.AI_GATEWAY_KV ? "AI_GATEWAY_KV" : "memory"
+    },
+    {
+      headers: {
+        "X-Request-Id": requestId
+      }
+    }
+  );
+}
+
+async function handleDeleteAdminModel(alias: string, env: Env, requestId: string): Promise<Response> {
+  const config = await loadGatewayConfig(env);
+  const nextModels = config.models.filter((model) => model.alias !== alias);
+  if (nextModels.length === config.models.length) {
+    throw notFound("模型不存在");
+  }
+  if (nextModels.length === 0) {
+    throw invalidRequest("至少需要保留一个模型");
+  }
+
+  await saveGatewayConfig(env, { models: nextModels });
+  return jsonResponse(
+    {
+      deleted: true,
+      alias
+    },
+    {
+      headers: {
+        "X-Request-Id": requestId
+      }
+    }
+  );
+}
+
+async function handleResetAdminModels(env: Env, requestId: string): Promise<Response> {
+  await resetGatewayConfig(env);
+  const config = await loadGatewayConfig(env);
+  return jsonResponse(
+    {
+      reset: true,
+      config,
+      config_json: JSON.stringify(config, null, 2)
+    },
+    {
+      headers: {
+        "X-Request-Id": requestId
+      }
+    }
+  );
+}
+
+async function handleListAdminUsers(env: Env, requestId: string): Promise<Response> {
+  const [users, apiKeys] = await Promise.all([listAdminUsers(env), listAdminApiKeys(env)]);
+  return jsonResponse(
+    {
+      object: "list",
+      users: users.sort((left, right) => right.created_at.localeCompare(left.created_at)),
+      api_keys: apiKeys.map(publicApiKey).sort((left, right) => String(right.created_at).localeCompare(String(left.created_at)))
+    },
+    {
+      headers: {
+        "X-Request-Id": requestId
+      }
+    }
+  );
+}
+
+async function handleCreateAdminUser(request: Request, env: Env, requestId: string): Promise<Response> {
+  const body = await readJsonObject(request);
+  const email = requireString(body.email, "email");
+  const user = await createAdminUser(env, {
+    email,
+    name: optionalBodyString(body.name, "name"),
+    role: normalizeUserRole(body.role),
+    status: normalizeUserStatus(body.status),
+    tenant_id: optionalBodyString(body.tenant_id, "tenant_id")
+  });
+
+  return jsonResponse(
+    {
+      user
+    },
+    {
+      status: 201,
+      headers: {
+        "X-Request-Id": requestId
+      }
+    }
+  );
+}
+
+async function handleUpdateAdminUser(userId: string, request: Request, env: Env, requestId: string): Promise<Response> {
+  const user = await getAdminUser(env, userId);
+  if (!user) {
+    throw notFound("用户不存在");
+  }
+
+  const body = await readJsonObject(request);
+  if (body.email !== undefined) {
+    user.email = requireString(body.email, "email");
+  }
+  if (body.name !== undefined) {
+    user.name = optionalBodyString(body.name, "name");
+  }
+  if (body.role !== undefined) {
+    user.role = normalizeUserRole(body.role);
+  }
+  if (body.status !== undefined) {
+    user.status = normalizeUserStatus(body.status);
+  }
+  user.updated_at = new Date().toISOString();
+  await saveAdminUser(env, user);
+
+  return jsonResponse(
+    {
+      user
+    },
+    {
+      headers: {
+        "X-Request-Id": requestId
+      }
+    }
+  );
+}
+
+async function handleCreateAdminUserApiKey(userId: string, request: Request, env: Env, requestId: string): Promise<Response> {
+  const user = await getAdminUser(env, userId);
+  if (!user) {
+    throw notFound("用户不存在");
+  }
+
+  const body = await readJsonObject(request);
+  const created = await createAdminApiKey(env, user, {
+    name: requireString(body.name, "name"),
+    allowed_models: normalizeAllowedModels(body.allowed_models),
+    expires_at: optionalBodyString(body.expires_at, "expires_at") || null
+  });
+
+  return jsonResponse(
+    {
+      api_key: publicApiKey(created.api_key),
+      token: created.token
+    },
+    {
+      status: 201,
+      headers: {
+        "X-Request-Id": requestId
+      }
+    }
+  );
+}
+
+async function handleListAdminApiKeys(env: Env, requestId: string): Promise<Response> {
+  const apiKeys = await listAdminApiKeys(env);
+  return jsonResponse(
+    {
+      object: "list",
+      data: apiKeys.map(publicApiKey).sort((left, right) => String(right.created_at).localeCompare(String(left.created_at)))
+    },
+    {
+      headers: {
+        "X-Request-Id": requestId
+      }
+    }
+  );
+}
+
+async function handleUpdateAdminApiKey(apiKeyId: string, request: Request, env: Env, requestId: string): Promise<Response> {
+  const apiKey = await getAdminApiKey(env, apiKeyId);
+  if (!apiKey) {
+    throw notFound("API Key 不存在");
+  }
+
+  const body = await readJsonObject(request);
+  if (body.name !== undefined) {
+    apiKey.name = requireString(body.name, "name");
+  }
+  if (body.status !== undefined) {
+    apiKey.status = normalizeApiKeyStatus(body.status);
+  }
+  if (body.allowed_models !== undefined) {
+    apiKey.allowed_models = normalizeAllowedModels(body.allowed_models);
+  }
+  if (body.expires_at !== undefined) {
+    apiKey.expires_at = optionalBodyString(body.expires_at, "expires_at") || null;
+  }
+  apiKey.updated_at = new Date().toISOString();
+  await saveAdminApiKey(env, apiKey);
+
+  return jsonResponse(
+    {
+      api_key: publicApiKey(apiKey)
+    },
+    {
+      headers: {
+        "X-Request-Id": requestId
+      }
+    }
+  );
+}
+
+async function handleAdminUsage(env: Env, requestId: string): Promise<Response> {
+  const usage = await summarizeUsage(env);
+  return jsonResponse(
+    {
+      usage
     },
     {
       headers: {
@@ -323,7 +646,7 @@ async function handleCancelAdminTask(taskId: string, env: Env, requestId: string
 }
 
 async function handleProviderHealth(pluginId: string, env: Env, requestId: string): Promise<Response> {
-  const config = loadGatewayConfig(env);
+  const config = await loadGatewayConfig(env);
   const registry = createProviderRegistry(env);
   const plugin = registry.get(pluginId);
   const health = buildProviderHealth(plugin.manifest, config, env);
@@ -440,6 +763,150 @@ function publicTaskSummary(task: AsyncTaskRecord): Record<string, unknown> {
   };
 }
 
+function publicApiKey(apiKey: AdminApiKey): Record<string, unknown> {
+  return {
+    id: apiKey.id,
+    tenant_id: apiKey.tenant_id,
+    user_id: apiKey.user_id,
+    name: apiKey.name,
+    key_prefix: apiKey.key_prefix,
+    allowed_models: apiKey.allowed_models || [],
+    status: apiKey.status,
+    expires_at: apiKey.expires_at || null,
+    created_at: apiKey.created_at,
+    updated_at: apiKey.updated_at,
+    last_used_at: apiKey.last_used_at || null
+  };
+}
+
+function normalizeModelInput(value: unknown): ModelConfig {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw invalidRequest("model 必须是对象", "model");
+  }
+
+  const input = value as Record<string, unknown>;
+  const alias = requireString(input.alias, "alias");
+  const modality = requireString(input.modality, "modality");
+  if (!["text", "image", "video", "file"].includes(modality)) {
+    throw invalidRequest("modality 必须是 text、image、video 或 file", "modality");
+  }
+  if (!Array.isArray(input.routes) || input.routes.length === 0) {
+    throw invalidRequest("routes 必须是非空数组", "routes");
+  }
+
+  const model: ModelConfig = {
+    alias,
+    modality: modality as ModelConfig["modality"],
+    supports_stream: input.supports_stream !== false,
+    status: normalizeModelStatus(input.status),
+    routes: input.routes.map(normalizeRouteInput)
+  };
+  validateGatewayConfig({ models: [model] });
+  return model;
+}
+
+function normalizeRouteInput(value: unknown): ProviderRouteConfig {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw invalidRequest("route 必须是对象", "routes");
+  }
+
+  const input = value as Record<string, unknown>;
+  const route: ProviderRouteConfig = {
+    plugin_id: requireString(input.plugin_id, "plugin_id"),
+    provider: optionalBodyString(input.provider, "provider"),
+    provider_model: requireString(input.provider_model, "provider_model"),
+    credential_id: optionalBodyString(input.credential_id, "credential_id"),
+    priority: optionalNumber(input.priority, "priority"),
+    weight: optionalNumber(input.weight, "weight"),
+    status: normalizeRouteStatus(input.status)
+  };
+  return route;
+}
+
+function normalizeModelStatus(value: unknown): ModelConfig["status"] {
+  if (value === undefined || value === null || value === "") {
+    return "active";
+  }
+  if (value === "active" || value === "hidden" || value === "disabled") {
+    return value;
+  }
+  throw invalidRequest("model status 无效", "status");
+}
+
+function normalizeRouteStatus(value: unknown): ProviderRouteConfig["status"] {
+  if (value === undefined || value === null || value === "") {
+    return "active";
+  }
+  if (value === "active" || value === "disabled") {
+    return value;
+  }
+  throw invalidRequest("route status 无效", "status");
+}
+
+function normalizeUserRole(value: unknown): "owner" | "admin" | "member" {
+  if (value === undefined || value === null || value === "") {
+    return "member";
+  }
+  if (value === "owner" || value === "admin" || value === "member") {
+    return value;
+  }
+  throw invalidRequest("role 无效", "role");
+}
+
+function normalizeUserStatus(value: unknown): "active" | "disabled" {
+  if (value === undefined || value === null || value === "") {
+    return "active";
+  }
+  if (value === "active" || value === "disabled") {
+    return value;
+  }
+  throw invalidRequest("user status 无效", "status");
+}
+
+function normalizeApiKeyStatus(value: unknown): "active" | "disabled" | "expired" {
+  if (value === "active" || value === "disabled" || value === "expired") {
+    return value;
+  }
+  throw invalidRequest("api key status 无效", "status");
+}
+
+function normalizeAllowedModels(value: unknown): string[] | undefined {
+  if (value === undefined || value === null || value === "") {
+    return undefined;
+  }
+  if (!Array.isArray(value)) {
+    throw invalidRequest("allowed_models 必须是字符串数组", "allowed_models");
+  }
+
+  const models = value.map((item) => {
+    if (typeof item !== "string" || item.trim() === "") {
+      throw invalidRequest("allowed_models 必须是字符串数组", "allowed_models");
+    }
+    return item.trim();
+  });
+  return models.length > 0 ? models : undefined;
+}
+
+function optionalBodyString(value: unknown, name: string): string | undefined {
+  if (value === undefined || value === null || value === "") {
+    return undefined;
+  }
+  if (typeof value !== "string") {
+    throw invalidRequest(`${name} 必须是字符串`, name);
+  }
+  return value.trim();
+}
+
+function optionalNumber(value: unknown, name: string): number | undefined {
+  if (value === undefined || value === null || value === "") {
+    return undefined;
+  }
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw invalidRequest(`${name} 必须是数字`, name);
+  }
+  return value;
+}
+
 function buildGatewayInfo(env: Env): Record<string, unknown> {
   return {
     auth_mode: env.AUTH_MODE || "api_key",
@@ -468,7 +935,7 @@ function buildWarnings(env: Env, config: GatewayConfig): string[] {
     warnings.push("未配置 OPENAI_COMPATIBLE_API_KEY，默认供应商的聊天补全将失败。");
   }
   if (!env.AI_GATEWAY_KV) {
-    warnings.push("未绑定 AI_GATEWAY_KV，任务将存储在内存中，可能在 isolate 之间丢失。");
+    warnings.push("未绑定 AI_GATEWAY_KV，后台保存的模型、用户、API Key、用量和任务记录仅保存在内存中。");
   }
   if (!env.DB) {
     warnings.push("未绑定 DB，租户、API key、配额和计费管理尚无法持久化。");
@@ -545,8 +1012,18 @@ function buildFeatureMatrix(env: Env): Array<Record<string, unknown>> {
     },
     {
       name: "模型路由",
-      status: env.MODEL_CONFIG_JSON ? "ready" : "partial",
-      detail: env.MODEL_CONFIG_JSON ? "使用 MODEL_CONFIG_JSON" : "使用默认单模型路由"
+      status: env.AI_GATEWAY_KV || env.MODEL_CONFIG_JSON ? "ready" : "partial",
+      detail: env.AI_GATEWAY_KV ? "支持后台保存模型配置" : env.MODEL_CONFIG_JSON ? "使用 MODEL_CONFIG_JSON" : "使用默认单模型路由"
+    },
+    {
+      name: "用户/API Key 管理",
+      status: env.AI_GATEWAY_KV ? "ready" : "partial",
+      detail: env.AI_GATEWAY_KV ? "用户和 Key 持久化到 KV" : "当前为内存存储，适合本地开发"
+    },
+    {
+      name: "模型用量统计",
+      status: env.AI_GATEWAY_KV ? "ready" : "partial",
+      detail: env.AI_GATEWAY_KV ? "用量记录持久化到 KV" : "当前为内存聚合"
     },
     {
       name: "任务持久化",
@@ -565,8 +1042,8 @@ function buildFeatureMatrix(env: Env): Array<Record<string, unknown>> {
     },
     {
       name: "租户与计费",
-      status: env.DB ? "planned" : "blocked",
-      detail: env.DB ? "DB 已绑定，数据模型待实现" : "需要 DB 和数据模型"
+      status: "planned",
+      detail: env.DB ? "DB 已绑定，账单模型待实现" : "基础租户已随用户创建，账单仍待 D1 模型"
     }
   ];
 }
@@ -861,6 +1338,477 @@ function escapeHtml(value: unknown): string {
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#039;");
 }
+
+const ADMIN_APP_HTML = `<!doctype html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Teaven AI 管理后台</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #07111f;
+      --panel: rgba(15, 23, 42, 0.9);
+      --panel-strong: #111827;
+      --line: #26364f;
+      --text: #f8fafc;
+      --muted: #94a3b8;
+      --accent: #7dd3fc;
+      --accent-strong: #38bdf8;
+      --ok: #86efac;
+      --warn: #fbbf24;
+      --danger: #fb7185;
+      --shadow: rgba(0, 0, 0, 0.28);
+    }
+
+    html[data-theme="light"] {
+      color-scheme: light;
+      --bg: #f4f7fb;
+      --panel: rgba(255, 255, 255, 0.92);
+      --panel-strong: #ffffff;
+      --line: #d9e2ef;
+      --text: #0f172a;
+      --muted: #64748b;
+      --accent: #0369a1;
+      --accent-strong: #0284c7;
+      --ok: #15803d;
+      --warn: #a16207;
+      --danger: #be123c;
+      --shadow: rgba(15, 23, 42, 0.12);
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background:
+        radial-gradient(circle at top left, rgba(56, 189, 248, 0.18), transparent 30rem),
+        var(--bg);
+      color: var(--text);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    button, input, select, textarea { font: inherit; }
+    button {
+      border: 0;
+      border-radius: 999px;
+      background: var(--accent);
+      color: white;
+      cursor: pointer;
+      font-weight: 800;
+      padding: 10px 14px;
+    }
+    button.secondary { background: transparent; color: var(--text); border: 1px solid var(--line); }
+    button.danger { background: rgba(251, 113, 133, 0.16); color: var(--danger); border: 1px solid rgba(251, 113, 133, 0.35); }
+    button.compact { padding: 6px 10px; font-size: 12px; }
+    button:disabled { cursor: not-allowed; opacity: 0.55; }
+    input, select, textarea {
+      width: 100%;
+      color: var(--text);
+      background: var(--panel-strong);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      outline: none;
+      padding: 10px 12px;
+    }
+    textarea { min-height: 180px; resize: vertical; font-family: Consolas, "SFMono-Regular", monospace; font-size: 13px; line-height: 1.5; }
+    input:focus, select:focus, textarea:focus { border-color: var(--accent-strong); box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.12); }
+
+    .layout { display: grid; grid-template-columns: 270px 1fr; min-height: 100vh; }
+    .sidebar {
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      padding: 22px 16px;
+      background: color-mix(in srgb, var(--panel) 92%, transparent);
+      border-right: 1px solid var(--line);
+      backdrop-filter: blur(18px);
+      display: flex;
+      flex-direction: column;
+      gap: 18px;
+    }
+    .brand { padding: 6px 8px 14px; border-bottom: 1px solid var(--line); }
+    .eyebrow { color: var(--accent); font-size: 11px; font-weight: 900; letter-spacing: 0.22em; text-transform: uppercase; }
+    .brand h1 { margin: 8px 0 0; font-size: 24px; letter-spacing: -0.04em; }
+    .nav { display: grid; gap: 7px; }
+    .nav a {
+      color: var(--muted);
+      text-decoration: none;
+      padding: 11px 12px;
+      border-radius: 14px;
+      font-weight: 800;
+    }
+    .nav a.active, .nav a:hover { color: var(--text); background: rgba(125, 211, 252, 0.13); }
+    .sidebar-footer { margin-top: auto; display: grid; gap: 10px; }
+    .content { padding: 28px; min-width: 0; }
+    .topbar { display: flex; justify-content: space-between; gap: 16px; align-items: flex-end; margin-bottom: 22px; }
+    .topbar h2 { margin: 0; font-size: clamp(30px, 5vw, 54px); letter-spacing: -0.06em; line-height: 0.95; }
+    .subtitle { color: var(--muted); margin: 10px 0 0; }
+    .toolbar { display: flex; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
+    .grid { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 16px; }
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 22px;
+      padding: 18px;
+      box-shadow: 0 20px 70px var(--shadow);
+      backdrop-filter: blur(18px);
+    }
+    .span-12 { grid-column: span 12; }
+    .span-8 { grid-column: span 8; }
+    .span-7 { grid-column: span 7; }
+    .span-6 { grid-column: span 6; }
+    .span-5 { grid-column: span 5; }
+    .span-4 { grid-column: span 4; }
+    .card h3 { margin: 0 0 12px; font-size: 17px; }
+    .section { display: none; }
+    .section.active { display: block; }
+    .stat-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+    .stat { padding: 15px; background: var(--panel-strong); border: 1px solid var(--line); border-radius: 16px; }
+    .stat strong { display: block; font-size: 28px; letter-spacing: -0.04em; }
+    .stat span, label { color: var(--muted); font-size: 12px; font-weight: 800; }
+    .form-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; align-items: end; }
+    .form-grid label { display: grid; gap: 6px; }
+    .stack { display: grid; gap: 10px; }
+    .status { color: var(--muted); font-size: 13px; min-height: 20px; }
+    .status.ok { color: var(--ok); }
+    .status.error { color: var(--danger); }
+    .pill { display: inline-flex; border: 1px solid var(--line); border-radius: 999px; padding: 3px 8px; color: var(--muted); font-size: 12px; margin: 2px 4px 2px 0; }
+    .pill.ok { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 35%, transparent); }
+    .pill.warn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 35%, transparent); }
+    .pill.danger { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 35%, transparent); }
+    .warning { padding: 11px 12px; border-radius: 14px; color: var(--warn); background: rgba(251, 191, 36, 0.1); border: 1px solid rgba(251, 191, 36, 0.28); }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { border-bottom: 1px solid var(--line); padding: 10px 8px; text-align: left; vertical-align: top; font-size: 13px; }
+    th { color: var(--muted); font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; }
+    code, pre { font-family: Consolas, "SFMono-Regular", monospace; }
+    pre { margin: 0; white-space: pre-wrap; word-break: break-word; }
+    .json-view { max-height: 360px; overflow: auto; padding: 14px; background: var(--panel-strong); border: 1px solid var(--line); border-radius: 16px; color: var(--text); font-size: 12px; }
+    .table-wrap { overflow-x: auto; }
+    .actions { display: flex; gap: 7px; flex-wrap: wrap; }
+    .empty { color: var(--muted); padding: 12px 0; }
+    @media (max-width: 980px) {
+      .layout { grid-template-columns: 1fr; }
+      .sidebar { position: static; height: auto; }
+      .content { padding: 18px; }
+      .topbar { display: grid; }
+      .toolbar { justify-content: flex-start; }
+      .stat-grid, .form-grid { grid-template-columns: 1fr; }
+      .span-4, .span-5, .span-6, .span-7, .span-8, .span-12 { grid-column: span 12; }
+    }
+  </style>
+</head>
+<body>
+  <div class="layout">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="eyebrow">Teaven AI Gateway</div>
+        <h1>管理后台</h1>
+        <p class="subtitle">模型、用户、用量与运行状态。</p>
+      </div>
+      <nav class="nav" id="nav">
+        <a href="#dashboard" data-section="dashboard">仪表盘</a>
+        <a href="#models" data-section="models">模型管理</a>
+        <a href="#users" data-section="users">用户管理</a>
+        <a href="#usage" data-section="usage">模型用量</a>
+        <a href="#tasks" data-section="tasks">任务管理</a>
+        <a href="#config" data-section="config">配置工具</a>
+      </nav>
+      <div class="sidebar-footer">
+        <button id="theme-toggle" class="secondary" type="button">切换浅色</button>
+        <form action="/admin/logout" method="post"><button class="secondary" type="submit" style="width: 100%;">退出登录</button></form>
+      </div>
+    </aside>
+    <main class="content">
+      <div class="topbar">
+        <div>
+          <h2 id="page-title">仪表盘</h2>
+          <p id="status" class="subtitle">正在加载管理后台...</p>
+        </div>
+        <div class="toolbar">
+          <button id="refresh" class="secondary" type="button">刷新全部</button>
+        </div>
+      </div>
+
+      <section id="dashboard" class="section active">
+        <div class="grid">
+          <div class="card span-12"><h3>核心指标</h3><div id="stats" class="stat-grid"></div></div>
+          <div class="card span-8"><h3>功能状态</h3><div id="features" class="stack"></div></div>
+          <div class="card span-4"><h3>告警</h3><div id="warnings" class="stack"></div></div>
+          <div class="card span-6"><h3>网关状态</h3><div id="gateway-meta" class="stack"></div></div>
+          <div class="card span-6"><h3>Provider</h3><div id="providers" class="stack"></div></div>
+        </div>
+      </section>
+
+      <section id="models" class="section">
+        <div class="grid">
+          <div class="card span-12">
+            <h3>模型列表</h3>
+            <div class="table-wrap"><table><thead><tr><th>别名</th><th>模态</th><th>状态</th><th>路由</th><th>操作</th></tr></thead><tbody id="models-table"></tbody></table></div>
+          </div>
+          <div class="card span-6">
+            <h3>快速创建/更新</h3>
+            <div class="form-grid">
+              <label>模型别名<input id="model-alias" placeholder="gpt-4o-mini"></label>
+              <label>模态<select id="model-modality"><option value="text">text</option><option value="image">image</option><option value="video">video</option><option value="file">file</option></select></label>
+              <label>模型状态<select id="model-status"><option value="active">active</option><option value="hidden">hidden</option><option value="disabled">disabled</option></select></label>
+              <label>Provider Plugin<input id="route-plugin" value="openai-compatible"></label>
+              <label>上游模型<input id="route-provider-model" placeholder="gpt-4o-mini"></label>
+              <label>凭证引用<input id="route-credential" value="env:OPENAI_COMPATIBLE_API_KEY"></label>
+              <label>优先级<input id="route-priority" type="number" value="1"></label>
+              <label>路由状态<select id="route-status"><option value="active">active</option><option value="disabled">disabled</option></select></label>
+              <label>流式<select id="model-stream"><option value="true">支持</option><option value="false">不支持</option></select></label>
+            </div>
+            <div class="actions" style="margin-top: 12px;"><button id="save-model-form" type="button">保存模型</button><button id="reset-models" class="danger" type="button">重置模型配置</button></div>
+          </div>
+          <div class="card span-6">
+            <h3>模型 JSON 编辑器</h3>
+            <textarea id="model-json" spellcheck="false"></textarea>
+            <div class="actions" style="margin-top: 12px;"><button id="save-model-json" type="button">保存 JSON 模型</button></div>
+          </div>
+        </div>
+      </section>
+
+      <section id="users" class="section">
+        <div class="grid">
+          <div class="card span-7"><h3>用户列表</h3><div class="table-wrap"><table><thead><tr><th>邮箱</th><th>角色</th><th>状态</th><th>租户</th><th>操作</th></tr></thead><tbody id="users-table"></tbody></table></div></div>
+          <div class="card span-5">
+            <h3>创建用户</h3>
+            <div class="form-grid" style="grid-template-columns: 1fr;">
+              <label>邮箱<input id="user-email" placeholder="admin@example.com"></label>
+              <label>名称<input id="user-name" placeholder="管理员"></label>
+              <label>角色<select id="user-role"><option value="owner">owner</option><option value="admin">admin</option><option value="member" selected>member</option></select></label>
+            </div>
+            <div class="actions" style="margin-top: 12px;"><button id="create-user" type="button">创建用户</button></div>
+          </div>
+          <div class="card span-7"><h3>API Key 列表</h3><div class="table-wrap"><table><thead><tr><th>名称</th><th>前缀</th><th>用户</th><th>模型权限</th><th>状态</th><th>操作</th></tr></thead><tbody id="keys-table"></tbody></table></div></div>
+          <div class="card span-5">
+            <h3>创建 API Key</h3>
+            <div class="form-grid" style="grid-template-columns: 1fr;">
+              <label>用户<select id="key-user"></select></label>
+              <label>名称<input id="key-name" placeholder="生产 Key"></label>
+              <label>允许模型<input id="key-models" placeholder="留空表示全部，或用逗号分隔"></label>
+            </div>
+            <div class="actions" style="margin-top: 12px;"><button id="create-key" type="button">创建 Key</button></div>
+            <pre id="key-output" class="json-view" style="margin-top: 12px;">创建后这里会显示一次性 API Key 明文。</pre>
+          </div>
+        </div>
+      </section>
+
+      <section id="usage" class="section">
+        <div class="grid">
+          <div class="card span-12"><h3>用量汇总</h3><div id="usage-stats" class="stat-grid"></div></div>
+          <div class="card span-7"><h3>按模型统计</h3><div class="table-wrap"><table><thead><tr><th>模型</th><th>请求数</th><th>总 Token</th><th>输入</th><th>输出</th><th>媒体单位</th></tr></thead><tbody id="usage-models"></tbody></table></div></div>
+          <div class="card span-5"><h3>最近用量记录</h3><div id="usage-recent" class="stack"></div></div>
+        </div>
+      </section>
+
+      <section id="tasks" class="section">
+        <div class="grid">
+          <div class="card span-12">
+            <h3>异步任务</h3>
+            <div class="form-grid">
+              <label>状态<select id="task-status"><option value="">全部</option><option value="queued">queued</option><option value="running">running</option><option value="succeeded">succeeded</option><option value="failed">failed</option><option value="canceled">canceled</option><option value="expired">expired</option></select></label>
+              <label>关键词<input id="task-query" placeholder="任务 ID / 模型 / 租户"></label>
+              <label>数量<select id="task-limit"><option value="25">25</option><option value="50" selected>50</option><option value="100">100</option></select></label>
+            </div>
+            <div class="actions" style="margin-top: 12px;"><button id="load-tasks" type="button">加载任务</button></div>
+            <div class="table-wrap"><table><thead><tr><th>ID</th><th>类型</th><th>模型</th><th>状态</th><th>创建时间</th><th>操作</th></tr></thead><tbody id="tasks-table"></tbody></table></div>
+          </div>
+          <div class="card span-12"><h3>任务详情</h3><pre id="task-detail" class="json-view">选择任务后显示详情。</pre></div>
+        </div>
+      </section>
+
+      <section id="config" class="section">
+        <div class="grid">
+          <div class="card span-6"><h3>当前 GatewayConfig</h3><pre id="current-config" class="json-view">正在加载...</pre></div>
+          <div class="card span-6"><h3>API 调用示例</h3><pre id="example-request" class="json-view">正在加载...</pre></div>
+          <div class="card span-12"><h3>MODEL_CONFIG_JSON 校验器</h3><textarea id="config-json" spellcheck="false"></textarea><div class="actions" style="margin-top: 12px;"><button id="fill-current-config" class="secondary" type="button">填入当前配置</button><button id="validate-config" type="button">校验</button></div><pre id="config-output" class="json-view" style="margin-top: 12px;">尚未执行校验。</pre></div>
+        </div>
+      </section>
+    </main>
+  </div>
+  <script>
+    (function () {
+      var state = { overview: null, config: null, models: [], users: [], apiKeys: [], usage: null, tasks: [] };
+      var titles = { dashboard: '仪表盘', models: '模型管理', users: '用户管理', usage: '模型用量', tasks: '任务管理', config: '配置工具' };
+      var statusEl = document.getElementById('status');
+      var theme = localStorage.getItem('teaven_admin_theme') || 'dark';
+      document.documentElement.setAttribute('data-theme', theme);
+      document.getElementById('theme-toggle').textContent = theme === 'dark' ? '切换浅色' : '切换深色';
+
+      document.getElementById('nav').addEventListener('click', function (event) {
+        var link = event.target.closest('[data-section]');
+        if (!link) return;
+        showSection(link.getAttribute('data-section'));
+      });
+      document.getElementById('theme-toggle').addEventListener('click', toggleTheme);
+      document.getElementById('refresh').addEventListener('click', loadAll);
+      document.getElementById('save-model-form').addEventListener('click', saveModelFromForm);
+      document.getElementById('save-model-json').addEventListener('click', saveModelFromJson);
+      document.getElementById('reset-models').addEventListener('click', resetModels);
+      document.getElementById('create-user').addEventListener('click', createUser);
+      document.getElementById('create-key').addEventListener('click', createApiKey);
+      document.getElementById('load-tasks').addEventListener('click', loadTasks);
+      document.getElementById('fill-current-config').addEventListener('click', fillCurrentConfig);
+      document.getElementById('validate-config').addEventListener('click', validateConfig);
+      document.getElementById('models-table').addEventListener('click', handleModelAction);
+      document.getElementById('users-table').addEventListener('click', handleUserAction);
+      document.getElementById('keys-table').addEventListener('click', handleKeyAction);
+      document.getElementById('tasks-table').addEventListener('click', handleTaskAction);
+
+      showSection((location.hash || '#dashboard').slice(1));
+      loadAll();
+
+      async function api(path, options) {
+        options = options || {};
+        var headers = Object.assign({}, options.headers || {});
+        if (options.body && !headers['Content-Type']) headers['Content-Type'] = 'application/json';
+        var response = await fetch(path, Object.assign({}, options, { headers: headers, credentials: 'same-origin' }));
+        var data = await response.json().catch(function () { return {}; });
+        if (response.status === 401) {
+          location.assign('/admin/login');
+          throw new Error('登录已过期，请重新登录。');
+        }
+        if (!response.ok) {
+          throw new Error(data.error && data.error.message ? data.error.message : '请求失败：' + response.status);
+        }
+        return data;
+      }
+
+      async function loadAll() {
+        try {
+          setStatus('正在刷新...', '');
+          var results = await Promise.all([api('/admin/api/overview'), api('/admin/api/config'), api('/admin/api/models'), api('/admin/api/users'), api('/admin/api/usage'), api('/admin/api/tasks?limit=50')]);
+          state.overview = results[0];
+          state.config = results[1];
+          state.models = results[2].data || [];
+          state.users = results[3].users || [];
+          state.apiKeys = results[3].api_keys || [];
+          state.usage = results[4].usage;
+          state.tasks = results[5].data || [];
+          renderAll();
+          setStatus('已刷新：' + new Date().toLocaleString(), 'ok');
+        } catch (error) {
+          setStatus(error.message || String(error), 'error');
+        }
+      }
+
+      function renderAll() {
+        renderDashboard();
+        renderModels();
+        renderUsers();
+        renderUsage();
+        renderTasks(state.tasks);
+        renderConfig();
+      }
+
+      function renderDashboard() {
+        var data = state.overview || { stats: {}, warnings: [], feature_matrix: [], providers: [], gateway: {} };
+        document.getElementById('stats').innerHTML = stat('模型', data.stats.models_total) + stat('用户', data.stats.users_total) + stat('活跃 Key', data.stats.api_keys_active) + stat('请求数', data.stats.usage_requests) + stat('Token', data.stats.usage_tokens) + stat('任务', data.stats.recent_tasks) + stat('Provider', data.stats.providers_total) + stat('失败任务', data.stats.tasks_failed);
+        document.getElementById('warnings').innerHTML = data.warnings.length ? data.warnings.map(function (item) { return '<div class="warning">' + esc(item) + '</div>'; }).join('') : '<span class="pill ok">暂无活跃告警</span>';
+        document.getElementById('features').innerHTML = data.feature_matrix.map(function (item) { return '<div><span class="pill ' + featureClass(item.status) + '">' + esc(featureText(item.status)) + '</span><strong>' + esc(item.name) + '</strong><div class="status">' + esc(item.detail) + '</div></div>'; }).join('');
+        document.getElementById('gateway-meta').innerHTML = meta('认证模式', data.gateway.auth_mode) + meta('配置来源', data.gateway.config_source) + meta('任务存储', data.gateway.task_store) + meta('绑定资源', 'DB ' + yesNo(data.gateway.db_bound) + ', KV ' + yesNo(data.gateway.kv_bound) + ', Queue ' + yesNo(data.gateway.queue_bound) + ', R2 ' + yesNo(data.gateway.r2_bound));
+        document.getElementById('providers').innerHTML = data.providers.map(function (provider) { return '<div><span class="pill ' + providerClass(provider.status) + '">' + esc(providerText(provider.status)) + '</span><strong>' + esc(provider.name) + '</strong><div class="status">' + esc(provider.id) + ' · routes ' + esc(provider.routes_configured + '/' + provider.routes_active) + '</div></div>'; }).join('') || '<div class="empty">暂无 Provider。</div>';
+      }
+
+      function renderModels() {
+        var body = document.getElementById('models-table');
+        body.innerHTML = state.models.length ? state.models.map(function (model) {
+          var routes = (model.routes || []).map(function (route) { return '<span class="pill">' + esc(route.plugin_id + ' / ' + route.provider_model) + '</span><span class="pill ' + (route.credential_configured ? 'ok' : 'danger') + '">' + (route.credential_configured ? '凭证已配置' : '缺少凭证') + '</span>'; }).join('<br>');
+          return '<tr><td><code>' + esc(model.alias) + '</code></td><td>' + esc(model.modality) + '</td><td><span class="pill ' + statusClass(model.status) + '">' + esc(model.status) + '</span></td><td>' + routes + '</td><td><div class="actions"><button class="secondary compact" data-model-edit="' + esc(model.alias) + '">编辑</button><button class="danger compact" data-model-delete="' + esc(model.alias) + '">删除</button></div></td></tr>';
+        }).join('') : '<tr><td colspan="5" class="empty">暂无模型。</td></tr>';
+        if (state.models[0] && !document.getElementById('model-json').value.trim()) fillModelEditor(state.models[0].alias);
+      }
+
+      function renderUsers() {
+        document.getElementById('users-table').innerHTML = state.users.length ? state.users.map(function (user) {
+          return '<tr><td>' + esc(user.email) + '<div class="status">' + esc(user.name || user.id) + '</div></td><td>' + esc(user.role) + '</td><td><span class="pill ' + statusClass(user.status) + '">' + esc(user.status) + '</span></td><td><code>' + esc(user.tenant_id) + '</code></td><td><button class="secondary compact" data-user-toggle="' + esc(user.id) + '">' + (user.status === 'active' ? '禁用' : '启用') + '</button></td></tr>';
+        }).join('') : '<tr><td colspan="5" class="empty">暂无用户。</td></tr>';
+        document.getElementById('keys-table').innerHTML = state.apiKeys.length ? state.apiKeys.map(function (key) {
+          return '<tr><td>' + esc(key.name) + '</td><td><code>' + esc(key.key_prefix) + '</code></td><td><code>' + esc(key.user_id) + '</code></td><td>' + esc((key.allowed_models || []).join(', ') || '全部') + '</td><td><span class="pill ' + statusClass(key.status) + '">' + esc(key.status) + '</span></td><td><button class="secondary compact" data-key-toggle="' + esc(key.id) + '">' + (key.status === 'active' ? '禁用' : '启用') + '</button></td></tr>';
+        }).join('') : '<tr><td colspan="6" class="empty">暂无 API Key。</td></tr>';
+        document.getElementById('key-user').innerHTML = state.users.map(function (user) { return '<option value="' + esc(user.id) + '">' + esc(user.email) + '</option>'; }).join('');
+      }
+
+      function renderUsage() {
+        var usage = state.usage || { total_requests: 0, total_tokens: 0, prompt_tokens: 0, completion_tokens: 0, media_count: 0, by_model: [], recent: [] };
+        document.getElementById('usage-stats').innerHTML = stat('请求数', usage.total_requests) + stat('总 Token', usage.total_tokens) + stat('输入 Token', usage.prompt_tokens) + stat('输出 Token', usage.completion_tokens) + stat('媒体单位', usage.media_count) + stat('成本', usage.cost || 0);
+        document.getElementById('usage-models').innerHTML = usage.by_model.length ? usage.by_model.map(function (item) { return '<tr><td><code>' + esc(item.model) + '</code></td><td>' + esc(item.requests) + '</td><td>' + esc(item.total_tokens) + '</td><td>' + esc(item.prompt_tokens) + '</td><td>' + esc(item.completion_tokens) + '</td><td>' + esc(item.media_count) + '</td></tr>'; }).join('') : '<tr><td colspan="6" class="empty">暂无用量。</td></tr>';
+        document.getElementById('usage-recent').innerHTML = usage.recent.length ? usage.recent.slice(0, 12).map(function (item) { return '<div><span class="pill">' + esc(item.endpoint) + '</span><strong>' + esc(item.model) + '</strong><div class="status">' + esc(item.total_tokens) + ' tokens · ' + esc(item.created_at) + '</div></div>'; }).join('') : '<div class="empty">暂无用量记录。</div>';
+      }
+
+      function renderTasks(tasks) {
+        document.getElementById('tasks-table').innerHTML = tasks.length ? tasks.map(function (task) {
+          var actions = '<button class="secondary compact" data-task-view="' + esc(task.id) + '">详情</button>';
+          if (task.cancelable) actions += '<button class="danger compact" data-task-cancel="' + esc(task.id) + '">取消</button>';
+          return '<tr><td><code>' + esc(task.id) + '</code></td><td>' + esc(task.type) + '</td><td>' + esc(task.model) + '</td><td><span class="pill ' + statusClass(task.status) + '">' + esc(task.status) + '</span></td><td>' + esc(task.created_at) + '</td><td><div class="actions">' + actions + '</div></td></tr>';
+        }).join('') : '<tr><td colspan="6" class="empty">暂无任务。</td></tr>';
+      }
+
+      function renderConfig() {
+        var config = state.config || {};
+        document.getElementById('current-config').textContent = config.config_json || '';
+        document.getElementById('config-json').value = document.getElementById('config-json').value || config.config_json || '';
+        document.getElementById('example-request').textContent = renderExample(config.example_chat_request);
+      }
+
+      async function saveModelFromForm() {
+        var model = { alias: value('model-alias'), modality: value('model-modality'), supports_stream: value('model-stream') === 'true', status: value('model-status'), routes: [{ plugin_id: value('route-plugin'), provider_model: value('route-provider-model'), credential_id: value('route-credential'), priority: Number(value('route-priority') || 1), weight: 100, status: value('route-status') }] };
+        await saveModel(model);
+      }
+      async function saveModelFromJson() { await saveModel(JSON.parse(document.getElementById('model-json').value)); }
+      async function saveModel(model) { await api('/admin/api/models', { method: 'POST', body: JSON.stringify({ model: model }) }); await loadAll(); setStatus('模型已保存：' + model.alias, 'ok'); }
+      async function resetModels() { if (!confirm('确定重置模型配置？')) return; await api('/admin/api/models/reset', { method: 'POST' }); document.getElementById('model-json').value = ''; await loadAll(); setStatus('模型配置已重置。', 'ok'); }
+
+      async function createUser() {
+        var body = { email: value('user-email'), name: value('user-name'), role: value('user-role') };
+        await api('/admin/api/users', { method: 'POST', body: JSON.stringify(body) });
+        await loadAll(); setStatus('用户已创建：' + body.email, 'ok');
+      }
+      async function createApiKey() {
+        var userId = value('key-user');
+        var models = value('key-models').split(',').map(function (item) { return item.trim(); }).filter(Boolean);
+        var data = await api('/admin/api/users/' + encodeURIComponent(userId) + '/api-keys', { method: 'POST', body: JSON.stringify({ name: value('key-name'), allowed_models: models.length ? models : undefined }) });
+        document.getElementById('key-output').textContent = JSON.stringify({ token: data.token, api_key: data.api_key }, null, 2);
+        await loadAll(); setStatus('API Key 已创建，明文只展示一次。', 'ok');
+      }
+      async function loadTasks() {
+        var params = new URLSearchParams(); params.set('limit', value('task-limit')); if (value('task-status')) params.set('status', value('task-status')); if (value('task-query')) params.set('q', value('task-query'));
+        var data = await api('/admin/api/tasks?' + params.toString()); state.tasks = data.data || []; renderTasks(state.tasks); setStatus('任务已加载。', 'ok');
+      }
+      async function validateConfig() { var data = await api('/admin/api/config/validate', { method: 'POST', body: JSON.stringify({ config_json: value('config-json') }) }); document.getElementById('config-output').textContent = JSON.stringify(data, null, 2); }
+      function fillCurrentConfig() { document.getElementById('config-json').value = state.config ? state.config.config_json : ''; }
+
+      async function handleModelAction(event) {
+        var edit = event.target.closest('[data-model-edit]'); var del = event.target.closest('[data-model-delete]');
+        if (edit) fillModelEditor(edit.getAttribute('data-model-edit'));
+        if (del && confirm('确定删除模型 ' + del.getAttribute('data-model-delete') + '？')) { await api('/admin/api/models/' + encodeURIComponent(del.getAttribute('data-model-delete')), { method: 'DELETE' }); await loadAll(); }
+      }
+      async function handleUserAction(event) { var button = event.target.closest('[data-user-toggle]'); if (!button) return; var user = state.users.find(function (item) { return item.id === button.getAttribute('data-user-toggle'); }); if (!user) return; await api('/admin/api/users/' + encodeURIComponent(user.id), { method: 'PATCH', body: JSON.stringify({ status: user.status === 'active' ? 'disabled' : 'active' }) }); await loadAll(); }
+      async function handleKeyAction(event) { var button = event.target.closest('[data-key-toggle]'); if (!button) return; var key = state.apiKeys.find(function (item) { return item.id === button.getAttribute('data-key-toggle'); }); if (!key) return; await api('/admin/api/api-keys/' + encodeURIComponent(key.id), { method: 'PATCH', body: JSON.stringify({ status: key.status === 'active' ? 'disabled' : 'active' }) }); await loadAll(); }
+      async function handleTaskAction(event) { var view = event.target.closest('[data-task-view]'); var cancel = event.target.closest('[data-task-cancel]'); if (view) { var detail = await api('/admin/api/tasks/' + encodeURIComponent(view.getAttribute('data-task-view'))); document.getElementById('task-detail').textContent = JSON.stringify(detail.task, null, 2); } if (cancel && confirm('确定取消任务？')) { await api('/admin/api/tasks/' + encodeURIComponent(cancel.getAttribute('data-task-cancel')) + '/cancel', { method: 'POST' }); await loadTasks(); } }
+
+      function fillModelEditor(alias) { var model = state.models.find(function (item) { return item.alias === alias; }); if (!model) return; document.getElementById('model-json').value = JSON.stringify(toModelInput(model), null, 2); document.getElementById('model-alias').value = model.alias; document.getElementById('model-modality').value = model.modality; document.getElementById('model-status').value = model.status; document.getElementById('model-stream').value = String(model.supports_stream !== false); if (model.routes && model.routes[0]) { document.getElementById('route-plugin').value = model.routes[0].plugin_id || ''; document.getElementById('route-provider-model').value = model.routes[0].provider_model || ''; document.getElementById('route-credential').value = model.routes[0].credential_id || ''; document.getElementById('route-priority').value = model.routes[0].priority || 1; document.getElementById('route-status').value = model.routes[0].status || 'active'; } }
+      function toModelInput(model) { return { alias: model.alias, modality: model.modality, supports_stream: model.supports_stream, status: model.status, routes: (model.routes || []).map(function (route) { return { plugin_id: route.plugin_id, provider: route.provider, provider_model: route.provider_model, credential_id: route.credential_id, priority: route.priority, weight: route.weight, status: route.status }; }) }; }
+      function showSection(section) { section = titles[section] ? section : 'dashboard'; document.querySelectorAll('.section').forEach(function (el) { el.classList.toggle('active', el.id === section); }); document.querySelectorAll('.nav a').forEach(function (el) { el.classList.toggle('active', el.getAttribute('data-section') === section); }); document.getElementById('page-title').textContent = titles[section]; }
+      function toggleTheme() { var next = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark'; document.documentElement.setAttribute('data-theme', next); localStorage.setItem('teaven_admin_theme', next); document.getElementById('theme-toggle').textContent = next === 'dark' ? '切换浅色' : '切换深色'; }
+      function stat(label, value) { return '<div class="stat"><strong>' + esc(value == null ? 0 : value) + '</strong><span>' + esc(label) + '</span></div>'; }
+      function meta(label, value) { return '<div><span class="pill">' + esc(label) + '</span><strong>' + esc(value == null ? '' : value) + '</strong></div>'; }
+      function renderExample(req) { if (!req) return '暂无示例'; return 'curl -X ' + req.method + ' "' + location.origin + req.endpoint + '"\n  -H "Authorization: Bearer <DEV_API_KEY>"\n  -H "Content-Type: application/json"\n  -d \'' + JSON.stringify(req.body, null, 2) + '\''; }
+      function value(id) { return document.getElementById(id).value.trim(); }
+      function yesNo(value) { return value ? '已绑定' : '未绑定'; }
+      function statusClass(status) { if (status === 'active' || status === 'succeeded' || status === 'running' || status === 'ok') return 'ok'; if (status === 'queued' || status === 'hidden' || status === 'warning') return 'warn'; if (status === 'disabled' || status === 'failed' || status === 'canceled' || status === 'expired' || status === 'error') return 'danger'; return ''; }
+      function providerClass(status) { return statusClass(status); }
+      function providerText(status) { return status === 'ok' ? '可用' : status === 'warning' ? '未使用' : status === 'error' ? '异常' : status; }
+      function featureClass(status) { return status === 'ready' ? 'ok' : status === 'blocked' ? 'danger' : 'warn'; }
+      function featureText(status) { return status === 'ready' ? '就绪' : status === 'partial' ? '部分可用' : status === 'planned' ? '待实现' : status === 'blocked' ? '阻塞' : status; }
+      function setStatus(message, kind) { statusEl.textContent = message; statusEl.className = 'subtitle' + (kind ? ' ' + kind : ''); }
+      function esc(value) { return String(value == null ? '' : value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;'); }
+    })();
+  </script>
+</body>
+</html>`;
 
 const ADMIN_HTML = `<!doctype html>
 <html lang="zh-CN">
