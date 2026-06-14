@@ -1617,11 +1617,17 @@ const ADMIN_APP_HTML = `<!doctype html>
           <div class="card span-4"><h3>告警</h3><div id="warnings" class="stack"></div></div>
           <div class="card span-6"><h3>网关状态</h3><div id="gateway-meta" class="stack"></div></div>
           <div class="card span-6"><h3>Provider</h3><div id="providers" class="stack"></div></div>
+          <div class="card span-12"><h3>上游配置</h3><div id="upstreams" class="stack"></div></div>
         </div>
       </section>
 
       <section id="models" class="section">
         <div class="grid">
+          <div class="card span-12">
+            <h3>上游配置</h3>
+            <p class="subtitle">上游保存协议类型、Provider Plugin、Base URL 和凭证引用；模型只添加到对应上游下。</p>
+            <div id="model-upstreams" class="stack"></div>
+          </div>
           <div class="card span-12">
             <h3>模型列表</h3>
             <div class="table-wrap"><table><thead><tr><th>别名</th><th>模态</th><th>状态</th><th>路由</th><th>操作</th></tr></thead><tbody id="models-table"></tbody></table></div>
@@ -1778,21 +1784,40 @@ const ADMIN_APP_HTML = `<!doctype html>
       }
 
       function renderDashboard() {
-        var data = state.overview || { stats: {}, warnings: [], feature_matrix: [], providers: [], gateway: {} };
+        var data = state.overview || { stats: {}, warnings: [], feature_matrix: [], providers: [], upstreams: [], gateway: {} };
         document.getElementById('stats').innerHTML = stat('模型', data.stats.models_total) + stat('用户', data.stats.users_total) + stat('活跃 Key', data.stats.api_keys_active) + stat('请求数', data.stats.usage_requests) + stat('Token', data.stats.usage_tokens) + stat('任务', data.stats.recent_tasks) + stat('Provider', data.stats.providers_total) + stat('失败任务', data.stats.tasks_failed);
         document.getElementById('warnings').innerHTML = data.warnings.length ? data.warnings.map(function (item) { return '<div class="warning">' + esc(item) + '</div>'; }).join('') : '<span class="pill ok">暂无活跃告警</span>';
         document.getElementById('features').innerHTML = data.feature_matrix.map(function (item) { return '<div><span class="pill ' + featureClass(item.status) + '">' + esc(featureText(item.status)) + '</span><strong>' + esc(item.name) + '</strong><div class="status">' + esc(item.detail) + '</div></div>'; }).join('');
         document.getElementById('gateway-meta').innerHTML = meta('认证模式', data.gateway.auth_mode) + meta('配置来源', data.gateway.config_source) + meta('任务存储', data.gateway.task_store) + meta('绑定资源', 'DB ' + yesNo(data.gateway.db_bound) + ', KV ' + yesNo(data.gateway.kv_bound) + ', Queue ' + yesNo(data.gateway.queue_bound) + ', R2 ' + yesNo(data.gateway.r2_bound));
         document.getElementById('providers').innerHTML = data.providers.map(function (provider) { return '<div><span class="pill ' + providerClass(provider.status) + '">' + esc(providerText(provider.status)) + '</span><strong>' + esc(provider.name) + '</strong><div class="status">' + esc(provider.id) + ' · routes ' + esc(provider.routes_configured + '/' + provider.routes_active) + '</div></div>'; }).join('') || '<div class="empty">暂无 Provider。</div>';
+        document.getElementById('upstreams').innerHTML = renderUpstreams(data.upstreams || []);
       }
 
       function renderModels() {
         var body = document.getElementById('models-table');
+        document.getElementById('model-upstreams').innerHTML = renderUpstreams((state.overview && state.overview.upstreams) || []);
         body.innerHTML = state.models.length ? state.models.map(function (model) {
           var routes = (model.routes || []).map(function (route) { return '<span class="pill">' + esc(route.upstream_id + ' / ' + route.provider_model) + '</span><span class="pill">' + esc(route.protocol_type) + '</span><span class="pill ' + (route.credential_configured ? 'ok' : 'danger') + '">' + (route.credential_configured ? '上游凭证已配置' : '上游缺少凭证') + '</span>'; }).join('<br>');
           return '<tr><td><code>' + esc(model.alias) + '</code></td><td>' + esc(model.modality) + '</td><td><span class="pill ' + statusClass(model.status) + '">' + esc(model.status) + '</span></td><td>' + routes + '</td><td><div class="actions"><button class="secondary compact" data-model-edit="' + esc(model.alias) + '">编辑</button><button class="danger compact" data-model-delete="' + esc(model.alias) + '">删除</button></div></td></tr>';
         }).join('') : '<tr><td colspan="5" class="empty">暂无模型。</td></tr>';
         if (state.models[0] && !document.getElementById('model-json').value.trim()) fillModelEditor(state.models[0].alias);
+      }
+
+      function renderUpstreams(upstreams) {
+        return upstreams.length ? upstreams.map(function (upstream) {
+          var models = (upstream.models || []).map(function (model) {
+            return '<span class="pill">' + esc(model.alias + ' -> ' + model.provider_model) + '</span>';
+          }).join('');
+          return '<div>' +
+            '<span class="pill ' + statusClass(upstream.status) + '">' + esc(upstream.status) + '</span>' +
+            '<strong>' + esc(upstream.name || upstream.id) + '</strong>' +
+            '<div class="status"><code>' + esc(upstream.id) + '</code> · ' + esc(upstream.protocol_type) + ' · ' + esc(upstream.plugin_id) + '</div>' +
+            '<div class="status">Base URL: <code>' + esc(upstream.base_url || '未配置') + '</code></div>' +
+            '<div class="status">凭证: <code>' + esc(upstream.credential_id || '未配置') + '</code> <span class="pill ' + (upstream.credential_configured ? 'ok' : 'danger') + '">' + (upstream.credential_configured ? '已配置' : '缺少') + '</span></div>' +
+            '<div class="status">模型 ' + esc(upstream.models_active + '/' + upstream.models_total) + '</div>' +
+            '<div>' + models + '</div>' +
+          '</div>';
+        }).join('') : '<div class="empty">暂无上游配置。</div>';
       }
 
       function renderUsers() {
