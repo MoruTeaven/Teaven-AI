@@ -41,7 +41,7 @@ export async function handleChatCompletions(
     throw invalidRequest(`Model does not support stream: ${modelName}`, "stream");
   }
 
-  const route = selectRoute(model);
+  const route = selectRoute(model, body.stream === true);
   if (!route) {
     throw providerUnavailable(`No active provider route for model: ${modelName}`);
   }

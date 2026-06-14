@@ -1,10 +1,10 @@
-import { loadGatewayConfig } from "../config";
+import { listModels, loadGatewayConfig } from "../config";
 import { jsonResponse } from "../http/response";
 import type { AuthContext, Env } from "../types";
 
 export async function handleListModels(env: Env, auth: AuthContext, requestId: string): Promise<Response> {
   const config = await loadGatewayConfig(env);
-  const models = config.models
+  const models = listModels(config)
     .filter((model) => model.status !== "disabled")
     .filter((model) => !auth.allowed_models || auth.allowed_models.includes(model.alias))
     .map((model) => ({

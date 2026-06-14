@@ -5,7 +5,7 @@ import {
   createAdminSession,
   verifyAdminPassword
 } from "../auth/admin";
-import { loadGatewayConfig, resetGatewayConfig, saveGatewayConfig, validateGatewayConfig } from "../config";
+import { listModels, listProviderRoutes, loadGatewayConfig, resetGatewayConfig, saveGatewayConfig, validateGatewayConfig } from "../config";
 import { conflict, invalidRequest, notFound } from "../http/errors";
 import { jsonResponse } from "../http/response";
 import {
@@ -23,11 +23,26 @@ import {
 import { createProviderRegistry, resolveProviderCredential } from "../providers/registry";
 import type { ProviderPluginManifest } from "../providers/types";
 import { getTask, listTasks, saveTask } from "../tasks/store";
-import type { AsyncTaskRecord, AsyncTaskStatus, Env, GatewayConfig, ModelConfig, ProviderRouteConfig } from "../types";
+import type {
+  AsyncTaskRecord,
+  AsyncTaskStatus,
+  Env,
+  GatewayConfig,
+  ModelConfig,
+  ProviderRouteConfig,
+  UpstreamConfig,
+  UpstreamModelConfig
+} from "../types";
 import { readJsonObject, requireString } from "../utils/request";
 
 const DEFAULT_TASK_LIMIT = 50;
 const MAX_TASK_LIMIT = 100;
+
+interface AdminModelMutation {
+  upstream_id: string;
+  upstream: UpstreamConfig;
+  model: UpstreamModelConfig;
+}
 
 export async function handleAdminRequest(
   request: Request,
@@ -248,6 +263,7 @@ async function handleAdminOverview(env: Env, requestId: string): Promise<Respons
     listAdminApiKeys(env),
     summarizeUsage(env)
   ]);
+  const models = listModels(config);
   const routeStats = summarizeRoutes(config, env);
   const taskStats = summarizeTasks(tasks);
 
@@ -257,8 +273,10 @@ async function handleAdminOverview(env: Env, requestId: string): Promise<Respons
       generated_at: new Date().toISOString(),
       gateway: buildGatewayInfo(env),
       stats: {
-        models_total: config.models.length,
-        models_active: config.models.filter((model) => model.status !== "disabled").length,
+        models_total: models.length,
+        models_active: models.filter((model) => model.status !== "disabled").length,
+        upstreams_total: config.upstreams.length,
+        upstreams_active: config.upstreams.filter((upstream) => upstream.status !== "disabled").length,
         routes_total: routeStats.total,
         routes_active: routeStats.active,
         routes_configured: routeStats.configured,
@@ -274,7 +292,7 @@ async function handleAdminOverview(env: Env, requestId: string): Promise<Respons
       task_stats: taskStats,
       usage_summary: usage,
       warnings: buildWarnings(env, config),
-      models: config.models.map((model) => publicModel(model, env)),
+      models: models.map((model) => publicModel(model, env)),
       providers: registry.list().map((plugin) => publicProvider(plugin.manifest, config, env)),
       provider_config: {
         openai_compatible_base_url: env.OPENAI_COMPATIBLE_BASE_URL || "https://api.openai.com/v1",
@@ -295,7 +313,8 @@ async function handleAdminOverview(env: Env, requestId: string): Promise<Respons
 
 async function handleAdminConfig(env: Env, requestId: string): Promise<Response> {
   const config = await loadGatewayConfig(env);
-  const routes = config.models.flatMap((model) => model.routes.map((route) => ({ model, route })));
+  const models = listModels(config);
+  const routes = listProviderRoutes(config);
 
   return jsonResponse(
     {
@@ -304,9 +323,10 @@ async function handleAdminConfig(env: Env, requestId: string): Promise<Response>
       config,
       config_json: JSON.stringify(config, null, 2),
       summary: {
-        models_total: config.models.length,
+        upstreams_total: config.upstreams.length,
+        models_total: models.length,
         routes_total: routes.length,
-        routes_configured: routes.filter(({ route }) => isRouteCredentialConfigured(env, route)).length
+        routes_configured: routes.filter((route) => isRouteCredentialConfigured(env, route)).length
       },
       example_chat_request: {
         endpoint: "/v1/chat/completions",
@@ -316,7 +336,7 @@ async function handleAdminConfig(env: Env, requestId: string): Promise<Response>
           "Content-Type": "application/json"
         },
         body: {
-          model: config.models[0]?.alias || "gpt-4o-mini",
+          model: models[0]?.alias || "gpt-4o-mini",
           messages: [{ role: "user", content: "hello" }],
           stream: false
         }
@@ -335,7 +355,7 @@ async function handleListAdminModels(env: Env, requestId: string): Promise<Respo
   return jsonResponse(
     {
       object: "list",
-      data: config.models.map((model) => publicModel(model, env))
+      data: listModels(config).map((model) => publicModel(model, env))
     },
     {
       headers: {
@@ -347,21 +367,26 @@ async function handleListAdminModels(env: Env, requestId: string): Promise<Respo
 
 async function handleUpsertAdminModel(request: Request, env: Env, requestId: string, expectedAlias?: string): Promise<Response> {
   const body = await readJsonObject(request);
-  const model = normalizeModelInput(body.model ?? body);
-  if (expectedAlias && model.alias !== expectedAlias) {
+  const input = normalizeModelInput(body.model ?? body);
+  if (expectedAlias && input.model.alias !== expectedAlias) {
     throw invalidRequest("模型别名不能与路径不一致", "alias");
   }
 
   const config = await loadGatewayConfig(env);
-  const nextModels = config.models.filter((item) => item.alias !== model.alias);
-  nextModels.push(model);
-  nextModels.sort((left, right) => left.alias.localeCompare(right.alias));
-  const nextConfig = { models: nextModels };
+  const nextUpstreams = upsertUpstreamModel(config, input);
+  const nextConfig = { upstreams: nextUpstreams };
   await saveGatewayConfig(env, nextConfig);
+  const savedModel = listModels(nextConfig).find((model) => model.alias === input.model.alias) || {
+    alias: input.model.alias,
+    modality: input.model.modality,
+    supports_stream: input.model.supports_stream,
+    status: input.model.status,
+    routes: []
+  };
 
   return jsonResponse(
     {
-      model: publicModel(model, env),
+      model: publicModel(savedModel, env),
       config_source: env.AI_GATEWAY_KV ? "AI_GATEWAY_KV" : "memory"
     },
     {
@@ -374,15 +399,25 @@ async function handleUpsertAdminModel(request: Request, env: Env, requestId: str
 
 async function handleDeleteAdminModel(alias: string, env: Env, requestId: string): Promise<Response> {
   const config = await loadGatewayConfig(env);
-  const nextModels = config.models.filter((model) => model.alias !== alias);
-  if (nextModels.length === config.models.length) {
+  let deleted = false;
+  const nextUpstreams = config.upstreams
+    .map((upstream) => {
+      const models = upstream.models.filter((model) => model.alias !== alias);
+      if (models.length !== upstream.models.length) {
+        deleted = true;
+      }
+      return { ...upstream, models };
+    })
+    .filter((upstream) => upstream.models.length > 0);
+
+  if (!deleted) {
     throw notFound("模型不存在");
   }
-  if (nextModels.length === 0) {
+  if (nextUpstreams.length === 0) {
     throw invalidRequest("至少需要保留一个模型");
   }
 
-  await saveGatewayConfig(env, { models: nextModels });
+  await saveGatewayConfig(env, { upstreams: nextUpstreams });
   return jsonResponse(
     {
       deleted: true,
@@ -689,12 +724,15 @@ async function handleValidateConfig(request: Request, requestId: string): Promis
   try {
     const config = JSON.parse(configJson) as GatewayConfig;
     validateGatewayConfig(config);
+    const models = listModels(config);
+    const routes = listProviderRoutes(config);
 
     return jsonResponse(
       {
         valid: true,
-        models_total: config.models.length,
-        routes_total: config.models.reduce((count, model) => count + model.routes.length, 0)
+        upstreams_total: config.upstreams.length,
+        models_total: models.length,
+        routes_total: routes.length
       },
       {
         headers: {
@@ -728,11 +766,17 @@ function publicModel(model: ModelConfig, env: Env): Record<string, unknown> {
     supports_stream: model.supports_stream !== false,
     status: model.status || "active",
     routes: model.routes.map((route) => ({
+      upstream_id: route.upstream_id,
+      upstream_name: route.upstream_name || null,
+      protocol_type: route.protocol_type,
       plugin_id: route.plugin_id,
       provider: route.provider,
       provider_model: route.provider_model,
+      base_url_configured: Boolean(route.base_url),
       credential_id: route.credential_id || null,
       credential_configured: isRouteCredentialConfigured(env, route),
+      modality: route.modality,
+      supports_stream: route.supports_stream !== false,
       priority: route.priority ?? null,
       weight: route.weight ?? null,
       status: route.status || "active",
@@ -779,51 +823,83 @@ function publicApiKey(apiKey: AdminApiKey): Record<string, unknown> {
   };
 }
 
-function normalizeModelInput(value: unknown): ModelConfig {
+function normalizeModelInput(value: unknown): AdminModelMutation {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw invalidRequest("model 必须是对象", "model");
   }
 
   const input = value as Record<string, unknown>;
+  const upstreamInput = readUpstreamInput(input);
   const alias = requireString(input.alias, "alias");
   const modality = requireString(input.modality, "modality");
   if (!["text", "image", "video", "file"].includes(modality)) {
     throw invalidRequest("modality 必须是 text、image、video 或 file", "modality");
   }
-  if (!Array.isArray(input.routes) || input.routes.length === 0) {
-    throw invalidRequest("routes 必须是非空数组", "routes");
-  }
 
-  const model: ModelConfig = {
+  const model: UpstreamModelConfig = {
     alias,
-    modality: modality as ModelConfig["modality"],
-    supports_stream: input.supports_stream !== false,
-    status: normalizeModelStatus(input.status),
-    routes: input.routes.map(normalizeRouteInput)
-  };
-  validateGatewayConfig({ models: [model] });
-  return model;
-}
-
-function normalizeRouteInput(value: unknown): ProviderRouteConfig {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw invalidRequest("route 必须是对象", "routes");
-  }
-
-  const input = value as Record<string, unknown>;
-  const route: ProviderRouteConfig = {
-    plugin_id: requireString(input.plugin_id, "plugin_id"),
-    provider: optionalBodyString(input.provider, "provider"),
     provider_model: requireString(input.provider_model, "provider_model"),
-    credential_id: optionalBodyString(input.credential_id, "credential_id"),
+    modality: modality as UpstreamModelConfig["modality"],
+    supports_stream: input.supports_stream !== false,
     priority: optionalNumber(input.priority, "priority"),
     weight: optionalNumber(input.weight, "weight"),
-    status: normalizeRouteStatus(input.status)
+    status: normalizeModelStatus(input.status)
   };
-  return route;
+
+  const upstream: UpstreamConfig = {
+    ...upstreamInput,
+    models: [model]
+  };
+  validateGatewayConfig({ upstreams: [upstream] });
+  return { upstream_id: upstream.id, upstream, model };
 }
 
-function normalizeModelStatus(value: unknown): ModelConfig["status"] {
+function readUpstreamInput(input: Record<string, unknown>): Omit<UpstreamConfig, "models"> {
+  const rawUpstream = input.upstream;
+  const upstream = rawUpstream && typeof rawUpstream === "object" && !Array.isArray(rawUpstream)
+    ? (rawUpstream as Record<string, unknown>)
+    : input;
+
+  const id = requireString(input.upstream_id ?? upstream.id, "upstream_id");
+  return {
+    id,
+    name: optionalBodyString(upstream.name, "upstream.name") || id,
+    protocol_type: requireString(upstream.protocol_type, "protocol_type"),
+    plugin_id: requireString(upstream.plugin_id, "plugin_id"),
+    provider: optionalBodyString(upstream.provider, "provider"),
+    base_url: optionalBodyString(upstream.base_url, "base_url"),
+    credential_id: optionalBodyString(upstream.credential_id, "credential_id"),
+    config: optionalObject(upstream.config, "config"),
+    status: normalizeUpstreamStatus(upstream.status)
+  };
+}
+
+function upsertUpstreamModel(config: GatewayConfig, input: AdminModelMutation): UpstreamConfig[] {
+  const upstreams = config.upstreams.map((upstream) => ({ ...upstream, models: [...upstream.models] }));
+  let target = upstreams.find((upstream) => upstream.id === input.upstream_id);
+
+  if (!target) {
+    target = { ...input.upstream, models: [] };
+    upstreams.push(target);
+  } else {
+    target.name = input.upstream.name;
+    target.protocol_type = input.upstream.protocol_type;
+    target.plugin_id = input.upstream.plugin_id;
+    target.provider = input.upstream.provider;
+    target.base_url = input.upstream.base_url;
+    target.credential_id = input.upstream.credential_id;
+    target.config = input.upstream.config;
+    target.status = input.upstream.status;
+  }
+
+  target.models = target.models.filter((model) => model.alias !== input.model.alias);
+  target.models.push(input.model);
+  target.models.sort((left, right) => left.alias.localeCompare(right.alias));
+  upstreams.sort((left, right) => left.id.localeCompare(right.id));
+  return upstreams;
+}
+
+function normalizeModelStatus(value: unknown): UpstreamModelConfig["status"] {
   if (value === undefined || value === null || value === "") {
     return "active";
   }
@@ -833,14 +909,14 @@ function normalizeModelStatus(value: unknown): ModelConfig["status"] {
   throw invalidRequest("model status 无效", "status");
 }
 
-function normalizeRouteStatus(value: unknown): ProviderRouteConfig["status"] {
+function normalizeUpstreamStatus(value: unknown): UpstreamConfig["status"] {
   if (value === undefined || value === null || value === "") {
     return "active";
   }
-  if (value === "active" || value === "disabled") {
+  if (value === "active" || value === "disabled" || value === "degraded") {
     return value;
   }
-  throw invalidRequest("route status 无效", "status");
+  throw invalidRequest("upstream status 无效", "status");
 }
 
 function normalizeUserRole(value: unknown): "owner" | "admin" | "member" {
@@ -907,6 +983,16 @@ function optionalNumber(value: unknown, name: string): number | undefined {
   return value;
 }
 
+function optionalObject(value: unknown, name: string): Record<string, unknown> | undefined {
+  if (value === undefined || value === null || value === "") {
+    return undefined;
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw invalidRequest(`${name} 必须是对象`, name);
+  }
+  return value as Record<string, unknown>;
+}
+
 function buildGatewayInfo(env: Env): Record<string, unknown> {
   return {
     auth_mode: env.AUTH_MODE || "api_key",
@@ -931,9 +1017,6 @@ function buildWarnings(env: Env, config: GatewayConfig): string[] {
   if (!env.DEV_API_KEY && env.AUTH_MODE !== "none") {
     warnings.push("未配置 DEV_API_KEY，用户 API 认证将失败。");
   }
-  if (!env.OPENAI_COMPATIBLE_API_KEY) {
-    warnings.push("未配置 OPENAI_COMPATIBLE_API_KEY，默认供应商的聊天补全将失败。");
-  }
   if (!env.AI_GATEWAY_KV) {
     warnings.push("未绑定 AI_GATEWAY_KV，后台保存的模型、用户、API Key、用量和任务记录仅保存在内存中。");
   }
@@ -947,7 +1030,7 @@ function buildWarnings(env: Env, config: GatewayConfig): string[] {
     warnings.push("未绑定 FILES，异步任务输出转存 R2 的能力尚不可用。");
   }
 
-  for (const model of config.models) {
+  for (const model of listModels(config)) {
     if (model.status === "disabled") {
       continue;
     }
@@ -958,7 +1041,7 @@ function buildWarnings(env: Env, config: GatewayConfig): string[] {
     }
     for (const route of activeRoutes) {
       if (!isRouteCredentialConfigured(env, route)) {
-        warnings.push(`模型 ${model.alias} 的路由 ${route.plugin_id}/${route.provider_model} 缺少凭证。`);
+        warnings.push(`模型 ${model.alias} 在上游 ${route.upstream_id} 的 ${route.provider_model} 缺少凭证。`);
       }
     }
   }
@@ -967,10 +1050,8 @@ function buildWarnings(env: Env, config: GatewayConfig): string[] {
 }
 
 function buildProviderHealth(manifest: ProviderPluginManifest, config: GatewayConfig, env: Env): Record<string, unknown> {
-  const routes = config.models.flatMap((model) =>
-    model.routes
-      .filter((route) => route.plugin_id === manifest.id)
-      .map((route) => ({ model_alias: model.alias, route }))
+  const routes = listModels(config).flatMap((model) =>
+    model.routes.filter((route) => route.plugin_id === manifest.id).map((route) => ({ model_alias: model.alias, route }))
   );
   const activeRoutes = routes.filter(({ route }) => route.status !== "disabled");
   const configuredRoutes = activeRoutes.filter(({ route }) => isRouteCredentialConfigured(env, route));
@@ -989,6 +1070,8 @@ function buildProviderHealth(manifest: ProviderPluginManifest, config: GatewayCo
     routes_configured: configuredRoutes.length,
     routes: routes.map(({ model_alias, route }) => ({
       model_alias,
+      upstream_id: route.upstream_id,
+      upstream_name: route.upstream_name || null,
       provider_model: route.provider_model,
       credential_id: route.credential_id || null,
       credential_configured: isRouteCredentialConfigured(env, route),
@@ -1011,9 +1094,9 @@ function buildFeatureMatrix(env: Env): Array<Record<string, unknown>> {
       detail: env.AUTH_MODE === "none" ? "AUTH_MODE=none" : env.DEV_API_KEY ? "DEV_API_KEY 已配置" : "需要 DEV_API_KEY"
     },
     {
-      name: "模型路由",
+      name: "上游模型路由",
       status: env.AI_GATEWAY_KV || env.MODEL_CONFIG_JSON ? "ready" : "partial",
-      detail: env.AI_GATEWAY_KV ? "支持后台保存模型配置" : env.MODEL_CONFIG_JSON ? "使用 MODEL_CONFIG_JSON" : "使用默认单模型路由"
+      detail: env.AI_GATEWAY_KV ? "支持后台保存上游模型配置" : env.MODEL_CONFIG_JSON ? "使用 MODEL_CONFIG_JSON" : "使用默认单上游模型"
     },
     {
       name: "用户/API Key 管理",
@@ -1065,15 +1148,13 @@ function summarizeRoutes(config: GatewayConfig, env: Env): Record<string, number
   let active = 0;
   let configured = 0;
 
-  for (const model of config.models) {
-    for (const route of model.routes) {
-      total += 1;
-      if (route.status !== "disabled") {
-        active += 1;
-      }
-      if (route.status !== "disabled" && isRouteCredentialConfigured(env, route)) {
-        configured += 1;
-      }
+  for (const route of listProviderRoutes(config)) {
+    total += 1;
+    if (route.status !== "disabled") {
+      active += 1;
+    }
+    if (route.status !== "disabled" && isRouteCredentialConfigured(env, route)) {
+      configured += 1;
     }
   }
 
@@ -1135,11 +1216,9 @@ function normalizeTaskLimit(value: string | null): number {
 }
 
 function firstConfiguredRoute(config: GatewayConfig, env: Env, pluginId: string): ProviderRouteConfig | undefined {
-  for (const model of config.models) {
-    for (const route of model.routes) {
-      if (route.plugin_id === pluginId && route.status !== "disabled" && isRouteCredentialConfigured(env, route)) {
-        return route;
-      }
+  for (const route of listProviderRoutes(config)) {
+    if (route.plugin_id === pluginId && route.status !== "disabled" && isRouteCredentialConfigured(env, route)) {
+      return route;
     }
   }
 
@@ -1552,11 +1631,16 @@ const ADMIN_APP_HTML = `<!doctype html>
               <label>模型别名<input id="model-alias" placeholder="gpt-4o-mini"></label>
               <label>模态<select id="model-modality"><option value="text">text</option><option value="image">image</option><option value="video">video</option><option value="file">file</option></select></label>
               <label>模型状态<select id="model-status"><option value="active">active</option><option value="hidden">hidden</option><option value="disabled">disabled</option></select></label>
+              <label>上游 ID<input id="upstream-id" value="openai-compatible-default"></label>
+              <label>上游名称<input id="upstream-name" value="OpenAI Compatible Default"></label>
+              <label>协议类型<input id="upstream-protocol" value="openai-compatible"></label>
               <label>Provider Plugin<input id="route-plugin" value="openai-compatible"></label>
+              <label>供应商标识<input id="upstream-provider" value="openai-compatible"></label>
+              <label>上游 Base URL<input id="upstream-base-url" value="https://api.openai.com/v1"></label>
+              <label>上游凭证引用<input id="upstream-credential" value="env:OPENAI_COMPATIBLE_API_KEY"></label>
+              <label>上游状态<select id="upstream-status"><option value="active">active</option><option value="degraded">degraded</option><option value="disabled">disabled</option></select></label>
               <label>上游模型<input id="route-provider-model" placeholder="gpt-4o-mini"></label>
-              <label>凭证引用<input id="route-credential" value="env:OPENAI_COMPATIBLE_API_KEY"></label>
               <label>优先级<input id="route-priority" type="number" value="1"></label>
-              <label>路由状态<select id="route-status"><option value="active">active</option><option value="disabled">disabled</option></select></label>
               <label>流式<select id="model-stream"><option value="true">支持</option><option value="false">不支持</option></select></label>
             </div>
             <div class="actions" style="margin-top: 12px;"><button id="save-model-form" type="button">保存模型</button><button id="reset-models" class="danger" type="button">重置模型配置</button></div>
@@ -1715,7 +1799,7 @@ const ADMIN_APP_HTML = `<!doctype html>
       function renderModels() {
         var body = document.getElementById('models-table');
         body.innerHTML = state.models.length ? state.models.map(function (model) {
-          var routes = (model.routes || []).map(function (route) { return '<span class="pill">' + esc(route.plugin_id + ' / ' + route.provider_model) + '</span><span class="pill ' + (route.credential_configured ? 'ok' : 'danger') + '">' + (route.credential_configured ? '凭证已配置' : '缺少凭证') + '</span>'; }).join('<br>');
+          var routes = (model.routes || []).map(function (route) { return '<span class="pill">' + esc(route.upstream_id + ' / ' + route.provider_model) + '</span><span class="pill">' + esc(route.protocol_type) + '</span><span class="pill ' + (route.credential_configured ? 'ok' : 'danger') + '">' + (route.credential_configured ? '上游凭证已配置' : '上游缺少凭证') + '</span>'; }).join('<br>');
           return '<tr><td><code>' + esc(model.alias) + '</code></td><td>' + esc(model.modality) + '</td><td><span class="pill ' + statusClass(model.status) + '">' + esc(model.status) + '</span></td><td>' + routes + '</td><td><div class="actions"><button class="secondary compact" data-model-edit="' + esc(model.alias) + '">编辑</button><button class="danger compact" data-model-delete="' + esc(model.alias) + '">删除</button></div></td></tr>';
         }).join('') : '<tr><td colspan="5" class="empty">暂无模型。</td></tr>';
         if (state.models[0] && !document.getElementById('model-json').value.trim()) fillModelEditor(state.models[0].alias);
@@ -1754,7 +1838,7 @@ const ADMIN_APP_HTML = `<!doctype html>
       }
 
       async function saveModelFromForm() {
-        var model = { alias: value('model-alias'), modality: value('model-modality'), supports_stream: value('model-stream') === 'true', status: value('model-status'), routes: [{ plugin_id: value('route-plugin'), provider_model: value('route-provider-model'), credential_id: value('route-credential'), priority: Number(value('route-priority') || 1), weight: 100, status: value('route-status') }] };
+        var model = { upstream_id: value('upstream-id'), upstream: { id: value('upstream-id'), name: value('upstream-name'), protocol_type: value('upstream-protocol'), plugin_id: value('route-plugin'), provider: value('upstream-provider'), base_url: value('upstream-base-url'), credential_id: value('upstream-credential'), status: value('upstream-status') }, alias: value('model-alias'), provider_model: value('route-provider-model'), modality: value('model-modality'), supports_stream: value('model-stream') === 'true', status: value('model-status'), priority: Number(value('route-priority') || 1), weight: 100 };
         await saveModel(model);
       }
       async function saveModelFromJson() { await saveModel(JSON.parse(document.getElementById('model-json').value)); }
@@ -1789,8 +1873,8 @@ const ADMIN_APP_HTML = `<!doctype html>
       async function handleKeyAction(event) { var button = event.target.closest('[data-key-toggle]'); if (!button) return; var key = state.apiKeys.find(function (item) { return item.id === button.getAttribute('data-key-toggle'); }); if (!key) return; await api('/admin/api/api-keys/' + encodeURIComponent(key.id), { method: 'PATCH', body: JSON.stringify({ status: key.status === 'active' ? 'disabled' : 'active' }) }); await loadAll(); }
       async function handleTaskAction(event) { var view = event.target.closest('[data-task-view]'); var cancel = event.target.closest('[data-task-cancel]'); if (view) { var detail = await api('/admin/api/tasks/' + encodeURIComponent(view.getAttribute('data-task-view'))); document.getElementById('task-detail').textContent = JSON.stringify(detail.task, null, 2); } if (cancel && confirm('确定取消任务？')) { await api('/admin/api/tasks/' + encodeURIComponent(cancel.getAttribute('data-task-cancel')) + '/cancel', { method: 'POST' }); await loadTasks(); } }
 
-      function fillModelEditor(alias) { var model = state.models.find(function (item) { return item.alias === alias; }); if (!model) return; document.getElementById('model-json').value = JSON.stringify(toModelInput(model), null, 2); document.getElementById('model-alias').value = model.alias; document.getElementById('model-modality').value = model.modality; document.getElementById('model-status').value = model.status; document.getElementById('model-stream').value = String(model.supports_stream !== false); if (model.routes && model.routes[0]) { document.getElementById('route-plugin').value = model.routes[0].plugin_id || ''; document.getElementById('route-provider-model').value = model.routes[0].provider_model || ''; document.getElementById('route-credential').value = model.routes[0].credential_id || ''; document.getElementById('route-priority').value = model.routes[0].priority || 1; document.getElementById('route-status').value = model.routes[0].status || 'active'; } }
-      function toModelInput(model) { return { alias: model.alias, modality: model.modality, supports_stream: model.supports_stream, status: model.status, routes: (model.routes || []).map(function (route) { return { plugin_id: route.plugin_id, provider: route.provider, provider_model: route.provider_model, credential_id: route.credential_id, priority: route.priority, weight: route.weight, status: route.status }; }) }; }
+      function fillModelEditor(alias) { var model = state.models.find(function (item) { return item.alias === alias; }); if (!model) return; var route = model.routes && model.routes[0] ? model.routes[0] : {}; document.getElementById('model-json').value = JSON.stringify(toModelInput(model), null, 2); document.getElementById('model-alias').value = model.alias; document.getElementById('model-modality').value = model.modality; document.getElementById('model-status').value = model.status; document.getElementById('model-stream').value = String(model.supports_stream !== false); document.getElementById('upstream-id').value = route.upstream_id || 'openai-compatible-default'; document.getElementById('upstream-name').value = route.upstream_name || route.upstream_id || 'OpenAI Compatible Default'; document.getElementById('upstream-protocol').value = route.protocol_type || 'openai-compatible'; document.getElementById('route-plugin').value = route.plugin_id || 'openai-compatible'; document.getElementById('upstream-provider').value = route.provider || ''; document.getElementById('upstream-base-url').value = route.base_url || ''; document.getElementById('upstream-credential').value = route.credential_id || ''; document.getElementById('upstream-status').value = 'active'; document.getElementById('route-provider-model').value = route.provider_model || ''; document.getElementById('route-priority').value = route.priority || 1; }
+      function toModelInput(model) { var route = model.routes && model.routes[0] ? model.routes[0] : {}; return { upstream_id: route.upstream_id, upstream: { id: route.upstream_id, name: route.upstream_name, protocol_type: route.protocol_type, plugin_id: route.plugin_id, provider: route.provider, base_url: route.base_url, credential_id: route.credential_id, status: 'active' }, alias: model.alias, provider_model: route.provider_model, modality: model.modality, supports_stream: model.supports_stream, status: model.status, priority: route.priority, weight: route.weight }; }
       function showSection(section) { section = titles[section] ? section : 'dashboard'; document.querySelectorAll('.section').forEach(function (el) { el.classList.toggle('active', el.id === section); }); document.querySelectorAll('.nav a').forEach(function (el) { el.classList.toggle('active', el.getAttribute('data-section') === section); }); document.getElementById('page-title').textContent = titles[section]; }
       function toggleTheme() { var next = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark'; document.documentElement.setAttribute('data-theme', next); localStorage.setItem('teaven_admin_theme', next); document.getElementById('theme-toggle').textContent = next === 'dark' ? '切换浅色' : '切换深色'; }
       function stat(label, value) { return '<div class="stat"><strong>' + esc(value == null ? 0 : value) + '</strong><span>' + esc(label) + '</span></div>'; }
@@ -2359,7 +2443,7 @@ const ADMIN_HTML = `<!doctype html>
       <div class="card span-12">
         <h2>MODEL_CONFIG_JSON 校验器</h2>
         <p class="subtitle">在部署为 MODEL_CONFIG_JSON 之前，先粘贴 GatewayConfig JSON 对象进行校验。</p>
-        <textarea id="config-json" spellcheck="false" placeholder='{"models":[{"alias":"gpt-4o-mini","modality":"text","supports_stream":true,"status":"active","routes":[{"plugin_id":"openai-compatible","provider_model":"gpt-4o-mini","credential_id":"env:OPENAI_COMPATIBLE_API_KEY","priority":1,"weight":100,"status":"active"}]}]}'></textarea>
+        <textarea id="config-json" spellcheck="false" placeholder='{"upstreams":[{"id":"openai-compatible-default","name":"OpenAI Compatible Default","protocol_type":"openai-compatible","plugin_id":"openai-compatible","base_url":"https://api.openai.com/v1","credential_id":"env:OPENAI_COMPATIBLE_API_KEY","status":"active","models":[{"alias":"gpt-4o-mini","provider_model":"gpt-4o-mini","modality":"text","supports_stream":true,"priority":1,"weight":100,"status":"active"}]}]}'></textarea>
         <div class="toolbar" style="margin-top: 12px; justify-content: flex-start;">
           <button id="load-current-config" class="secondary" type="button">填入当前配置</button>
           <button id="validate-config" type="button">校验配置</button>
@@ -2630,7 +2714,7 @@ const ADMIN_HTML = `<!doctype html>
 
       function renderModelRow(model) {
         var routes = model.routes.map(function (route) {
-          return '<span class="pill">' + escapeHtml(route.plugin_id + ' / ' + route.provider_model) + '</span>' +
+          return '<span class="pill">' + escapeHtml((route.upstream_id || route.plugin_id) + ' / ' + route.provider_model) + '</span>' +
             (route.selected ? '<span class="pill ok">当前路由</span>' : '') +
             '<span class="pill ' + (route.credential_configured ? 'ok' : 'danger') + '">' + (route.credential_configured ? '凭证已配置' : '缺少凭证') + '</span>' +
             '<span class="pill">优先级 ' + escapeHtml(route.priority === null ? '无' : route.priority) + '</span>' +
@@ -2653,7 +2737,7 @@ const ADMIN_HTML = `<!doctype html>
         }).join('');
         var routes = provider.routes && provider.routes.length
           ? provider.routes.map(function (route) {
-              return '<div class="status"><code>' + escapeHtml(route.model_alias) + '</code> -> ' + escapeHtml(route.provider_model) + ' <span class="pill ' + (route.credential_configured ? 'ok' : 'danger') + '">' + (route.credential_configured ? '凭证已配置' : '缺少凭证') + '</span></div>';
+              return '<div class="status"><code>' + escapeHtml(route.model_alias) + '</code> @ ' + escapeHtml(route.upstream_id || '') + ' -> ' + escapeHtml(route.provider_model) + ' <span class="pill ' + (route.credential_configured ? 'ok' : 'danger') + '">' + (route.credential_configured ? '凭证已配置' : '缺少凭证') + '</span></div>';
             }).join('')
           : '<div class="status">当前没有模型路由使用该 Provider。</div>';
 

@@ -1,6 +1,6 @@
 # 配置说明
 
-本文档说明项目当前识别的环境变量、Cloudflare 绑定、当前 MVP 的模型路由格式，以及后续应采用的“协议 -> 上游 -> 模型”配置分层。
+本文档说明项目当前识别的环境变量、Cloudflare 绑定，以及当前采用的“协议 -> 上游 -> 模型”配置分层。
 
 ## 配置文件
 
@@ -34,11 +34,11 @@ OPENAI_COMPATIBLE_API_KEY=sk-replace-me
 | `OPENAI_COMPATIBLE_API_KEY` | 当前 MVP 默认 OpenAI 兼容上游的 API Key。 | 调用默认聊天补全必需 | 无 |
 | `OPENAI_COMPATIBLE_BASE_URL` | OpenAI 兼容上游的 API Base URL。请求会发到 `${BASE_URL}/chat/completions`。 | 可选 | `https://api.openai.com/v1` |
 | `OPENAI_COMPATIBLE_DEFAULT_MODEL` | 未配置 `MODEL_CONFIG_JSON` 时生成默认模型别名和上游模型名。 | 可选 | `gpt-4o-mini` |
-| `MODEL_CONFIG_JSON` | 覆盖默认模型列表和当前扁平 Provider 路由。 | 可选 | 自动生成一个默认模型 |
+| `MODEL_CONFIG_JSON` | 覆盖默认上游实例和上游模型配置。 | 可选 | 自动生成一个默认上游和默认模型 |
 
 ## 配置分层
 
-目标配置顺序应该是先配置协议和上游，再在上游下添加模型：
+配置顺序应该是先配置协议和上游，再在上游下添加模型：
 
 1. 选择协议类型和 Provider Plugin，例如 OpenAI 兼容格式、异步轮询任务协议、异步 webhook 任务协议或私有协议插件。
 2. 配置上游实例，把协议类型、endpoint、区域、凭证和健康检查状态绑定到一个稳定的上游 ID。
@@ -52,7 +52,7 @@ OPENAI_COMPATIBLE_API_KEY=sk-replace-me
 | 上游实例 | 协议类型、插件、base URL、凭证引用、区域、协议参数、状态。 | `openai-main`、`siliconflow-cn` | 否 |
 | 上游模型 | 对外模型名、上游真实模型名、能力、优先级和权重，不含密钥和域名。 | `fast-chat` -> `Qwen/Qwen2.5-72B-Instruct` | 别名可见 |
 
-目标配置示例：
+配置示例：
 
 ```json
 {
@@ -124,38 +124,40 @@ OPENAI_COMPATIBLE_API_KEY=sk-replace-me
 }
 ```
 
-当前代码里的 `GatewayConfig` 还没有独立的 `upstreams` 数组，`routes[]` 暂时把 `plugin_id`、`provider`、`credential_id` 和 `provider_model` 写在一起。实施上游实例层时，应把 `upstreams[].models[]` 归一化为运行时可查询的模型路由；如果没有已发布配置，可以直接切换到上面的目标结构，如果已有 KV 或 `MODEL_CONFIG_JSON` 持久化配置，则需要明确一次迁移策略。
+当前代码使用 `GatewayConfig.upstreams[]` 作为配置入口。运行时会把 `upstreams[].models[]` 归一化为可查询的模型路由，用于 `/v1/models`、聊天补全转发、后台健康检查和用量记录。
 
 ## OpenAI 兼容配置
 
 `openai-compatible` 是当前内置的 Provider Plugin，用来代理所有兼容 OpenAI `chat/completions` 协议的上游。
 
-当前 MVP 请求流程如下：
+请求流程如下：
 
 1. 用户请求 `POST /v1/chat/completions`，请求体里的 `model` 是平台模型别名。
-2. 网关读取 `MODEL_CONFIG_JSON`。如果没有配置，则用 `OPENAI_COMPATIBLE_DEFAULT_MODEL` 自动生成一个默认模型。
-3. 网关按模型别名找到路由，选择优先级最小的 active route。
-4. 网关读取 route 的 `credential_id`，默认是 `env:OPENAI_COMPATIBLE_API_KEY`。
-5. 网关把请求转发到 `OPENAI_COMPATIBLE_BASE_URL + /chat/completions`，并把请求体里的 `model` 改成 route 的 `provider_model`。
-
-目标结构中，第 4 步应改为找到承载该模型别名的上游模型条目，再从所属上游实例读取 `protocol_type`、`plugin_id`、`base_url`、`credential_id` 和协议参数。模型条目不再直接保存 endpoint 和凭证。
+2. 网关读取 `MODEL_CONFIG_JSON`。如果没有配置，则用 `OPENAI_COMPATIBLE_DEFAULT_MODEL` 自动生成一个默认上游和默认模型。
+3. 网关在 `upstreams[].models[]` 中按模型别名找到上游模型条目，选择优先级最小的 active 条目。
+4. 网关从所属上游实例读取 `protocol_type`、`plugin_id`、`base_url`、`credential_id` 和协议参数。
+5. 网关把请求转发到上游 `base_url + /chat/completions`，并把请求体里的 `model` 改成上游模型条目的 `provider_model`。
 
 默认情况下，不配置 `MODEL_CONFIG_JSON` 时等价于下面这份配置：
 
 ```json
 {
-  "models": [
+  "upstreams": [
     {
-      "alias": "gpt-4o-mini",
-      "modality": "text",
-      "supports_stream": true,
+      "id": "openai-compatible-default",
+      "name": "OpenAI Compatible Default",
+      "protocol_type": "openai-compatible",
+      "plugin_id": "openai-compatible",
+      "provider": "openai-compatible",
+      "base_url": "https://api.openai.com/v1",
+      "credential_id": "env:OPENAI_COMPATIBLE_API_KEY",
       "status": "active",
-      "routes": [
+      "models": [
         {
-          "plugin_id": "openai-compatible",
-          "provider": "openai-compatible",
+          "alias": "gpt-4o-mini",
           "provider_model": "gpt-4o-mini",
-          "credential_id": "env:OPENAI_COMPATIBLE_API_KEY",
+          "modality": "text",
+          "supports_stream": true,
           "priority": 1,
           "weight": 100,
           "status": "active"
@@ -183,30 +185,14 @@ OPENAI_COMPATIBLE_DEFAULT_MODEL = "gpt-4o-mini"
 | 只接 OpenAI 官方接口 | 只配置 `OPENAI_COMPATIBLE_API_KEY` 即可。 |
 | 改默认模型 | 设置 `OPENAI_COMPATIBLE_DEFAULT_MODEL`，例如 `gpt-4.1-mini`。 |
 | 接其他 OpenAI 兼容服务 | 设置 `OPENAI_COMPATIBLE_BASE_URL`、`OPENAI_COMPATIBLE_DEFAULT_MODEL` 和对应 API Key。 |
-| 暴露多个模型别名 | 当前 MVP 配置 `MODEL_CONFIG_JSON`；目标结构是在对应上游的 `models[]` 下添加模型条目。 |
+| 暴露多个模型别名 | 配置 `MODEL_CONFIG_JSON`，在对应上游的 `models[]` 下添加模型条目。 |
 | 不想在本地传 Bearer Token | 设置 `AUTH_MODE=none`。不要在线上使用。 |
 
 ## MODEL_CONFIG_JSON
 
-`MODEL_CONFIG_JSON` 当前用于替代自动生成的默认模型配置。它适合配置多个模型别名、多个路由或不同上游模型名。
+`MODEL_CONFIG_JSON` 当前用于替代自动生成的默认上游和模型配置。它适合配置多个协议类型、多个上游、多个模型别名或不同上游模型名。
 
-当前 MVP 扁平格式字段含义：
-
-| 字段 | 位置 | 含义 |
-| --- | --- | --- |
-| `models` | 根对象 | 模型数组，必填。 |
-| `alias` | model | 对用户暴露的模型名，也是 `/v1/models` 返回的 `id`。 |
-| `modality` | model | 模型类型，当前文本聊天接口要求为 `text`。 |
-| `supports_stream` | model | 是否允许 `stream: true`。设置为 `false` 会拒绝流式请求。 |
-| `status` | model/route | `disabled` 会禁用模型或路由。未设置视为 active。 |
-| `routes` | model | Provider 路由数组，必填。 |
-| `plugin_id` | route | Provider Plugin ID，当前内置 `openai-compatible`。 |
-| `provider_model` | route | 上游真实模型名。转发请求时会替换到上游 `model` 字段。 |
-| `credential_id` | route | 上游凭证位置。`env:OPENAI_COMPATIBLE_API_KEY` 表示读取同名环境变量。 |
-| `priority` | route | 路由优先级，数字越小越优先。当前 MVP 只选择优先级最小的路由。 |
-| `weight` | route | 预留给加权路由。当前 MVP 尚未按权重分流。 |
-
-目标结构增加以下字段：
+字段含义：
 
 | 字段 | 位置 | 含义 |
 | --- | --- | --- |
@@ -225,23 +211,29 @@ OPENAI_COMPATIBLE_DEFAULT_MODEL = "gpt-4o-mini"
 | `supports_stream` | upstream model | 是否允许 `stream: true`。 |
 | `priority` | upstream model | 同一别名跨多个上游时的优先级。 |
 | `weight` | upstream model | 同一优先级下的权重。 |
+| `status` | upstream/upstream model | `disabled` 会禁用上游或模型条目。未设置视为 active。 |
 
-当前 MVP 扁平格式示例：对外暴露 `fast-chat`，实际调用上游 `gpt-4o-mini`：
+示例：对外暴露 `fast-chat`，实际调用上游 `gpt-4o-mini`：
 
 ```json
 {
-  "models": [
+  "upstreams": [
     {
-      "alias": "fast-chat",
-      "modality": "text",
-      "supports_stream": true,
+      "id": "openai-main",
+      "name": "OpenAI official",
+      "protocol_type": "openai-compatible",
+      "plugin_id": "openai-compatible",
+      "base_url": "https://api.openai.com/v1",
+      "credential_id": "env:OPENAI_COMPATIBLE_API_KEY",
       "status": "active",
-      "routes": [
+      "models": [
         {
-          "plugin_id": "openai-compatible",
+          "alias": "fast-chat",
           "provider_model": "gpt-4o-mini",
-          "credential_id": "env:OPENAI_COMPATIBLE_API_KEY",
+          "modality": "text",
+          "supports_stream": true,
           "priority": 1,
+          "weight": 100,
           "status": "active"
         }
       ]

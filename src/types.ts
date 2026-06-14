@@ -24,26 +24,60 @@ export interface AuthContext {
 
 export type Modality = "text" | "image" | "video" | "file";
 
+export type UpstreamStatus = "active" | "disabled" | "degraded";
+export type ModelStatus = "active" | "hidden" | "disabled";
+export type UpstreamModelStatus = "active" | "hidden" | "disabled";
+
+export interface UpstreamModelConfig {
+  alias: string;
+  provider_model: string;
+  modality: Modality;
+  supports_stream?: boolean;
+  priority?: number;
+  weight?: number;
+  status?: UpstreamModelStatus;
+}
+
+export interface UpstreamConfig {
+  id: string;
+  name?: string;
+  protocol_type: string;
+  plugin_id: string;
+  provider?: string;
+  base_url?: string;
+  credential_id?: string;
+  config?: Record<string, unknown>;
+  status?: UpstreamStatus;
+  models: UpstreamModelConfig[];
+}
+
 export interface ProviderRouteConfig {
+  upstream_id: string;
+  upstream_name?: string;
+  protocol_type: string;
   plugin_id: string;
   provider?: string;
   provider_model: string;
   credential_id?: string;
+  base_url?: string;
+  config?: Record<string, unknown>;
+  modality: Modality;
+  supports_stream?: boolean;
   priority?: number;
   weight?: number;
-  status?: "active" | "disabled";
+  status?: UpstreamModelStatus;
 }
 
 export interface ModelConfig {
   alias: string;
   modality: Modality;
   supports_stream?: boolean;
-  status?: "active" | "hidden" | "disabled";
+  status?: ModelStatus;
   routes: ProviderRouteConfig[];
 }
 
 export interface GatewayConfig {
-  models: ModelConfig[];
+  upstreams: UpstreamConfig[];
 }
 
 export interface ChatCompletionRequest {
@@ -77,6 +111,7 @@ export interface AsyncTaskRecord {
   api_key_id: string;
   type: string;
   model: string;
+  upstream_id?: string;
   plugin_id?: string;
   provider?: string;
   provider_execution_mode?: string;

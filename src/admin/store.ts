@@ -54,6 +54,7 @@ export interface UsageRecord {
   api_key_id: string;
   endpoint: string;
   model: string;
+  upstream_id?: string;
   plugin_id?: string;
   provider?: string;
   provider_model?: string;
@@ -247,6 +248,7 @@ export async function recordChatUsage(
     api_key_id: input.api_key_id,
     endpoint: input.endpoint,
     model: input.model,
+    upstream_id: input.route?.upstream_id,
     plugin_id: input.route?.plugin_id,
     provider: input.route?.provider,
     provider_model: input.route?.provider_model,
@@ -272,6 +274,7 @@ export async function recordTaskUsage(env: Env, task: AsyncTaskRecord, statusCod
     api_key_id: task.api_key_id,
     endpoint: "/v1/tasks",
     model: task.model,
+    upstream_id: task.upstream_id,
     plugin_id: task.plugin_id,
     provider: task.provider,
     provider_model: task.provider_task_id,

@@ -30,7 +30,10 @@ export function createProviderRegistry(env: Env): ProviderRegistry {
 }
 
 export function resolveProviderCredential(env: Env, route: ProviderRouteConfig): ProviderCredential {
-  const credentialId = route.credential_id || "env:OPENAI_COMPATIBLE_API_KEY";
+  const credentialId = route.credential_id;
+  if (!credentialId) {
+    throw providerUnavailable(`Provider credential is not configured for upstream: ${route.upstream_id}`);
+  }
   const secretName = credentialId.startsWith("env:") ? credentialId.slice(4) : credentialId;
   const apiKey = getEnvString(env, secretName);
 
@@ -42,7 +45,8 @@ export function resolveProviderCredential(env: Env, route: ProviderRouteConfig):
     id: credentialId,
     plugin_id: route.plugin_id,
     api_key: apiKey,
-    base_url: env.OPENAI_COMPATIBLE_BASE_URL
+    base_url: route.base_url,
+    config: route.config
   };
 }
 
