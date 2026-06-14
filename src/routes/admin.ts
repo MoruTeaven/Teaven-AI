@@ -1795,7 +1795,7 @@ const ADMIN_APP_HTML = `<!doctype html>
       function toggleTheme() { var next = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark'; document.documentElement.setAttribute('data-theme', next); localStorage.setItem('teaven_admin_theme', next); document.getElementById('theme-toggle').textContent = next === 'dark' ? '切换浅色' : '切换深色'; }
       function stat(label, value) { return '<div class="stat"><strong>' + esc(value == null ? 0 : value) + '</strong><span>' + esc(label) + '</span></div>'; }
       function meta(label, value) { return '<div><span class="pill">' + esc(label) + '</span><strong>' + esc(value == null ? '' : value) + '</strong></div>'; }
-      function renderExample(req) { if (!req) return '暂无示例'; return 'curl -X ' + req.method + ' "' + location.origin + req.endpoint + '"\\n  -H "Authorization: Bearer <DEV_API_KEY>"\\n  -H "Content-Type: application/json"\\n  -d \'' + JSON.stringify(req.body, null, 2) + '\''; }
+      function renderExample(req) { if (!req) return '暂无示例'; return 'curl -X ' + req.method + ' "' + location.origin + req.endpoint + '"\\n  -H "Authorization: Bearer <DEV_API_KEY>"\\n  -H "Content-Type: application/json"\\n  -d \\'' + JSON.stringify(req.body, null, 2) + '\\''; }
       function value(id) { return document.getElementById(id).value.trim(); }
       function yesNo(value) { return value ? '已绑定' : '未绑定'; }
       function statusClass(status) { if (status === 'active' || status === 'succeeded' || status === 'running' || status === 'ok') return 'ok'; if (status === 'queued' || status === 'hidden' || status === 'warning') return 'warn'; if (status === 'disabled' || status === 'failed' || status === 'canceled' || status === 'expired' || status === 'error') return 'danger'; return ''; }

@@ -14,13 +14,13 @@ export default {
 
     try {
       if (request.method === "OPTIONS") {
-        return emptyResponse({ status: 204 });
+        return emptyResponse({ status: 204 }, request);
       }
 
       const response = await routeRequest(request, env, requestId);
-      return withCors(response);
+      return withCors(response, request);
     } catch (error) {
-      return errorResponse(error, requestId);
+      return errorResponse(error, requestId, request);
     }
   }
 };
