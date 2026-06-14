@@ -42,11 +42,6 @@ export interface AdminApiKey {
   last_used_at?: string | null;
 }
 
-export interface CreatedAdminApiKey {
-  api_key: AdminApiKey;
-  token: string;
-}
-
 export interface UsageRecord {
   id: string;
   request_id: string;
@@ -179,32 +174,6 @@ export async function findAdminApiKeyByToken(env: Env, token: string): Promise<A
   }
 
   return apiKey;
-}
-
-export async function createAdminApiKey(
-  env: Env,
-  user: AdminUser,
-  input: Pick<AdminApiKey, "name"> & Partial<Pick<AdminApiKey, "allowed_models" | "expires_at">>
-): Promise<CreatedAdminApiKey> {
-  const token = `tai_${randomToken(32)}`;
-  const now = new Date().toISOString();
-  const apiKey: AdminApiKey = {
-    id: createId("key"),
-    tenant_id: user.tenant_id,
-    user_id: user.id,
-    name: input.name,
-    key_hash: await sha256Base64Url(token),
-    key_prefix: token.slice(0, 12),
-    allowed_models: input.allowed_models,
-    status: "active",
-    expires_at: input.expires_at || null,
-    created_at: now,
-    updated_at: now,
-    last_used_at: null
-  };
-
-  await saveAdminApiKey(env, apiKey);
-  return { api_key: apiKey, token };
 }
 
 export async function saveAdminApiKey(env: Env, apiKey: AdminApiKey): Promise<void> {
@@ -425,12 +394,6 @@ function isUsageRecord(value: unknown): value is UsageRecord {
 async function sha256Base64Url(value: string): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
   return base64UrlEncode(digest);
-}
-
-function randomToken(bytes: number): string {
-  const data = new Uint8Array(bytes);
-  crypto.getRandomValues(data);
-  return base64UrlEncode(data.buffer);
 }
 
 function base64UrlEncode(value: ArrayBuffer): string {

@@ -10,7 +10,6 @@ import { conflict, invalidRequest, notFound } from "../http/errors";
 import { jsonResponse } from "../http/response";
 import {
   type AdminApiKey,
-  createAdminApiKey,
   createAdminUser,
   getAdminApiKey,
   getAdminUser,
@@ -135,11 +134,6 @@ export async function handleAdminRequest(
 
   if (request.method === "POST" && pathname === "/admin/api/users") {
     return handleCreateAdminUser(request, env, requestId);
-  }
-
-  const userApiKeyMatch = pathname.match(/^\/admin\/api\/users\/([^/]+)\/api-keys$/);
-  if (request.method === "POST" && userApiKeyMatch) {
-    return handleCreateAdminUserApiKey(decodeURIComponent(userApiKeyMatch[1]), request, env, requestId);
   }
 
   const userMatch = pathname.match(/^\/admin\/api\/users\/([^/]+)$/);
@@ -292,6 +286,7 @@ async function handleAdminOverview(env: Env, requestId: string): Promise<Respons
       task_stats: taskStats,
       usage_summary: usage,
       warnings: buildWarnings(env, config),
+      upstreams: config.upstreams.map((upstream) => publicUpstream(upstream, config, env)),
       models: models.map((model) => publicModel(model, env)),
       providers: registry.list().map((plugin) => publicProvider(plugin.manifest, config, env)),
       provider_config: {
@@ -515,33 +510,6 @@ async function handleUpdateAdminUser(userId: string, request: Request, env: Env,
       user
     },
     {
-      headers: {
-        "X-Request-Id": requestId
-      }
-    }
-  );
-}
-
-async function handleCreateAdminUserApiKey(userId: string, request: Request, env: Env, requestId: string): Promise<Response> {
-  const user = await getAdminUser(env, userId);
-  if (!user) {
-    throw notFound("用户不存在");
-  }
-
-  const body = await readJsonObject(request);
-  const created = await createAdminApiKey(env, user, {
-    name: requireString(body.name, "name"),
-    allowed_models: normalizeAllowedModels(body.allowed_models),
-    expires_at: optionalBodyString(body.expires_at, "expires_at") || null
-  });
-
-  return jsonResponse(
-    {
-      api_key: publicApiKey(created.api_key),
-      token: created.token
-    },
-    {
-      status: 201,
       headers: {
         "X-Request-Id": requestId
       }
@@ -781,6 +749,35 @@ function publicModel(model: ModelConfig, env: Env): Record<string, unknown> {
       weight: route.weight ?? null,
       status: route.status || "active",
       selected: route === selectedRoute
+    }))
+  };
+}
+
+function publicUpstream(upstream: UpstreamConfig, config: GatewayConfig, env: Env): Record<string, unknown> {
+  const routes = listProviderRoutes(config).filter((route) => route.upstream_id === upstream.id);
+  const activeRoutes = routes.filter((route) => route.status !== "disabled");
+
+  return {
+    id: upstream.id,
+    name: upstream.name || upstream.id,
+    protocol_type: upstream.protocol_type,
+    plugin_id: upstream.plugin_id,
+    provider: upstream.provider || null,
+    base_url: upstream.base_url || null,
+    credential_id: upstream.credential_id || null,
+    credential_configured: isCredentialIdConfigured(env, upstream.credential_id),
+    status: upstream.status || "active",
+    models_total: upstream.models.length,
+    models_active: upstream.models.filter((model) => model.status !== "disabled").length,
+    routes_active: activeRoutes.length,
+    models: upstream.models.map((model) => ({
+      alias: model.alias,
+      provider_model: model.provider_model,
+      modality: model.modality,
+      supports_stream: model.supports_stream !== false,
+      priority: model.priority ?? null,
+      weight: model.weight ?? null,
+      status: model.status || "active"
     }))
   };
 }
@@ -1229,13 +1226,17 @@ function isRouteCredentialConfigured(env: Env | undefined, route: ProviderRouteC
   if (!env) {
     return false;
   }
+  return isCredentialIdConfigured(env, route.credential_id);
+}
 
-  try {
-    resolveProviderCredential(env, route);
-    return true;
-  } catch {
+function isCredentialIdConfigured(env: Env | undefined, credentialId: string | undefined): boolean {
+  if (!env || !credentialId) {
     return false;
   }
+
+  const secretName = credentialId.startsWith("env:") ? credentialId.slice(4) : credentialId;
+  const value = (env as unknown as Record<string, unknown>)[secretName];
+  return typeof value === "string" && value.length > 0;
 }
 
 function isCancelableTask(task: AsyncTaskRecord): boolean {
@@ -1665,17 +1666,7 @@ const ADMIN_APP_HTML = `<!doctype html>
             </div>
             <div class="actions" style="margin-top: 12px;"><button id="create-user" type="button">创建用户</button></div>
           </div>
-          <div class="card span-7"><h3>API Key 列表</h3><div class="table-wrap"><table><thead><tr><th>名称</th><th>前缀</th><th>用户</th><th>模型权限</th><th>状态</th><th>操作</th></tr></thead><tbody id="keys-table"></tbody></table></div></div>
-          <div class="card span-5">
-            <h3>创建 API Key</h3>
-            <div class="form-grid" style="grid-template-columns: 1fr;">
-              <label>用户<select id="key-user"></select></label>
-              <label>名称<input id="key-name" placeholder="生产 Key"></label>
-              <label>允许模型<input id="key-models" placeholder="留空表示全部，或用逗号分隔"></label>
-            </div>
-            <div class="actions" style="margin-top: 12px;"><button id="create-key" type="button">创建 Key</button></div>
-            <pre id="key-output" class="json-view" style="margin-top: 12px;">创建后这里会显示一次性 API Key 明文。</pre>
-          </div>
+          <div class="card span-12"><h3>API Key 列表</h3><p class="subtitle">API Key 由用户中心创建；管理后台只负责查看、启用、禁用和调整模型权限。</p><div class="table-wrap"><table><thead><tr><th>名称</th><th>前缀</th><th>用户</th><th>模型权限</th><th>状态</th><th>操作</th></tr></thead><tbody id="keys-table"></tbody></table></div></div>
         </div>
       </section>
 
@@ -1732,7 +1723,6 @@ const ADMIN_APP_HTML = `<!doctype html>
       document.getElementById('save-model-json').addEventListener('click', saveModelFromJson);
       document.getElementById('reset-models').addEventListener('click', resetModels);
       document.getElementById('create-user').addEventListener('click', createUser);
-      document.getElementById('create-key').addEventListener('click', createApiKey);
       document.getElementById('load-tasks').addEventListener('click', loadTasks);
       document.getElementById('fill-current-config').addEventListener('click', fillCurrentConfig);
       document.getElementById('validate-config').addEventListener('click', validateConfig);
@@ -1812,7 +1802,6 @@ const ADMIN_APP_HTML = `<!doctype html>
         document.getElementById('keys-table').innerHTML = state.apiKeys.length ? state.apiKeys.map(function (key) {
           return '<tr><td>' + esc(key.name) + '</td><td><code>' + esc(key.key_prefix) + '</code></td><td><code>' + esc(key.user_id) + '</code></td><td>' + esc((key.allowed_models || []).join(', ') || '全部') + '</td><td><span class="pill ' + statusClass(key.status) + '">' + esc(key.status) + '</span></td><td><button class="secondary compact" data-key-toggle="' + esc(key.id) + '">' + (key.status === 'active' ? '禁用' : '启用') + '</button></td></tr>';
         }).join('') : '<tr><td colspan="6" class="empty">暂无 API Key。</td></tr>';
-        document.getElementById('key-user').innerHTML = state.users.map(function (user) { return '<option value="' + esc(user.id) + '">' + esc(user.email) + '</option>'; }).join('');
       }
 
       function renderUsage() {
@@ -1849,13 +1838,6 @@ const ADMIN_APP_HTML = `<!doctype html>
         var body = { email: value('user-email'), name: value('user-name'), role: value('user-role') };
         await api('/admin/api/users', { method: 'POST', body: JSON.stringify(body) });
         await loadAll(); setStatus('用户已创建：' + body.email, 'ok');
-      }
-      async function createApiKey() {
-        var userId = value('key-user');
-        var models = value('key-models').split(',').map(function (item) { return item.trim(); }).filter(Boolean);
-        var data = await api('/admin/api/users/' + encodeURIComponent(userId) + '/api-keys', { method: 'POST', body: JSON.stringify({ name: value('key-name'), allowed_models: models.length ? models : undefined }) });
-        document.getElementById('key-output').textContent = JSON.stringify({ token: data.token, api_key: data.api_key }, null, 2);
-        await loadAll(); setStatus('API Key 已创建，明文只展示一次。', 'ok');
       }
       async function loadTasks() {
         var params = new URLSearchParams(); params.set('limit', value('task-limit')); if (value('task-status')) params.set('status', value('task-status')); if (value('task-query')) params.set('q', value('task-query'));
