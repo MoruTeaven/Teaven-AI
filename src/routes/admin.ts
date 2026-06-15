@@ -1617,6 +1617,28 @@ const ADMIN_APP_HTML = `<!doctype html>
     .span-5 { grid-column: span 5; }
     .span-4 { grid-column: span 4; }
     .card h3 { margin: 0 0 12px; font-size: 17px; }
+    .card-head { display: flex; justify-content: space-between; gap: 16px; align-items: flex-start; margin-bottom: 14px; }
+    .card-head h3 { margin-bottom: 6px; }
+    .entity-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; margin-top: 14px; }
+    .entity-card {
+      display: grid;
+      gap: 12px;
+      min-width: 0;
+      padding: 16px;
+      background: var(--panel-strong);
+      border: 1px solid var(--line);
+      border-radius: 18px;
+    }
+    .entity-card:hover { border-color: color-mix(in srgb, var(--accent) 42%, var(--line)); }
+    .entity-card header { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; }
+    .entity-title { min-width: 0; }
+    .entity-title strong { display: block; font-size: 16px; line-height: 1.3; word-break: break-word; }
+    .entity-title code { word-break: break-all; }
+    .entity-meta { display: grid; gap: 8px; }
+    .entity-row { display: grid; grid-template-columns: 88px minmax(0, 1fr); gap: 10px; align-items: start; font-size: 13px; }
+    .entity-row > span:first-child { color: var(--muted); font-size: 12px; font-weight: 900; }
+    .entity-row code { word-break: break-all; }
+    .entity-actions { padding-top: 2px; }
     .section { display: none; }
     .section.active { display: block; }
     .stat-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
@@ -1643,6 +1665,35 @@ const ADMIN_APP_HTML = `<!doctype html>
     .table-wrap { overflow-x: auto; }
     .actions { display: flex; gap: 7px; flex-wrap: wrap; }
     .empty { color: var(--muted); padding: 12px 0; }
+    .modal {
+      position: fixed;
+      inset: 0;
+      z-index: 100;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+    .modal.open { display: flex; }
+    .modal-backdrop { position: absolute; inset: 0; background: rgba(2, 6, 23, 0.72); backdrop-filter: blur(10px); }
+    .modal-card {
+      position: relative;
+      z-index: 1;
+      width: min(860px, 100%);
+      max-height: calc(100vh - 40px);
+      overflow: auto;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 24px;
+      box-shadow: 0 30px 90px rgba(0, 0, 0, 0.42);
+      padding: 20px;
+    }
+    .modal-card.narrow { width: min(560px, 100%); }
+    .modal-head { display: flex; justify-content: space-between; gap: 14px; align-items: flex-start; margin-bottom: 16px; }
+    .modal-head h3 { margin: 4px 0 0; font-size: 22px; }
+    .modal-form { margin-top: 0; }
+    .form-grid.single { grid-template-columns: 1fr; }
+    body.modal-open { overflow: hidden; }
     @media (max-width: 980px) {
       .layout { grid-template-columns: 1fr; }
       .sidebar { position: static; height: auto; }
@@ -1650,6 +1701,11 @@ const ADMIN_APP_HTML = `<!doctype html>
       .topbar { display: grid; }
       .toolbar { justify-content: flex-start; }
       .stat-grid, .form-grid { grid-template-columns: 1fr; }
+      .card-head, .modal-head { display: grid; }
+      .card-head button, .modal-head button { width: 100%; }
+      .entity-row { grid-template-columns: 1fr; gap: 4px; }
+      .modal { padding: 12px; }
+      .modal-card { max-height: calc(100vh - 24px); padding: 16px; }
       .span-4, .span-5, .span-6, .span-7, .span-8, .span-12 { grid-column: span 12; }
     }
   </style>
@@ -1701,21 +1757,14 @@ const ADMIN_APP_HTML = `<!doctype html>
       <section id="upstreams" class="section">
         <div class="grid">
           <div class="card span-12">
-            <h3>上游列表</h3>
-            <p class="subtitle">先配置上游的类型（Provider Plugin）、Base URL 和凭证引用，再到模型管理里把模型添加到上游。</p>
-            <div class="table-wrap"><table><thead><tr><th>名称</th><th>类型</th><th>Base URL</th><th>凭证</th><th>状态</th><th>模型</th><th>操作</th></tr></thead><tbody id="upstreams-table"></tbody></table></div>
-          </div>
-          <div class="card span-12">
-            <h3>创建/更新上游</h3>
-            <div class="form-grid">
-              <input id="upstream-admin-id" type="hidden">
-              <label>上游名称<input id="upstream-admin-name" value="OpenAI Compatible Default"></label>
-              <label>类型<select id="upstream-admin-plugin"></select></label>
-              <label>Base URL<input id="upstream-admin-base-url" value="https://api.openai.com/v1"></label>
-              <label>凭证引用<input id="upstream-admin-credential" value="env:OPENAI_COMPATIBLE_API_KEY"></label>
-              <label>状态<select id="upstream-admin-status"><option value="active">active</option><option value="degraded">degraded</option><option value="disabled">disabled</option></select></label>
+            <div class="card-head">
+              <div>
+                <h3>上游列表</h3>
+                <p class="subtitle">先配置上游的类型、Base URL 和凭证引用，再到模型管理里把模型添加到上游。</p>
+              </div>
+              <button id="open-upstream-modal" type="button">添加上游</button>
             </div>
-            <div class="actions" style="margin-top: 12px;"><button id="save-upstream-form" type="button">保存上游</button><button id="reset-upstream-form" class="secondary" type="button">清空表单</button></div>
+            <div id="upstreams-list" class="entity-grid"></div>
           </div>
         </div>
       </section>
@@ -1728,44 +1777,36 @@ const ADMIN_APP_HTML = `<!doctype html>
             <div id="model-upstreams" class="stack"></div>
           </div>
           <div class="card span-12">
-            <h3>模型列表</h3>
-            <div class="table-wrap"><table><thead><tr><th>别名</th><th>模态</th><th>状态</th><th>路由</th><th>操作</th></tr></thead><tbody id="models-table"></tbody></table></div>
-          </div>
-          <div class="card span-6">
-            <h3>创建/更新模型</h3>
-            <p class="subtitle">模型挂载到已有上游下，继承上游的插件、域名和凭证。如需新上游，请先到<a href="#" onclick="showSection('upstreams'); return false;">上游管理</a>创建。</p>
-            <div class="form-grid">
-              <label>模型别名<input id="model-alias" placeholder="gpt-4o-mini"></label>
-              <label>Provider 模型名<input id="route-provider-model" placeholder="gpt-4o-mini"></label>
-              <label>模态<select id="model-modality"><option value="text">text</option><option value="image">image</option><option value="video">video</option><option value="file">file</option></select></label>
-              <label>模型状态<select id="model-status"><option value="active">active</option><option value="hidden">hidden</option><option value="disabled">disabled</option></select></label>
-              <label>流式<select id="model-stream"><option value="true">支持</option><option value="false">不支持</option></select></label>
-              <label>优先级<input id="route-priority" type="number" value="1"></label>
-              <label>所属上游<select id="model-upstream-select"></select></label>
+            <div class="card-head">
+              <div>
+                <h3>模型列表</h3>
+                <p class="subtitle">模型挂载到已有上游下，继承上游的插件、域名和凭证。</p>
+              </div>
+              <button id="open-model-modal" type="button">添加模型</button>
             </div>
-            <div class="actions" style="margin-top: 12px;"><button id="save-model-form" type="button">保存模型</button><button id="reset-models" class="danger" type="button">重置模型配置</button></div>
+            <div id="models-list" class="entity-grid"></div>
           </div>
-          <div class="card span-6">
+          <div class="card span-12">
             <h3>模型 JSON 编辑器</h3>
             <textarea id="model-json" spellcheck="false"></textarea>
-            <div class="actions" style="margin-top: 12px;"><button id="save-model-json" type="button">保存 JSON 模型</button></div>
+            <div class="actions" style="margin-top: 12px;"><button id="save-model-json" type="button">保存 JSON 模型</button><button id="reset-models" class="danger" type="button">重置模型配置</button></div>
           </div>
         </div>
       </section>
 
       <section id="users" class="section">
         <div class="grid">
-          <div class="card span-7"><h3>用户列表</h3><div class="table-wrap"><table><thead><tr><th>邮箱</th><th>角色</th><th>状态</th><th>租户</th><th>操作</th></tr></thead><tbody id="users-table"></tbody></table></div></div>
-          <div class="card span-5">
-            <h3>创建用户</h3>
-            <div class="form-grid" style="grid-template-columns: 1fr;">
-              <label>邮箱<input id="user-email" placeholder="admin@example.com"></label>
-              <label>名称<input id="user-name" placeholder="管理员"></label>
-              <label>角色<select id="user-role"><option value="owner">owner</option><option value="admin">admin</option><option value="member" selected>member</option></select></label>
+          <div class="card span-12">
+            <div class="card-head">
+              <div>
+                <h3>用户列表</h3>
+                <p class="subtitle">以卡片方式管理后台用户，可快速启用或禁用账号。</p>
+              </div>
+              <button id="open-user-modal" type="button">添加用户</button>
             </div>
-            <div class="actions" style="margin-top: 12px;"><button id="create-user" type="button">创建用户</button></div>
+            <div id="users-list" class="entity-grid"></div>
           </div>
-          <div class="card span-12"><h3>API Key 列表</h3><p class="subtitle">API Key 由用户中心创建；管理后台只负责查看、启用、禁用和调整模型权限。</p><div class="table-wrap"><table><thead><tr><th>名称</th><th>前缀</th><th>用户</th><th>模型权限</th><th>状态</th><th>操作</th></tr></thead><tbody id="keys-table"></tbody></table></div></div>
+          <div class="card span-12"><h3>API Key 列表</h3><p class="subtitle">API Key 由用户中心创建；管理后台只负责查看、启用、禁用和调整模型权限。</p><div id="keys-list" class="entity-grid"></div></div>
         </div>
       </section>
 
@@ -1801,6 +1842,68 @@ const ADMIN_APP_HTML = `<!doctype html>
         </div>
       </section>
     </main>
+    <div id="upstream-modal" class="modal" aria-hidden="true">
+      <div class="modal-backdrop" data-modal-close></div>
+      <section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="upstream-modal-title">
+        <div class="modal-head">
+          <div>
+            <div class="eyebrow">Upstream</div>
+            <h3 id="upstream-modal-title">添加上游</h3>
+          </div>
+          <button class="secondary compact" type="button" data-modal-close>关闭</button>
+        </div>
+        <div class="form-grid modal-form">
+          <input id="upstream-admin-id" type="hidden">
+          <label>上游名称<input id="upstream-admin-name" value="OpenAI Compatible Default"></label>
+          <label>类型<select id="upstream-admin-plugin"></select></label>
+          <label>Base URL<input id="upstream-admin-base-url" value="https://api.openai.com/v1"></label>
+          <label>凭证引用<input id="upstream-admin-credential" value="env:OPENAI_COMPATIBLE_API_KEY"></label>
+          <label>状态<select id="upstream-admin-status"><option value="active">active</option><option value="degraded">degraded</option><option value="disabled">disabled</option></select></label>
+        </div>
+        <div class="actions" style="margin-top: 14px;"><button id="save-upstream-form" type="button">保存上游</button><button id="reset-upstream-form" class="secondary" type="button">清空表单</button></div>
+      </section>
+    </div>
+    <div id="model-modal" class="modal" aria-hidden="true">
+      <div class="modal-backdrop" data-modal-close></div>
+      <section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="model-modal-title">
+        <div class="modal-head">
+          <div>
+            <div class="eyebrow">Model</div>
+            <h3 id="model-modal-title">添加模型</h3>
+            <p class="subtitle">如需新上游，请先到上游管理创建。</p>
+          </div>
+          <button class="secondary compact" type="button" data-modal-close>关闭</button>
+        </div>
+        <div class="form-grid modal-form">
+          <label>模型别名<input id="model-alias" placeholder="gpt-4o-mini"></label>
+          <label>Provider 模型名<input id="route-provider-model" placeholder="gpt-4o-mini"></label>
+          <label>模态<select id="model-modality"><option value="text">text</option><option value="image">image</option><option value="video">video</option><option value="file">file</option></select></label>
+          <label>模型状态<select id="model-status"><option value="active">active</option><option value="hidden">hidden</option><option value="disabled">disabled</option></select></label>
+          <label>流式<select id="model-stream"><option value="true">支持</option><option value="false">不支持</option></select></label>
+          <label>优先级<input id="route-priority" type="number" value="1"></label>
+          <label>所属上游<select id="model-upstream-select"></select></label>
+        </div>
+        <div class="actions" style="margin-top: 14px;"><button id="save-model-form" type="button">保存模型</button></div>
+      </section>
+    </div>
+    <div id="user-modal" class="modal" aria-hidden="true">
+      <div class="modal-backdrop" data-modal-close></div>
+      <section class="modal-card narrow" role="dialog" aria-modal="true" aria-labelledby="user-modal-title">
+        <div class="modal-head">
+          <div>
+            <div class="eyebrow">User</div>
+            <h3 id="user-modal-title">添加用户</h3>
+          </div>
+          <button class="secondary compact" type="button" data-modal-close>关闭</button>
+        </div>
+        <div class="form-grid single modal-form">
+          <label>邮箱<input id="user-email" placeholder="admin@example.com"></label>
+          <label>名称<input id="user-name" placeholder="管理员"></label>
+          <label>角色<select id="user-role"><option value="owner">owner</option><option value="admin">admin</option><option value="member" selected>member</option></select></label>
+        </div>
+        <div class="actions" style="margin-top: 14px;"><button id="create-user" type="button">创建用户</button></div>
+      </section>
+    </div>
   </div>
   <script>
     (function () {
@@ -1816,8 +1919,18 @@ const ADMIN_APP_HTML = `<!doctype html>
         if (!link) return;
         showSection(link.getAttribute('data-section'));
       });
+      document.querySelectorAll('[data-modal-close]').forEach(function (button) {
+        button.addEventListener('click', function (event) {
+          var modal = event.target.closest('.modal');
+          if (modal) closeModal(modal.id);
+        });
+      });
+      document.addEventListener('keydown', function (event) { if (event.key === 'Escape') closeModal(); });
       document.getElementById('theme-toggle').addEventListener('click', toggleTheme);
       document.getElementById('refresh').addEventListener('click', loadAll);
+      document.getElementById('open-upstream-modal').addEventListener('click', function () { resetUpstreamForm(); openModal('upstream-modal', 'upstream-modal-title', '添加上游'); });
+      document.getElementById('open-model-modal').addEventListener('click', function () { resetModelForm(); openModal('model-modal', 'model-modal-title', '添加模型'); });
+      document.getElementById('open-user-modal').addEventListener('click', function () { resetUserForm(); openModal('user-modal', 'user-modal-title', '添加用户'); });
       document.getElementById('save-model-form').addEventListener('click', saveModelFromForm);
       document.getElementById('save-model-json').addEventListener('click', saveModelFromJson);
       document.getElementById('reset-models').addEventListener('click', resetModels);
@@ -1827,10 +1940,10 @@ const ADMIN_APP_HTML = `<!doctype html>
       document.getElementById('load-tasks').addEventListener('click', loadTasks);
       document.getElementById('fill-current-config').addEventListener('click', fillCurrentConfig);
       document.getElementById('validate-config').addEventListener('click', validateConfig);
-      document.getElementById('models-table').addEventListener('click', handleModelAction);
-      document.getElementById('upstreams-table').addEventListener('click', handleUpstreamAction);
-      document.getElementById('users-table').addEventListener('click', handleUserAction);
-      document.getElementById('keys-table').addEventListener('click', handleKeyAction);
+      document.getElementById('models-list').addEventListener('click', handleModelAction);
+      document.getElementById('upstreams-list').addEventListener('click', handleUpstreamAction);
+      document.getElementById('users-list').addEventListener('click', handleUserAction);
+      document.getElementById('keys-list').addEventListener('click', handleKeyAction);
       document.getElementById('tasks-table').addEventListener('click', handleTaskAction);
 
       showSection((location.hash || '#dashboard').slice(1));
@@ -1894,12 +2007,24 @@ const ADMIN_APP_HTML = `<!doctype html>
         var upstreams = (state.overview && state.overview.upstreams) || [];
         var providers = (state.overview && state.overview.providers) || [];
         populatePluginSelect();
-        var body = document.getElementById('upstreams-table');
-        body.innerHTML = upstreams.length ? upstreams.map(function (upstream) {
+        var list = document.getElementById('upstreams-list');
+        list.innerHTML = upstreams.length ? upstreams.map(function (upstream) {
           var deleteDisabled = upstream.models_total > 0 ? ' disabled title="请先删除该上游下的模型"' : '';
           var plugin = findProvider(providers, upstream.plugin_id);
-          return '<tr><td><strong>' + esc(upstream.name || upstream.id) + '</strong></td><td>' + esc(plugin ? plugin.name : upstream.plugin_id) + '</td><td><code>' + esc(upstream.base_url || '未配置') + '</code></td><td><code>' + esc(upstream.credential_id || '未配置') + '</code><br><span class="pill ' + (upstream.credential_configured ? 'ok' : 'danger') + '">' + (upstream.credential_configured ? '已配置' : '缺少') + '</span></td><td><span class="pill ' + statusClass(upstream.status) + '">' + esc(upstream.status) + '</span></td><td>' + esc(upstream.models_active + '/' + upstream.models_total) + '</td><td><div class="actions"><button class="secondary compact" data-upstream-edit="' + esc(upstream.id) + '">编辑</button><button class="danger compact" data-upstream-delete="' + esc(upstream.id) + '"' + deleteDisabled + '>删除</button></div></td></tr>';
-        }).join('') : '<tr><td colspan="8" class="empty">暂无上游配置。</td></tr>';
+          var modelPills = (upstream.models || []).slice(0, 4).map(function (model) { return '<span class="pill">' + esc(model.alias + ' -> ' + model.provider_model) + '</span>'; }).join('');
+          if ((upstream.models || []).length > 4) modelPills += '<span class="pill">+' + esc(upstream.models.length - 4) + '</span>';
+          if (!modelPills) modelPills = '<span class="status">暂无模型</span>';
+          return '<article class="entity-card">' +
+            '<header><div class="entity-title"><strong>' + esc(upstream.name || upstream.id) + '</strong><div class="status"><code>' + esc(upstream.id) + '</code></div></div><span class="pill ' + statusClass(upstream.status) + '">' + esc(upstream.status) + '</span></header>' +
+            '<div class="entity-meta">' +
+              '<div class="entity-row"><span>类型</span><strong>' + esc(plugin ? plugin.name : upstream.plugin_id) + '</strong></div>' +
+              '<div class="entity-row"><span>Base URL</span><code>' + esc(upstream.base_url || '未配置') + '</code></div>' +
+              '<div class="entity-row"><span>凭证</span><div><code>' + esc(upstream.credential_id || '未配置') + '</code><br><span class="pill ' + (upstream.credential_configured ? 'ok' : 'danger') + '">' + (upstream.credential_configured ? '已配置' : '缺少') + '</span></div></div>' +
+              '<div class="entity-row"><span>模型</span><div><strong>' + esc(upstream.models_active + '/' + upstream.models_total) + '</strong><div>' + modelPills + '</div></div></div>' +
+            '</div>' +
+            '<div class="actions entity-actions"><button type="button" class="secondary compact" data-upstream-edit="' + esc(upstream.id) + '">编辑</button><button type="button" class="danger compact" data-upstream-delete="' + esc(upstream.id) + '"' + deleteDisabled + '>删除</button></div>' +
+          '</article>';
+        }).join('') : '<div class="empty">暂无上游配置。</div>';
       }
 
       function populateUpstreamSelect() {
@@ -1916,15 +2041,26 @@ const ADMIN_APP_HTML = `<!doctype html>
       }
 
       function renderModels() {
-        var body = document.getElementById('models-table');
+        var list = document.getElementById('models-list');
         var providers = (state.overview && state.overview.providers) || [];
         document.getElementById('model-upstreams').innerHTML = renderUpstreams((state.overview && state.overview.upstreams) || []);
         populateUpstreamSelect();
         populatePluginSelect();
-        body.innerHTML = state.models.length ? state.models.map(function (model) {
-          var routes = (model.routes || []).map(function (route) { var plugin = findProvider(providers, route.plugin_id); return '<span class="pill">' + esc(route.upstream_id + ' / ' + route.provider_model) + '</span><span class="pill">' + esc(plugin ? plugin.name : route.plugin_id) + '</span><span class="pill ' + (route.credential_configured ? 'ok' : 'danger') + '">' + (route.credential_configured ? '上游凭证已配置' : '上游缺少凭证') + '</span>'; }).join('<br>');
-          return '<tr><td><code>' + esc(model.alias) + '</code></td><td>' + esc(model.modality) + '</td><td><span class="pill ' + statusClass(model.status) + '">' + esc(model.status) + '</span></td><td>' + routes + '</td><td><div class="actions"><button class="secondary compact" data-model-edit="' + esc(model.alias) + '">编辑</button><button class="danger compact" data-model-delete="' + esc(model.alias) + '">删除</button></div></td></tr>';
-        }).join('') : '<tr><td colspan="5" class="empty">暂无模型。</td></tr>';
+        list.innerHTML = state.models.length ? state.models.map(function (model) {
+          var routes = (model.routes || []).map(function (route) {
+            var plugin = findProvider(providers, route.plugin_id);
+            return '<div><span class="pill">' + esc((route.upstream_name || route.upstream_id || '未配置') + ' / ' + route.provider_model) + '</span><span class="pill">' + esc(plugin ? plugin.name : route.plugin_id) + '</span><span class="pill ' + (route.credential_configured ? 'ok' : 'danger') + '">' + (route.credential_configured ? '凭证已配置' : '缺少凭证') + '</span><span class="pill ' + statusClass(route.status) + '">' + esc(route.status) + '</span></div>';
+          }).join('') || '<span class="status">暂无路由</span>';
+          return '<article class="entity-card">' +
+            '<header><div class="entity-title"><code>' + esc(model.alias) + '</code><div class="status">Provider 路由 ' + esc((model.routes || []).length) + ' 条</div></div><span class="pill ' + statusClass(model.status) + '">' + esc(model.status) + '</span></header>' +
+            '<div class="entity-meta">' +
+              '<div class="entity-row"><span>模态</span><strong>' + esc(model.modality) + '</strong></div>' +
+              '<div class="entity-row"><span>流式</span><strong>' + (model.supports_stream !== false ? '支持' : '不支持') + '</strong></div>' +
+              '<div class="entity-row"><span>路由</span><div>' + routes + '</div></div>' +
+            '</div>' +
+            '<div class="actions entity-actions"><button type="button" class="secondary compact" data-model-edit="' + esc(model.alias) + '">编辑</button><button type="button" class="danger compact" data-model-delete="' + esc(model.alias) + '">删除</button></div>' +
+          '</article>';
+        }).join('') : '<div class="empty">暂无模型。</div>';
         if (state.models[0] && !document.getElementById('model-json').value.trim()) fillModelEditor(state.models[0].alias);
       }
 
@@ -1947,12 +2083,26 @@ const ADMIN_APP_HTML = `<!doctype html>
       }
 
       function renderUsers() {
-        document.getElementById('users-table').innerHTML = state.users.length ? state.users.map(function (user) {
-          return '<tr><td>' + esc(user.email) + '<div class="status">' + esc(user.name || user.id) + '</div></td><td>' + esc(user.role) + '</td><td><span class="pill ' + statusClass(user.status) + '">' + esc(user.status) + '</span></td><td><code>' + esc(user.tenant_id) + '</code></td><td><button class="secondary compact" data-user-toggle="' + esc(user.id) + '">' + (user.status === 'active' ? '禁用' : '启用') + '</button></td></tr>';
-        }).join('') : '<tr><td colspan="5" class="empty">暂无用户。</td></tr>';
-        document.getElementById('keys-table').innerHTML = state.apiKeys.length ? state.apiKeys.map(function (key) {
-          return '<tr><td>' + esc(key.name) + '</td><td><code>' + esc(key.key_prefix) + '</code></td><td><code>' + esc(key.user_id) + '</code></td><td>' + esc((key.allowed_models || []).join(', ') || '全部') + '</td><td><span class="pill ' + statusClass(key.status) + '">' + esc(key.status) + '</span></td><td><button class="secondary compact" data-key-toggle="' + esc(key.id) + '">' + (key.status === 'active' ? '禁用' : '启用') + '</button></td></tr>';
-        }).join('') : '<tr><td colspan="6" class="empty">暂无 API Key。</td></tr>';
+        document.getElementById('users-list').innerHTML = state.users.length ? state.users.map(function (user) {
+          return '<article class="entity-card">' +
+            '<header><div class="entity-title"><strong>' + esc(user.email) + '</strong><div class="status">' + esc(user.name || user.id) + '</div></div><span class="pill ' + statusClass(user.status) + '">' + esc(user.status) + '</span></header>' +
+            '<div class="entity-meta">' +
+              '<div class="entity-row"><span>角色</span><strong>' + esc(user.role) + '</strong></div>' +
+              '<div class="entity-row"><span>租户</span><code>' + esc(user.tenant_id) + '</code></div>' +
+            '</div>' +
+            '<div class="actions entity-actions"><button type="button" class="secondary compact" data-user-toggle="' + esc(user.id) + '">' + (user.status === 'active' ? '禁用' : '启用') + '</button></div>' +
+          '</article>';
+        }).join('') : '<div class="empty">暂无用户。</div>';
+        document.getElementById('keys-list').innerHTML = state.apiKeys.length ? state.apiKeys.map(function (key) {
+          return '<article class="entity-card">' +
+            '<header><div class="entity-title"><strong>' + esc(key.name) + '</strong><div class="status"><code>' + esc(key.key_prefix) + '</code></div></div><span class="pill ' + statusClass(key.status) + '">' + esc(key.status) + '</span></header>' +
+            '<div class="entity-meta">' +
+              '<div class="entity-row"><span>用户</span><code>' + esc(key.user_id) + '</code></div>' +
+              '<div class="entity-row"><span>模型权限</span><div>' + esc((key.allowed_models || []).join(', ') || '全部') + '</div></div>' +
+            '</div>' +
+            '<div class="actions entity-actions"><button type="button" class="secondary compact" data-key-toggle="' + esc(key.id) + '">' + (key.status === 'active' ? '禁用' : '启用') + '</button></div>' +
+          '</article>';
+        }).join('') : '<div class="empty">暂无 API Key。</div>';
       }
 
       function renderUsage() {
@@ -1982,6 +2132,7 @@ const ADMIN_APP_HTML = `<!doctype html>
         if (!upstream_id) { setStatus('请先选择所属上游', 'error'); return; }
         var model = { upstream_id: upstream_id, alias: value('model-alias'), provider_model: value('route-provider-model'), modality: value('model-modality'), supports_stream: value('model-stream') === 'true', status: value('model-status'), priority: Number(value('route-priority') || 1), weight: 100 };
         await saveModel(model);
+        closeModal('model-modal');
       }
       async function saveModelFromJson() { await saveModel(JSON.parse(document.getElementById('model-json').value)); }
       async function saveModel(model) { await api('/admin/api/models', { method: 'POST', body: JSON.stringify({ model: model }) }); await loadAll(); setStatus('模型已保存：' + model.alias, 'ok'); }
@@ -1993,6 +2144,7 @@ const ADMIN_APP_HTML = `<!doctype html>
         await api('/admin/api/upstreams', { method: 'POST', body: JSON.stringify({ upstream: upstream }) });
         await loadAll();
         setStatus('上游已保存：' + upstream.name, 'ok');
+        closeModal('upstream-modal');
       }
 
       function resetUpstreamForm() {
@@ -2005,10 +2157,27 @@ const ADMIN_APP_HTML = `<!doctype html>
         document.getElementById('upstream-admin-status').value = 'active';
       }
 
+      function resetModelForm() {
+        document.getElementById('model-alias').value = '';
+        document.getElementById('route-provider-model').value = '';
+        document.getElementById('model-modality').value = 'text';
+        document.getElementById('model-status').value = 'active';
+        document.getElementById('model-stream').value = 'true';
+        document.getElementById('route-priority').value = '1';
+        populateUpstreamSelect();
+        document.getElementById('model-upstream-select').value = '';
+      }
+
+      function resetUserForm() {
+        document.getElementById('user-email').value = '';
+        document.getElementById('user-name').value = '';
+        document.getElementById('user-role').value = 'member';
+      }
+
       async function createUser() {
         var body = { email: value('user-email'), name: value('user-name'), role: value('user-role') };
         await api('/admin/api/users', { method: 'POST', body: JSON.stringify(body) });
-        await loadAll(); setStatus('用户已创建：' + body.email, 'ok');
+        await loadAll(); setStatus('用户已创建：' + body.email, 'ok'); closeModal('user-modal'); resetUserForm();
       }
       async function loadTasks() {
         var params = new URLSearchParams(); params.set('limit', value('task-limit')); if (value('task-status')) params.set('status', value('task-status')); if (value('task-query')) params.set('q', value('task-query'));
@@ -2019,13 +2188,13 @@ const ADMIN_APP_HTML = `<!doctype html>
 
       async function handleModelAction(event) {
         var edit = event.target.closest('[data-model-edit]'); var del = event.target.closest('[data-model-delete]');
-        if (edit) fillModelEditor(edit.getAttribute('data-model-edit'));
+        if (edit) { fillModelEditor(edit.getAttribute('data-model-edit')); openModal('model-modal', 'model-modal-title', '编辑模型'); }
         if (del && confirm('确定删除模型 ' + del.getAttribute('data-model-delete') + '？')) { await api('/admin/api/models/' + encodeURIComponent(del.getAttribute('data-model-delete')), { method: 'DELETE' }); await loadAll(); }
       }
 
       async function handleUpstreamAction(event) {
         var edit = event.target.closest('[data-upstream-edit]'); var del = event.target.closest('[data-upstream-delete]');
-        if (edit) fillUpstreamEditor(edit.getAttribute('data-upstream-edit'));
+        if (edit) { fillUpstreamEditor(edit.getAttribute('data-upstream-edit')); openModal('upstream-modal', 'upstream-modal-title', '编辑上游'); }
         if (del && !del.disabled && confirm('确定删除上游 ' + del.getAttribute('data-upstream-delete') + '？')) { await api('/admin/api/upstreams/' + encodeURIComponent(del.getAttribute('data-upstream-delete')), { method: 'DELETE' }); await loadAll(); }
       }
       async function handleUserAction(event) { var button = event.target.closest('[data-user-toggle]'); if (!button) return; var user = state.users.find(function (item) { return item.id === button.getAttribute('data-user-toggle'); }); if (!user) return; await api('/admin/api/users/' + encodeURIComponent(user.id), { method: 'PATCH', body: JSON.stringify({ status: user.status === 'active' ? 'disabled' : 'active' }) }); await loadAll(); }
@@ -2035,6 +2204,8 @@ const ADMIN_APP_HTML = `<!doctype html>
       function fillModelEditor(alias) { var model = state.models.find(function (item) { return item.alias === alias; }); if (!model) return; var route = model.routes && model.routes[0] ? model.routes[0] : {}; document.getElementById('model-json').value = JSON.stringify(toModelInput(model), null, 2); document.getElementById('model-alias').value = model.alias; document.getElementById('model-modality').value = model.modality; document.getElementById('model-status').value = model.status; document.getElementById('model-stream').value = String(model.supports_stream !== false); var select = document.getElementById('model-upstream-select'); if (select.options.length > 1) { select.value = route.upstream_id || ''; } document.getElementById('route-provider-model').value = route.provider_model || ''; document.getElementById('route-priority').value = route.priority || 1; }
       function toModelInput(model) { var route = model.routes && model.routes[0] ? model.routes[0] : {}; return { upstream_id: route.upstream_id, alias: model.alias, provider_model: route.provider_model, modality: model.modality, supports_stream: model.supports_stream, status: model.status, priority: route.priority, weight: route.weight }; }
       function fillUpstreamEditor(id) { var upstreams = (state.overview && state.overview.upstreams) || []; var upstream = upstreams.find(function (item) { return item.id === id; }); if (!upstream) return; document.getElementById('upstream-admin-id').value = upstream.id || ''; document.getElementById('upstream-admin-name').value = upstream.name || ''; document.getElementById('upstream-admin-plugin').value = upstream.plugin_id || ''; document.getElementById('upstream-admin-base-url').value = upstream.base_url || ''; document.getElementById('upstream-admin-credential').value = upstream.credential_id || ''; document.getElementById('upstream-admin-status').value = upstream.status || 'active'; }
+      function openModal(id, titleId, title) { var modal = document.getElementById(id); if (!modal) return; document.getElementById(titleId).textContent = title; modal.classList.add('open'); modal.setAttribute('aria-hidden', 'false'); document.body.classList.add('modal-open'); var firstField = modal.querySelector('.modal-form input:not([type="hidden"]), .modal-form select, .modal-form textarea'); if (firstField) firstField.focus(); }
+      function closeModal(id) { var modals = id ? [document.getElementById(id)] : Array.prototype.slice.call(document.querySelectorAll('.modal.open')); modals.forEach(function (modal) { if (!modal) return; modal.classList.remove('open'); modal.setAttribute('aria-hidden', 'true'); }); if (!document.querySelector('.modal.open')) document.body.classList.remove('modal-open'); }
       function showSection(section) { section = titles[section] ? section : 'dashboard'; document.querySelectorAll('.section').forEach(function (el) { el.classList.toggle('active', el.id === section); }); document.querySelectorAll('.nav a').forEach(function (el) { el.classList.toggle('active', el.getAttribute('data-section') === section); }); document.getElementById('page-title').textContent = titles[section]; }
       function toggleTheme() { var next = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark'; document.documentElement.setAttribute('data-theme', next); localStorage.setItem('teaven_admin_theme', next); document.getElementById('theme-toggle').textContent = next === 'dark' ? '切换浅色' : '切换深色'; }
       function stat(label, value) { return '<div class="stat"><strong>' + esc(value == null ? 0 : value) + '</strong><span>' + esc(label) + '</span></div>'; }
