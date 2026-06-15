@@ -2,6 +2,14 @@ name = "teaven-ai"
 main = "src/index.ts"
 compatibility_date = "2026-06-12"
 
+[[d1_databases]]
+binding = "DB"
+database_name = "teaven-ai-db"
+database_id = ""
+
+[[migrations]]
+tag = "v1"
+
 [vars]
 ADMIN_TOKEN = "admin-dev-only-change-me"
 OPENAI_COMPATIBLE_BASE_URL = "https://api.openai.com/v1"

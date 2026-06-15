@@ -51,7 +51,6 @@ export interface UsageRecord {
   model: string;
   upstream_id?: string;
   plugin_id?: string;
-  provider?: string;
   provider_model?: string;
   status_code: number;
   latency_ms: number;
@@ -219,7 +218,6 @@ export async function recordChatUsage(
     model: input.model,
     upstream_id: input.route?.upstream_id,
     plugin_id: input.route?.plugin_id,
-    provider: input.route?.provider,
     provider_model: input.route?.provider_model,
     status_code: input.status_code,
     latency_ms: input.latency_ms,
@@ -245,7 +243,6 @@ export async function recordTaskUsage(env: Env, task: AsyncTaskRecord, statusCod
     model: task.model,
     upstream_id: task.upstream_id,
     plugin_id: task.plugin_id,
-    provider: task.provider,
     provider_model: task.provider_task_id,
     status_code: statusCode,
     latency_ms: latencyMs,

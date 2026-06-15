@@ -825,7 +825,6 @@ function publicModel(model: ModelConfig, env: Env): Record<string, unknown> {
       upstream_id: route.upstream_id,
       upstream_name: route.upstream_name || null,
       plugin_id: route.plugin_id,
-      provider: route.provider,
       provider_model: route.provider_model,
       base_url_configured: Boolean(route.base_url),
       credential_id: route.credential_id || null,
@@ -848,7 +847,6 @@ function publicUpstream(upstream: UpstreamConfig, config: GatewayConfig, env: En
     id: upstream.id,
     name: upstream.name || upstream.id,
     plugin_id: upstream.plugin_id,
-    provider: upstream.provider || null,
     base_url: upstream.base_url || null,
     credential_id: upstream.credential_id || null,
     credential_configured: isCredentialIdConfigured(env, upstream.credential_id),
@@ -952,7 +950,6 @@ function readUpstreamInput(input: Record<string, unknown>): Omit<UpstreamConfig,
     id,
     name: optionalBodyString(upstream.name, "upstream.name") || id,
     plugin_id: requireString(upstream.plugin_id, "plugin_id"),
-    provider: optionalBodyString(upstream.provider, "provider"),
     base_url: optionalBodyString(upstream.base_url, "base_url"),
     credential_id: optionalBodyString(upstream.credential_id, "credential_id"),
     config: optionalObject(upstream.config, "config"),
@@ -1706,7 +1703,7 @@ const ADMIN_APP_HTML = `<!doctype html>
           <div class="card span-12">
             <h3>上游列表</h3>
             <p class="subtitle">先配置上游的类型（Provider Plugin）、Base URL 和凭证引用，再到模型管理里把模型添加到上游。</p>
-            <div class="table-wrap"><table><thead><tr><th>名称</th><th>类型</th><th>Provider</th><th>Base URL</th><th>凭证</th><th>状态</th><th>模型</th><th>操作</th></tr></thead><tbody id="upstreams-table"></tbody></table></div>
+            <div class="table-wrap"><table><thead><tr><th>名称</th><th>类型</th><th>Base URL</th><th>凭证</th><th>状态</th><th>模型</th><th>操作</th></tr></thead><tbody id="upstreams-table"></tbody></table></div>
           </div>
           <div class="card span-12">
             <h3>创建/更新上游</h3>
@@ -1714,7 +1711,6 @@ const ADMIN_APP_HTML = `<!doctype html>
               <input id="upstream-admin-id" type="hidden">
               <label>上游名称<input id="upstream-admin-name" value="OpenAI Compatible Default"></label>
               <label>类型<select id="upstream-admin-plugin"></select></label>
-              <label>供应商标识<input id="upstream-admin-provider" value="openai-compatible"></label>
               <label>Base URL<input id="upstream-admin-base-url" value="https://api.openai.com/v1"></label>
               <label>凭证引用<input id="upstream-admin-credential" value="env:OPENAI_COMPATIBLE_API_KEY"></label>
               <label>状态<select id="upstream-admin-status"><option value="active">active</option><option value="degraded">degraded</option><option value="disabled">disabled</option></select></label>
@@ -1902,7 +1898,7 @@ const ADMIN_APP_HTML = `<!doctype html>
         body.innerHTML = upstreams.length ? upstreams.map(function (upstream) {
           var deleteDisabled = upstream.models_total > 0 ? ' disabled title="请先删除该上游下的模型"' : '';
           var plugin = findProvider(providers, upstream.plugin_id);
-          return '<tr><td><strong>' + esc(upstream.name || upstream.id) + '</strong></td><td>' + esc(plugin ? plugin.name : upstream.plugin_id) + '<div class="status">' + esc(upstream.provider || '') + '</div></td><td><code>' + esc(upstream.base_url || '未配置') + '</code></td><td><code>' + esc(upstream.credential_id || '未配置') + '</code><br><span class="pill ' + (upstream.credential_configured ? 'ok' : 'danger') + '">' + (upstream.credential_configured ? '已配置' : '缺少') + '</span></td><td><span class="pill ' + statusClass(upstream.status) + '">' + esc(upstream.status) + '</span></td><td>' + esc(upstream.models_active + '/' + upstream.models_total) + '</td><td><div class="actions"><button class="secondary compact" data-upstream-edit="' + esc(upstream.id) + '">编辑</button><button class="danger compact" data-upstream-delete="' + esc(upstream.id) + '"' + deleteDisabled + '>删除</button></div></td></tr>';
+          return '<tr><td><strong>' + esc(upstream.name || upstream.id) + '</strong></td><td>' + esc(plugin ? plugin.name : upstream.plugin_id) + '</td><td><code>' + esc(upstream.base_url || '未配置') + '</code></td><td><code>' + esc(upstream.credential_id || '未配置') + '</code><br><span class="pill ' + (upstream.credential_configured ? 'ok' : 'danger') + '">' + (upstream.credential_configured ? '已配置' : '缺少') + '</span></td><td><span class="pill ' + statusClass(upstream.status) + '">' + esc(upstream.status) + '</span></td><td>' + esc(upstream.models_active + '/' + upstream.models_total) + '</td><td><div class="actions"><button class="secondary compact" data-upstream-edit="' + esc(upstream.id) + '">编辑</button><button class="danger compact" data-upstream-delete="' + esc(upstream.id) + '"' + deleteDisabled + '>删除</button></div></td></tr>';
         }).join('') : '<tr><td colspan="8" class="empty">暂无上游配置。</td></tr>';
       }
 
@@ -1993,7 +1989,7 @@ const ADMIN_APP_HTML = `<!doctype html>
 
       async function saveUpstreamFromForm() {
         var existingId = value('upstream-admin-id');
-        var upstream = { upstream_id: existingId || undefined, id: existingId || undefined, name: value('upstream-admin-name'), plugin_id: value('upstream-admin-plugin'), provider: value('upstream-admin-provider'), base_url: value('upstream-admin-base-url'), credential_id: value('upstream-admin-credential'), status: value('upstream-admin-status') };
+        var upstream = { upstream_id: existingId || undefined, id: existingId || undefined, name: value('upstream-admin-name'), plugin_id: value('upstream-admin-plugin'), base_url: value('upstream-admin-base-url'), credential_id: value('upstream-admin-credential'), status: value('upstream-admin-status') };
         await api('/admin/api/upstreams', { method: 'POST', body: JSON.stringify({ upstream: upstream }) });
         await loadAll();
         setStatus('上游已保存：' + upstream.name, 'ok');
@@ -2004,7 +2000,6 @@ const ADMIN_APP_HTML = `<!doctype html>
         document.getElementById('upstream-admin-name').value = 'OpenAI Compatible Default';
         var pluginSelect = document.getElementById('upstream-admin-plugin');
         if (pluginSelect.options.length > 0) pluginSelect.selectedIndex = 0;
-        document.getElementById('upstream-admin-provider').value = '';
         document.getElementById('upstream-admin-base-url').value = '';
         document.getElementById('upstream-admin-credential').value = '';
         document.getElementById('upstream-admin-status').value = 'active';
@@ -2039,7 +2034,7 @@ const ADMIN_APP_HTML = `<!doctype html>
 
       function fillModelEditor(alias) { var model = state.models.find(function (item) { return item.alias === alias; }); if (!model) return; var route = model.routes && model.routes[0] ? model.routes[0] : {}; document.getElementById('model-json').value = JSON.stringify(toModelInput(model), null, 2); document.getElementById('model-alias').value = model.alias; document.getElementById('model-modality').value = model.modality; document.getElementById('model-status').value = model.status; document.getElementById('model-stream').value = String(model.supports_stream !== false); var select = document.getElementById('model-upstream-select'); if (select.options.length > 1) { select.value = route.upstream_id || ''; } document.getElementById('route-provider-model').value = route.provider_model || ''; document.getElementById('route-priority').value = route.priority || 1; }
       function toModelInput(model) { var route = model.routes && model.routes[0] ? model.routes[0] : {}; return { upstream_id: route.upstream_id, alias: model.alias, provider_model: route.provider_model, modality: model.modality, supports_stream: model.supports_stream, status: model.status, priority: route.priority, weight: route.weight }; }
-      function fillUpstreamEditor(id) { var upstreams = (state.overview && state.overview.upstreams) || []; var upstream = upstreams.find(function (item) { return item.id === id; }); if (!upstream) return; document.getElementById('upstream-admin-id').value = upstream.id || ''; document.getElementById('upstream-admin-name').value = upstream.name || ''; document.getElementById('upstream-admin-plugin').value = upstream.plugin_id || ''; document.getElementById('upstream-admin-provider').value = upstream.provider || ''; document.getElementById('upstream-admin-base-url').value = upstream.base_url || ''; document.getElementById('upstream-admin-credential').value = upstream.credential_id || ''; document.getElementById('upstream-admin-status').value = upstream.status || 'active'; }
+      function fillUpstreamEditor(id) { var upstreams = (state.overview && state.overview.upstreams) || []; var upstream = upstreams.find(function (item) { return item.id === id; }); if (!upstream) return; document.getElementById('upstream-admin-id').value = upstream.id || ''; document.getElementById('upstream-admin-name').value = upstream.name || ''; document.getElementById('upstream-admin-plugin').value = upstream.plugin_id || ''; document.getElementById('upstream-admin-base-url').value = upstream.base_url || ''; document.getElementById('upstream-admin-credential').value = upstream.credential_id || ''; document.getElementById('upstream-admin-status').value = upstream.status || 'active'; }
       function showSection(section) { section = titles[section] ? section : 'dashboard'; document.querySelectorAll('.section').forEach(function (el) { el.classList.toggle('active', el.id === section); }); document.querySelectorAll('.nav a').forEach(function (el) { el.classList.toggle('active', el.getAttribute('data-section') === section); }); document.getElementById('page-title').textContent = titles[section]; }
       function toggleTheme() { var next = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark'; document.documentElement.setAttribute('data-theme', next); localStorage.setItem('teaven_admin_theme', next); document.getElementById('theme-toggle').textContent = next === 'dark' ? '切换浅色' : '切换深色'; }
       function stat(label, value) { return '<div class="stat"><strong>' + esc(value == null ? 0 : value) + '</strong><span>' + esc(label) + '</span></div>'; }

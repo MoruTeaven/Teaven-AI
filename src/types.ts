@@ -42,7 +42,6 @@ export interface UpstreamConfig {
   id: string;
   name?: string;
   plugin_id: string;
-  provider?: string;
   base_url?: string;
   credential_id?: string;
   config?: Record<string, unknown>;
@@ -54,7 +53,6 @@ export interface ProviderRouteConfig {
   upstream_id: string;
   upstream_name?: string;
   plugin_id: string;
-  provider?: string;
   provider_model: string;
   credential_id?: string;
   base_url?: string;
@@ -111,7 +109,6 @@ export interface AsyncTaskRecord {
   model: string;
   upstream_id?: string;
   plugin_id?: string;
-  provider?: string;
   provider_execution_mode?: string;
   provider_task_id?: string;
   provider_context?: Record<string, unknown>;

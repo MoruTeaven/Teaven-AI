@@ -88,8 +88,8 @@ Teaven AI Gateway 是一个多租户 AI API 网关，计划部署在 Cloudflare 
 | Tenant | 租户，计费、配额和数据隔离的顶层单位。 |
 | User | 平台登录用户，属于某个租户。 |
 | API Key | 用户调用平台 API 的凭证，可绑定权限、模型范围和配额。 |
-| Protocol / Provider Plugin | 协议或供应商适配实现，例如 OpenAI 兼容协议、硅基流动、模力方舟。 |
-| Upstream | 已配置的上游实例，绑定协议类型、插件、endpoint、区域、凭证和运行状态。 |
+| Provider Plugin（类型） | 不同插件处理不同上游协议，例如 OpenAI 兼容、硅基流动、模力方舟。 |
+| Upstream | 已配置的上游实例，绑定插件（即协议类型）、endpoint、区域、凭证和运行状态。 |
 | Provider Credential | 平台访问上游的密钥或凭证引用。 |
 | Model Alias | 对外暴露的模型名，例如 `deepseek-chat`。 |
 | Upstream Model | 添加到某个上游实例下的模型条目，包含平台别名、上游真实模型名和模型能力，不包含密钥和域名。 |
@@ -530,7 +530,7 @@ Adapter 的能力声明必须包含执行模式：
 2. 插件导出 Manifest。
 3. 构建时把插件加入 Provider Registry。
 4. 部署后在数据库中启用插件。
-5. 按协议类型配置上游实例，包含 endpoint、区域、凭证引用和协议参数。
+5. 选择插件配置上游实例，包含 endpoint、区域、凭证引用和协议参数。
 6. 在上游实例下添加模型条目，填写平台模型别名和上游真实模型。
 7. 可选，执行上游实例 `healthCheck` 验证凭证和网络可用性。
 
@@ -578,7 +578,6 @@ Remote Plugin 必须遵循同一输入输出协议，并由平台做超时、重
       "id": "siliconflow-cn",
       "name": "SiliconFlow CN",
       "plugin_id": "openai-compatible",
-      "provider": "siliconflow",
       "base_url": "https://api.siliconflow.cn/v1",
       "credential_id": "cred_siliconflow",
       "status": "active",
@@ -597,7 +596,6 @@ Remote Plugin 必须遵循同一输入输出协议，并由平台做超时、重
       "id": "modelark-image",
       "name": "ModelArk image",
       "plugin_id": "modelark",
-      "provider": "modelark",
       "credential_id": "cred_modelark",
       "config": {
         "poll_interval_seconds": 5
@@ -763,7 +761,6 @@ Remote Plugin 必须遵循同一输入输出协议，并由平台做超时、重
 | model | 对外模型名。 |
 | upstream_id | 实际上游实例。 |
 | plugin_id | Provider Plugin ID。 |
-| provider | 实际上游。 |
 | provider_model | 实际上游模型。 |
 | status_code | 响应状态码。 |
 | latency_ms | 总耗时。 |
@@ -781,7 +778,6 @@ Remote Plugin 必须遵循同一输入输出协议，并由平台做超时、重
 | model | 对外模型名。 |
 | upstream_id | 实际上游实例。 |
 | plugin_id | Provider Plugin ID。 |
-| provider | 上游供应商。 |
 | prompt_tokens | 输入 token。 |
 | completion_tokens | 输出 token。 |
 | total_tokens | 总 token。 |
@@ -801,7 +797,6 @@ Remote Plugin 必须遵循同一输入输出协议，并由平台做超时、重
 | model | 对外模型名。 |
 | upstream_id | 实际上游实例。 |
 | plugin_id | Provider Plugin ID。 |
-| provider | 实际上游。 |
 | provider_execution_mode | 上游执行模式，例如 sync、async_polling、async_webhook。 |
 | provider_task_id | 上游任务 ID。 |
 | provider_context | 上游任务上下文 JSON，例如轮询地址、上传凭证、回调关联信息。 |
@@ -959,7 +954,7 @@ Remote Plugin 必须遵循同一输入输出协议，并由平台做超时、重
 
 ## 14. 配置管理
 
-插件、上游实例和上游模型配置建议支持热更新。新增上游时，先按协议类型注册或启用 Provider Plugin，再配置上游实例，最后在上游实例下添加模型。
+插件、上游实例和上游模型配置建议支持热更新。新增上游时，先注册或启用 Provider Plugin，再配置上游实例，最后在上游实例下添加模型。
 
 ```json
 {
@@ -976,7 +971,6 @@ Remote Plugin 必须遵循同一输入输出协议，并由平台做超时、重
       "id": "siliconflow-cn",
       "name": "SiliconFlow CN",
       "plugin_id": "openai-compatible",
-      "provider": "siliconflow",
       "base_url": "https://api.siliconflow.cn/v1",
       "credential_id": "cred_xxx",
       "status": "active",
@@ -1011,7 +1005,7 @@ Remote Plugin 必须遵循同一输入输出协议，并由平台做超时、重
 4. 部署 Worker 或配置 Remote Plugin endpoint。
 5. 在管理侧启用插件。
 6. 配置 Provider Credential。
-7. 配置上游实例，绑定协议类型、`plugin_id`、endpoint、协议参数和凭证。
+7. 配置上游实例，绑定 `plugin_id`（即协议类型）、endpoint、协议参数和凭证。
 8. 在上游实例下添加模型条目，填写 `alias + provider_model` 和模型能力。
 9. 执行健康检查和测试调用。
 

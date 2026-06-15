@@ -144,7 +144,6 @@ OPENAI_COMPATIBLE_API_KEY=sk-replace-me
       "id": "openai-compatible-default",
       "name": "OpenAI Compatible Default",
       "plugin_id": "openai-compatible",
-      "provider": "openai-compatible",
       "base_url": "https://api.openai.com/v1",
       "credential_id": "env:OPENAI_COMPATIBLE_API_KEY",
       "status": "active",
