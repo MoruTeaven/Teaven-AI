@@ -39,7 +39,6 @@ const MAX_TASK_LIMIT = 100;
 
 interface AdminModelMutation {
   upstream_id: string;
-  upstream: UpstreamConfig;
   model: UpstreamModelConfig;
 }
 
@@ -921,8 +920,9 @@ function normalizeModelInput(value: unknown): AdminModelMutation {
   }
 
   const input = value as Record<string, unknown>;
-  const upstreamInput = readUpstreamInput(input);
+  const upstream_id = requireString(input.upstream_id, "upstream_id");
   const alias = requireString(input.alias, "alias");
+  const provider_model = requireString(input.provider_model, "provider_model");
   const modality = requireString(input.modality, "modality");
   if (!["text", "image", "video", "file"].includes(modality)) {
     throw invalidRequest("modality 必须是 text、image、video 或 file", "modality");
@@ -930,7 +930,7 @@ function normalizeModelInput(value: unknown): AdminModelMutation {
 
   const model: UpstreamModelConfig = {
     alias,
-    provider_model: requireString(input.provider_model, "provider_model"),
+    provider_model,
     modality: modality as UpstreamModelConfig["modality"],
     supports_stream: input.supports_stream !== false,
     priority: optionalNumber(input.priority, "priority"),
@@ -938,12 +938,7 @@ function normalizeModelInput(value: unknown): AdminModelMutation {
     status: normalizeModelStatus(input.status)
   };
 
-  const upstream: UpstreamConfig = {
-    ...upstreamInput,
-    models: [model]
-  };
-  validateGatewayConfig({ upstreams: [upstream] });
-  return { upstream_id: upstream.id, upstream, model };
+  return { upstream_id, model };
 }
 
 function readUpstreamInput(input: Record<string, unknown>): Omit<UpstreamConfig, "models"> {
@@ -968,20 +963,10 @@ function readUpstreamInput(input: Record<string, unknown>): Omit<UpstreamConfig,
 
 function upsertUpstreamModel(config: GatewayConfig, input: AdminModelMutation): UpstreamConfig[] {
   const upstreams = config.upstreams.map((upstream) => ({ ...upstream, models: [...upstream.models] }));
-  let target = upstreams.find((upstream) => upstream.id === input.upstream_id);
+  const target = upstreams.find((upstream) => upstream.id === input.upstream_id);
 
   if (!target) {
-    target = { ...input.upstream, models: [] };
-    upstreams.push(target);
-  } else {
-    target.name = input.upstream.name;
-    target.protocol_type = input.upstream.protocol_type;
-    target.plugin_id = input.upstream.plugin_id;
-    target.provider = input.upstream.provider;
-    target.base_url = input.upstream.base_url;
-    target.credential_id = input.upstream.credential_id;
-    target.config = input.upstream.config;
-    target.status = input.upstream.status;
+    throw invalidRequest(`上游 ${input.upstream_id} 不存在，请先在上游管理中创建`, "upstream_id");
   }
 
   target.models = target.models.filter((model) => model.alias !== input.model.alias);
@@ -1753,22 +1738,16 @@ const ADMIN_APP_HTML = `<!doctype html>
             <div class="table-wrap"><table><thead><tr><th>别名</th><th>模态</th><th>状态</th><th>路由</th><th>操作</th></tr></thead><tbody id="models-table"></tbody></table></div>
           </div>
           <div class="card span-6">
-            <h3>快速创建/更新</h3>
+            <h3>创建/更新模型</h3>
+            <p class="subtitle">模型挂载到已有上游下，继承上游的协议类型、域名和凭证。如需新上游，请先到<a href="#" onclick="showSection('upstreams'); return false;">上游管理</a>创建。</p>
             <div class="form-grid">
               <label>模型别名<input id="model-alias" placeholder="gpt-4o-mini"></label>
+              <label>Provider 模型名<input id="route-provider-model" placeholder="gpt-4o-mini"></label>
               <label>模态<select id="model-modality"><option value="text">text</option><option value="image">image</option><option value="video">video</option><option value="file">file</option></select></label>
               <label>模型状态<select id="model-status"><option value="active">active</option><option value="hidden">hidden</option><option value="disabled">disabled</option></select></label>
-              <label>上游 ID<input id="upstream-id" value="openai-compatible-default"></label>
-              <label>上游名称<input id="upstream-name" value="OpenAI Compatible Default"></label>
-              <label>协议类型<select id="upstream-protocol"><option value="openai-compatible">OpenAI 兼容</option><option value="private">私有协议</option><option value="async-polling-task">异步轮询任务</option><option value="async-webhook-task">异步 Webhook 任务</option></select></label>
-              <label>Provider Plugin<input id="route-plugin" value="openai-compatible"></label>
-              <label>供应商标识<input id="upstream-provider" value="openai-compatible"></label>
-              <label>上游 Base URL<input id="upstream-base-url" value="https://api.openai.com/v1"></label>
-              <label>上游凭证引用<input id="upstream-credential" value="env:OPENAI_COMPATIBLE_API_KEY"></label>
-              <label>上游状态<select id="upstream-status"><option value="active">active</option><option value="degraded">degraded</option><option value="disabled">disabled</option></select></label>
-              <label>上游模型<input id="route-provider-model" placeholder="gpt-4o-mini"></label>
-              <label>优先级<input id="route-priority" type="number" value="1"></label>
               <label>流式<select id="model-stream"><option value="true">支持</option><option value="false">不支持</option></select></label>
+              <label>优先级<input id="route-priority" type="number" value="1"></label>
+              <label>所属上游<select id="model-upstream-select"></select></label>
             </div>
             <div class="actions" style="margin-top: 12px;"><button id="save-model-form" type="button">保存模型</button><button id="reset-models" class="danger" type="button">重置模型配置</button></div>
           </div>
@@ -1926,9 +1905,16 @@ const ADMIN_APP_HTML = `<!doctype html>
         }).join('') : '<tr><td colspan="8" class="empty">暂无上游配置。</td></tr>';
       }
 
+      function populateUpstreamSelect() {
+        var select = document.getElementById('model-upstream-select');
+        var upstreams = (state.overview && state.overview.upstreams) || [];
+        select.innerHTML = upstreams.length ? '<option value="">-- 选择上游 --</option>' + upstreams.map(function (u) { return '<option value="' + esc(u.id) + '">' + esc(u.name || u.id) + ' (' + esc(u.protocol_type) + ')</option>'; }).join('') : '<option value="">-- 暂无上游，请先创建 --</option>';
+      }
+
       function renderModels() {
         var body = document.getElementById('models-table');
         document.getElementById('model-upstreams').innerHTML = renderUpstreams((state.overview && state.overview.upstreams) || []);
+        populateUpstreamSelect();
         body.innerHTML = state.models.length ? state.models.map(function (model) {
           var routes = (model.routes || []).map(function (route) { return '<span class="pill">' + esc(route.upstream_id + ' / ' + route.provider_model) + '</span><span class="pill">' + esc(route.protocol_type) + '</span><span class="pill ' + (route.credential_configured ? 'ok' : 'danger') + '">' + (route.credential_configured ? '上游凭证已配置' : '上游缺少凭证') + '</span>'; }).join('<br>');
           return '<tr><td><code>' + esc(model.alias) + '</code></td><td>' + esc(model.modality) + '</td><td><span class="pill ' + statusClass(model.status) + '">' + esc(model.status) + '</span></td><td>' + routes + '</td><td><div class="actions"><button class="secondary compact" data-model-edit="' + esc(model.alias) + '">编辑</button><button class="danger compact" data-model-delete="' + esc(model.alias) + '">删除</button></div></td></tr>';
@@ -1985,7 +1971,9 @@ const ADMIN_APP_HTML = `<!doctype html>
       }
 
       async function saveModelFromForm() {
-        var model = { upstream_id: value('upstream-id'), upstream: { id: value('upstream-id'), name: value('upstream-name'), protocol_type: value('upstream-protocol'), plugin_id: value('route-plugin'), provider: value('upstream-provider'), base_url: value('upstream-base-url'), credential_id: value('upstream-credential'), status: value('upstream-status') }, alias: value('model-alias'), provider_model: value('route-provider-model'), modality: value('model-modality'), supports_stream: value('model-stream') === 'true', status: value('model-status'), priority: Number(value('route-priority') || 1), weight: 100 };
+        var upstream_id = document.getElementById('model-upstream-select').value;
+        if (!upstream_id) { setStatus('请先选择所属上游', 'error'); return; }
+        var model = { upstream_id: upstream_id, alias: value('model-alias'), provider_model: value('route-provider-model'), modality: value('model-modality'), supports_stream: value('model-stream') === 'true', status: value('model-status'), priority: Number(value('route-priority') || 1), weight: 100 };
         await saveModel(model);
       }
       async function saveModelFromJson() { await saveModel(JSON.parse(document.getElementById('model-json').value)); }
@@ -2037,8 +2025,8 @@ const ADMIN_APP_HTML = `<!doctype html>
       async function handleKeyAction(event) { var button = event.target.closest('[data-key-toggle]'); if (!button) return; var key = state.apiKeys.find(function (item) { return item.id === button.getAttribute('data-key-toggle'); }); if (!key) return; await api('/admin/api/api-keys/' + encodeURIComponent(key.id), { method: 'PATCH', body: JSON.stringify({ status: key.status === 'active' ? 'disabled' : 'active' }) }); await loadAll(); }
       async function handleTaskAction(event) { var view = event.target.closest('[data-task-view]'); var cancel = event.target.closest('[data-task-cancel]'); if (view) { var detail = await api('/admin/api/tasks/' + encodeURIComponent(view.getAttribute('data-task-view'))); document.getElementById('task-detail').textContent = JSON.stringify(detail.task, null, 2); } if (cancel && confirm('确定取消任务？')) { await api('/admin/api/tasks/' + encodeURIComponent(cancel.getAttribute('data-task-cancel')) + '/cancel', { method: 'POST' }); await loadTasks(); } }
 
-      function fillModelEditor(alias) { var model = state.models.find(function (item) { return item.alias === alias; }); if (!model) return; var route = model.routes && model.routes[0] ? model.routes[0] : {}; document.getElementById('model-json').value = JSON.stringify(toModelInput(model), null, 2); document.getElementById('model-alias').value = model.alias; document.getElementById('model-modality').value = model.modality; document.getElementById('model-status').value = model.status; document.getElementById('model-stream').value = String(model.supports_stream !== false); document.getElementById('upstream-id').value = route.upstream_id || 'openai-compatible-default'; document.getElementById('upstream-name').value = route.upstream_name || route.upstream_id || 'OpenAI Compatible Default'; document.getElementById('upstream-protocol').value = route.protocol_type || 'openai-compatible'; document.getElementById('route-plugin').value = route.plugin_id || 'openai-compatible'; document.getElementById('upstream-provider').value = route.provider || ''; document.getElementById('upstream-base-url').value = route.base_url || ''; document.getElementById('upstream-credential').value = route.credential_id || ''; document.getElementById('upstream-status').value = 'active'; document.getElementById('route-provider-model').value = route.provider_model || ''; document.getElementById('route-priority').value = route.priority || 1; }
-      function toModelInput(model) { var route = model.routes && model.routes[0] ? model.routes[0] : {}; return { upstream_id: route.upstream_id, upstream: { id: route.upstream_id, name: route.upstream_name, protocol_type: route.protocol_type, plugin_id: route.plugin_id, provider: route.provider, base_url: route.base_url, credential_id: route.credential_id, status: 'active' }, alias: model.alias, provider_model: route.provider_model, modality: model.modality, supports_stream: model.supports_stream, status: model.status, priority: route.priority, weight: route.weight }; }
+      function fillModelEditor(alias) { var model = state.models.find(function (item) { return item.alias === alias; }); if (!model) return; var route = model.routes && model.routes[0] ? model.routes[0] : {}; document.getElementById('model-json').value = JSON.stringify(toModelInput(model), null, 2); document.getElementById('model-alias').value = model.alias; document.getElementById('model-modality').value = model.modality; document.getElementById('model-status').value = model.status; document.getElementById('model-stream').value = String(model.supports_stream !== false); var select = document.getElementById('model-upstream-select'); if (select.options.length > 1) { select.value = route.upstream_id || ''; } document.getElementById('route-provider-model').value = route.provider_model || ''; document.getElementById('route-priority').value = route.priority || 1; }
+      function toModelInput(model) { var route = model.routes && model.routes[0] ? model.routes[0] : {}; return { upstream_id: route.upstream_id, alias: model.alias, provider_model: route.provider_model, modality: model.modality, supports_stream: model.supports_stream, status: model.status, priority: route.priority, weight: route.weight }; }
       function fillUpstreamEditor(id) { var upstreams = (state.overview && state.overview.upstreams) || []; var upstream = upstreams.find(function (item) { return item.id === id; }); if (!upstream) return; document.getElementById('upstream-admin-id').value = upstream.id || ''; document.getElementById('upstream-admin-name').value = upstream.name || ''; document.getElementById('upstream-admin-protocol').value = upstream.protocol_type || ''; document.getElementById('upstream-admin-plugin').value = upstream.plugin_id || ''; document.getElementById('upstream-admin-provider').value = upstream.provider || ''; document.getElementById('upstream-admin-base-url').value = upstream.base_url || ''; document.getElementById('upstream-admin-credential').value = upstream.credential_id || ''; document.getElementById('upstream-admin-status').value = upstream.status || 'active'; }
       function showSection(section) { section = titles[section] ? section : 'dashboard'; document.querySelectorAll('.section').forEach(function (el) { el.classList.toggle('active', el.id === section); }); document.querySelectorAll('.nav a').forEach(function (el) { el.classList.toggle('active', el.getAttribute('data-section') === section); }); document.getElementById('page-title').textContent = titles[section]; }
       function toggleTheme() { var next = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark'; document.documentElement.setAttribute('data-theme', next); localStorage.setItem('teaven_admin_theme', next); document.getElementById('theme-toggle').textContent = next === 'dark' ? '切换浅色' : '切换深色'; }
