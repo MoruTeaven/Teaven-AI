@@ -1,6 +1,6 @@
 # 配置说明
 
-本文档说明项目当前识别的环境变量、Cloudflare 绑定，以及当前采用的“协议 -> 上游 -> 模型”配置分层。
+本文档说明项目当前识别的环境变量、Cloudflare 绑定，以及当前采用的"插件 -> 上游 -> 模型"配置分层。
 
 ## 配置文件
 
@@ -38,18 +38,18 @@ OPENAI_COMPATIBLE_API_KEY=sk-replace-me
 
 ## 配置分层
 
-配置顺序应该是先配置协议和上游，再在上游下添加模型：
+配置顺序应该是先配置插件和上游，再在上游下添加模型：
 
-1. 选择协议类型和 Provider Plugin，例如 OpenAI 兼容格式、异步轮询任务协议、异步 webhook 任务协议或私有协议插件。
-2. 配置上游实例，把协议类型、endpoint、区域、凭证和健康检查状态绑定到一个稳定的上游 ID。
+1. 选择 Provider Plugin，每个插件对应一种上游协议类型（如 OpenAI 兼容、异步轮询任务、异步 webhook 任务、私有协议）。
+2. 配置上游实例，把插件、endpoint、区域、凭证和健康检查状态绑定到一个稳定的上游 ID。
 3. 在上游实例下添加模型条目，只填写平台模型别名、上游真实模型名和模型能力。
 
-这样可以把“怎么调用某类上游”和“这次实际调用哪个模型”拆开。同一个 OpenAI 兼容协议插件可以配置多个上游，例如 OpenAI 官方、硅基流动兼容接口、私有 vLLM 网关；同一个上游也可以承载多个平台模型别名。模型添加时不再单独填写密钥、域名或 base URL，这些只属于上游实例。
+这样可以把"怎么调用某类上游"和"这次实际调用哪个模型"拆开。同一个 OpenAI 兼容协议插件可以配置多个上游，例如 OpenAI 官方、硅基流动兼容接口、私有 vLLM 网关；同一个上游也可以承载多个平台模型别名。模型添加时不再单独填写密钥、域名或 base URL，这些只属于上游实例。
 
 | 层级 | 保存内容 | 示例 | 用户是否可见 |
 | --- | --- | --- | --- |
-| 协议或插件 | 协议转换、流式解析、任务状态映射、错误归一。 | `openai-compatible`、`modelark` | 否 |
-| 上游实例 | 协议类型、插件、base URL、凭证引用、区域、协议参数、状态。 | `openai-main`、`siliconflow-cn` | 否 |
+| 插件 | 协议转换、流式解析、任务状态映射、错误归一。 | `openai-compatible`、`modelark` | 否 |
+| 上游实例 | 插件、base URL、凭证引用、区域、协议参数、状态。 | `openai-main`、`siliconflow-cn` | 否 |
 | 上游模型 | 对外模型名、上游真实模型名、能力、优先级和权重，不含密钥和域名。 | `fast-chat` -> `Qwen/Qwen2.5-72B-Instruct` | 别名可见 |
 
 配置示例：
@@ -60,7 +60,6 @@ OPENAI_COMPATIBLE_API_KEY=sk-replace-me
     {
       "id": "openai-main",
       "name": "OpenAI official",
-      "protocol_type": "openai-compatible",
       "plugin_id": "openai-compatible",
       "base_url": "https://api.openai.com/v1",
       "credential_id": "env:OPENAI_API_KEY",
@@ -80,7 +79,6 @@ OPENAI_COMPATIBLE_API_KEY=sk-replace-me
     {
       "id": "siliconflow-cn",
       "name": "SiliconFlow CN",
-      "protocol_type": "openai-compatible",
       "plugin_id": "openai-compatible",
       "base_url": "https://api.siliconflow.cn/v1",
       "credential_id": "env:SILICONFLOW_API_KEY",
@@ -100,7 +98,6 @@ OPENAI_COMPATIBLE_API_KEY=sk-replace-me
     {
       "id": "internal-llm",
       "name": "Internal LLM",
-      "protocol_type": "private",
       "plugin_id": "internal-llm",
       "base_url": "https://llm.internal.example",
       "credential_id": "env:INTERNAL_LLM_TOKEN",
@@ -135,7 +132,7 @@ OPENAI_COMPATIBLE_API_KEY=sk-replace-me
 1. 用户请求 `POST /v1/chat/completions`，请求体里的 `model` 是平台模型别名。
 2. 网关读取 `MODEL_CONFIG_JSON`。如果没有配置，则用 `OPENAI_COMPATIBLE_DEFAULT_MODEL` 自动生成一个默认上游和默认模型。
 3. 网关在 `upstreams[].models[]` 中按模型别名找到上游模型条目，选择优先级最小的 active 条目。
-4. 网关从所属上游实例读取 `protocol_type`、`plugin_id`、`base_url`、`credential_id` 和协议参数。
+4. 网关从所属上游实例读取 `plugin_id`、`base_url`、`credential_id` 和协议参数。
 5. 网关把请求转发到上游 `base_url + /chat/completions`，并把请求体里的 `model` 改成上游模型条目的 `provider_model`。
 
 默认情况下，不配置 `MODEL_CONFIG_JSON` 时等价于下面这份配置：
@@ -146,7 +143,6 @@ OPENAI_COMPATIBLE_API_KEY=sk-replace-me
     {
       "id": "openai-compatible-default",
       "name": "OpenAI Compatible Default",
-      "protocol_type": "openai-compatible",
       "plugin_id": "openai-compatible",
       "provider": "openai-compatible",
       "base_url": "https://api.openai.com/v1",
@@ -190,7 +186,7 @@ OPENAI_COMPATIBLE_DEFAULT_MODEL = "gpt-4o-mini"
 
 ## MODEL_CONFIG_JSON
 
-`MODEL_CONFIG_JSON` 当前用于替代自动生成的默认上游和模型配置。它适合配置多个协议类型、多个上游、多个模型别名或不同上游模型名。
+`MODEL_CONFIG_JSON` 当前用于替代自动生成的默认上游和模型配置。它适合配置多个插件、多个上游、多个模型别名或不同上游模型名。
 
 字段含义：
 
@@ -199,8 +195,7 @@ OPENAI_COMPATIBLE_DEFAULT_MODEL = "gpt-4o-mini"
 | `upstreams` | 根对象 | 上游实例数组。 |
 | `id` | upstream | 上游实例 ID，例如 `openai-main`。 |
 | `name` | upstream | 管理后台展示名。 |
-| `protocol_type` | upstream | 协议类型，例如 `openai-compatible`、`private`、`async-polling-task`。 |
-| `plugin_id` | upstream | 处理该上游协议的 Provider Plugin ID。 |
+| `plugin_id` | upstream | Provider Plugin ID。不同的插件处理不同的上游协议（如 OpenAI 兼容、异步轮询、webhook 等）。 |
 | `base_url` | upstream | 上游 API Base URL。 |
 | `credential_id` | upstream | 上游凭证位置或凭证记录 ID。 |
 | `config` | upstream | 协议相关的非密钥配置，例如 region、api_version、poll_interval_seconds。 |
@@ -221,7 +216,6 @@ OPENAI_COMPATIBLE_DEFAULT_MODEL = "gpt-4o-mini"
     {
       "id": "openai-main",
       "name": "OpenAI official",
-      "protocol_type": "openai-compatible",
       "plugin_id": "openai-compatible",
       "base_url": "https://api.openai.com/v1",
       "credential_id": "env:OPENAI_COMPATIBLE_API_KEY",

@@ -823,7 +823,6 @@ function publicModel(model: ModelConfig, env: Env): Record<string, unknown> {
     routes: model.routes.map((route) => ({
       upstream_id: route.upstream_id,
       upstream_name: route.upstream_name || null,
-      protocol_type: route.protocol_type,
       plugin_id: route.plugin_id,
       provider: route.provider,
       provider_model: route.provider_model,
@@ -847,7 +846,6 @@ function publicUpstream(upstream: UpstreamConfig, config: GatewayConfig, env: En
   return {
     id: upstream.id,
     name: upstream.name || upstream.id,
-    protocol_type: upstream.protocol_type,
     plugin_id: upstream.plugin_id,
     provider: upstream.provider || null,
     base_url: upstream.base_url || null,
@@ -951,7 +949,6 @@ function readUpstreamInput(input: Record<string, unknown>): Omit<UpstreamConfig,
   return {
     id,
     name: optionalBodyString(upstream.name, "upstream.name") || id,
-    protocol_type: requireString(upstream.protocol_type, "protocol_type"),
     plugin_id: requireString(upstream.plugin_id, "plugin_id"),
     provider: optionalBodyString(upstream.provider, "provider"),
     base_url: optionalBodyString(upstream.base_url, "base_url"),
@@ -1706,15 +1703,14 @@ const ADMIN_APP_HTML = `<!doctype html>
         <div class="grid">
           <div class="card span-12">
             <h3>上游列表</h3>
-            <p class="subtitle">先配置上游的协议类型、Provider Plugin、Base URL 和凭证引用，再到模型管理里把模型添加到上游。</p>
-            <div class="table-wrap"><table><thead><tr><th>ID</th><th>协议</th><th>Provider</th><th>Base URL</th><th>凭证</th><th>状态</th><th>模型</th><th>操作</th></tr></thead><tbody id="upstreams-table"></tbody></table></div>
+            <p class="subtitle">先配置上游的 Provider Plugin、Base URL 和凭证引用，再到模型管理里把模型添加到上游。</p>
+            <div class="table-wrap"><table><thead><tr><th>ID</th><th>插件</th><th>Provider</th><th>Base URL</th><th>凭证</th><th>状态</th><th>模型</th><th>操作</th></tr></thead><tbody id="upstreams-table"></tbody></table></div>
           </div>
           <div class="card span-12">
             <h3>创建/更新上游</h3>
             <div class="form-grid">
               <label>上游 ID<input id="upstream-admin-id" value="openai-compatible-default"></label>
               <label>上游名称<input id="upstream-admin-name" value="OpenAI Compatible Default"></label>
-              <label>协议类型<select id="upstream-admin-protocol"><option value="openai-compatible">OpenAI 兼容</option><option value="private">私有协议</option><option value="async-polling-task">异步轮询任务</option><option value="async-webhook-task">异步 Webhook 任务</option></select></label>
               <label>Provider Plugin<input id="upstream-admin-plugin" value="openai-compatible"></label>
               <label>供应商标识<input id="upstream-admin-provider" value="openai-compatible"></label>
               <label>Base URL<input id="upstream-admin-base-url" value="https://api.openai.com/v1"></label>
@@ -1730,7 +1726,7 @@ const ADMIN_APP_HTML = `<!doctype html>
         <div class="grid">
           <div class="card span-12">
             <h3>上游配置</h3>
-            <p class="subtitle">上游保存协议类型、Provider Plugin、Base URL 和凭证引用；模型只添加到对应上游下。</p>
+            <p class="subtitle">上游保存 Provider Plugin、Base URL 和凭证引用；模型只添加到对应上游下。</p>
             <div id="model-upstreams" class="stack"></div>
           </div>
           <div class="card span-12">
@@ -1739,7 +1735,7 @@ const ADMIN_APP_HTML = `<!doctype html>
           </div>
           <div class="card span-6">
             <h3>创建/更新模型</h3>
-            <p class="subtitle">模型挂载到已有上游下，继承上游的协议类型、域名和凭证。如需新上游，请先到<a href="#" onclick="showSection('upstreams'); return false;">上游管理</a>创建。</p>
+            <p class="subtitle">模型挂载到已有上游下，继承上游的插件、域名和凭证。如需新上游，请先到<a href="#" onclick="showSection('upstreams'); return false;">上游管理</a>创建。</p>
             <div class="form-grid">
               <label>模型别名<input id="model-alias" placeholder="gpt-4o-mini"></label>
               <label>Provider 模型名<input id="route-provider-model" placeholder="gpt-4o-mini"></label>
@@ -1901,14 +1897,14 @@ const ADMIN_APP_HTML = `<!doctype html>
         var body = document.getElementById('upstreams-table');
         body.innerHTML = upstreams.length ? upstreams.map(function (upstream) {
           var deleteDisabled = upstream.models_total > 0 ? ' disabled title="请先删除该上游下的模型"' : '';
-          return '<tr><td><code>' + esc(upstream.id) + '</code><div class="status">' + esc(upstream.name || '') + '</div></td><td>' + esc(upstream.protocol_type) + '</td><td>' + esc(upstream.plugin_id) + '<div class="status">' + esc(upstream.provider || '') + '</div></td><td><code>' + esc(upstream.base_url || '未配置') + '</code></td><td><code>' + esc(upstream.credential_id || '未配置') + '</code><br><span class="pill ' + (upstream.credential_configured ? 'ok' : 'danger') + '">' + (upstream.credential_configured ? '已配置' : '缺少') + '</span></td><td><span class="pill ' + statusClass(upstream.status) + '">' + esc(upstream.status) + '</span></td><td>' + esc(upstream.models_active + '/' + upstream.models_total) + '</td><td><div class="actions"><button class="secondary compact" data-upstream-edit="' + esc(upstream.id) + '">编辑</button><button class="danger compact" data-upstream-delete="' + esc(upstream.id) + '"' + deleteDisabled + '>删除</button></div></td></tr>';
+          return '<tr><td><code>' + esc(upstream.id) + '</code><div class="status">' + esc(upstream.name || '') + '</div></td><td>' + esc(upstream.plugin_id) + '<div class="status">' + esc(upstream.provider || '') + '</div></td><td><code>' + esc(upstream.base_url || '未配置') + '</code></td><td><code>' + esc(upstream.credential_id || '未配置') + '</code><br><span class="pill ' + (upstream.credential_configured ? 'ok' : 'danger') + '">' + (upstream.credential_configured ? '已配置' : '缺少') + '</span></td><td><span class="pill ' + statusClass(upstream.status) + '">' + esc(upstream.status) + '</span></td><td>' + esc(upstream.models_active + '/' + upstream.models_total) + '</td><td><div class="actions"><button class="secondary compact" data-upstream-edit="' + esc(upstream.id) + '">编辑</button><button class="danger compact" data-upstream-delete="' + esc(upstream.id) + '"' + deleteDisabled + '>删除</button></div></td></tr>';
         }).join('') : '<tr><td colspan="8" class="empty">暂无上游配置。</td></tr>';
       }
 
       function populateUpstreamSelect() {
         var select = document.getElementById('model-upstream-select');
         var upstreams = (state.overview && state.overview.upstreams) || [];
-        select.innerHTML = upstreams.length ? '<option value="">-- 选择上游 --</option>' + upstreams.map(function (u) { return '<option value="' + esc(u.id) + '">' + esc(u.name || u.id) + ' (' + esc(u.protocol_type) + ')</option>'; }).join('') : '<option value="">-- 暂无上游，请先创建 --</option>';
+        select.innerHTML = upstreams.length ? '<option value="">-- 选择上游 --</option>' + upstreams.map(function (u) { return '<option value="' + esc(u.id) + '">' + esc(u.name || u.id) + ' (' + esc(u.plugin_id) + ')</option>'; }).join('') : '<option value="">-- 暂无上游，请先创建 --</option>';
       }
 
       function renderModels() {
@@ -1916,7 +1912,7 @@ const ADMIN_APP_HTML = `<!doctype html>
         document.getElementById('model-upstreams').innerHTML = renderUpstreams((state.overview && state.overview.upstreams) || []);
         populateUpstreamSelect();
         body.innerHTML = state.models.length ? state.models.map(function (model) {
-          var routes = (model.routes || []).map(function (route) { return '<span class="pill">' + esc(route.upstream_id + ' / ' + route.provider_model) + '</span><span class="pill">' + esc(route.protocol_type) + '</span><span class="pill ' + (route.credential_configured ? 'ok' : 'danger') + '">' + (route.credential_configured ? '上游凭证已配置' : '上游缺少凭证') + '</span>'; }).join('<br>');
+          var routes = (model.routes || []).map(function (route) { return '<span class="pill">' + esc(route.upstream_id + ' / ' + route.provider_model) + '</span><span class="pill">' + esc(route.plugin_id) + '</span><span class="pill ' + (route.credential_configured ? 'ok' : 'danger') + '">' + (route.credential_configured ? '上游凭证已配置' : '上游缺少凭证') + '</span>'; }).join('<br>');
           return '<tr><td><code>' + esc(model.alias) + '</code></td><td>' + esc(model.modality) + '</td><td><span class="pill ' + statusClass(model.status) + '">' + esc(model.status) + '</span></td><td>' + routes + '</td><td><div class="actions"><button class="secondary compact" data-model-edit="' + esc(model.alias) + '">编辑</button><button class="danger compact" data-model-delete="' + esc(model.alias) + '">删除</button></div></td></tr>';
         }).join('') : '<tr><td colspan="5" class="empty">暂无模型。</td></tr>';
         if (state.models[0] && !document.getElementById('model-json').value.trim()) fillModelEditor(state.models[0].alias);
@@ -1930,7 +1926,7 @@ const ADMIN_APP_HTML = `<!doctype html>
           return '<div>' +
             '<span class="pill ' + statusClass(upstream.status) + '">' + esc(upstream.status) + '</span>' +
             '<strong>' + esc(upstream.name || upstream.id) + '</strong>' +
-            '<div class="status"><code>' + esc(upstream.id) + '</code> · ' + esc(upstream.protocol_type) + ' · ' + esc(upstream.plugin_id) + '</div>' +
+            '<div class="status"><code>' + esc(upstream.id) + '</code> · ' + esc(upstream.plugin_id) + '</div>' +
             '<div class="status">Base URL: <code>' + esc(upstream.base_url || '未配置') + '</code></div>' +
             '<div class="status">凭证: <code>' + esc(upstream.credential_id || '未配置') + '</code> <span class="pill ' + (upstream.credential_configured ? 'ok' : 'danger') + '">' + (upstream.credential_configured ? '已配置' : '缺少') + '</span></div>' +
             '<div class="status">模型 ' + esc(upstream.models_active + '/' + upstream.models_total) + '</div>' +
@@ -1981,7 +1977,7 @@ const ADMIN_APP_HTML = `<!doctype html>
       async function resetModels() { if (!confirm('确定重置模型配置？')) return; await api('/admin/api/models/reset', { method: 'POST' }); document.getElementById('model-json').value = ''; await loadAll(); setStatus('模型配置已重置。', 'ok'); }
 
       async function saveUpstreamFromForm() {
-        var upstream = { id: value('upstream-admin-id'), name: value('upstream-admin-name'), protocol_type: value('upstream-admin-protocol'), plugin_id: value('upstream-admin-plugin'), provider: value('upstream-admin-provider'), base_url: value('upstream-admin-base-url'), credential_id: value('upstream-admin-credential'), status: value('upstream-admin-status') };
+        var upstream = { id: value('upstream-admin-id'), name: value('upstream-admin-name'), plugin_id: value('upstream-admin-plugin'), provider: value('upstream-admin-provider'), base_url: value('upstream-admin-base-url'), credential_id: value('upstream-admin-credential'), status: value('upstream-admin-status') };
         await api('/admin/api/upstreams', { method: 'POST', body: JSON.stringify({ upstream: upstream }) });
         await loadAll();
         setStatus('上游已保存：' + upstream.id, 'ok');
@@ -1990,7 +1986,6 @@ const ADMIN_APP_HTML = `<!doctype html>
       function resetUpstreamForm() {
         document.getElementById('upstream-admin-id').value = '';
         document.getElementById('upstream-admin-name').value = '';
-        document.getElementById('upstream-admin-protocol').value = 'openai-compatible';
         document.getElementById('upstream-admin-plugin').value = 'openai-compatible';
         document.getElementById('upstream-admin-provider').value = '';
         document.getElementById('upstream-admin-base-url').value = '';
@@ -2027,7 +2022,7 @@ const ADMIN_APP_HTML = `<!doctype html>
 
       function fillModelEditor(alias) { var model = state.models.find(function (item) { return item.alias === alias; }); if (!model) return; var route = model.routes && model.routes[0] ? model.routes[0] : {}; document.getElementById('model-json').value = JSON.stringify(toModelInput(model), null, 2); document.getElementById('model-alias').value = model.alias; document.getElementById('model-modality').value = model.modality; document.getElementById('model-status').value = model.status; document.getElementById('model-stream').value = String(model.supports_stream !== false); var select = document.getElementById('model-upstream-select'); if (select.options.length > 1) { select.value = route.upstream_id || ''; } document.getElementById('route-provider-model').value = route.provider_model || ''; document.getElementById('route-priority').value = route.priority || 1; }
       function toModelInput(model) { var route = model.routes && model.routes[0] ? model.routes[0] : {}; return { upstream_id: route.upstream_id, alias: model.alias, provider_model: route.provider_model, modality: model.modality, supports_stream: model.supports_stream, status: model.status, priority: route.priority, weight: route.weight }; }
-      function fillUpstreamEditor(id) { var upstreams = (state.overview && state.overview.upstreams) || []; var upstream = upstreams.find(function (item) { return item.id === id; }); if (!upstream) return; document.getElementById('upstream-admin-id').value = upstream.id || ''; document.getElementById('upstream-admin-name').value = upstream.name || ''; document.getElementById('upstream-admin-protocol').value = upstream.protocol_type || ''; document.getElementById('upstream-admin-plugin').value = upstream.plugin_id || ''; document.getElementById('upstream-admin-provider').value = upstream.provider || ''; document.getElementById('upstream-admin-base-url').value = upstream.base_url || ''; document.getElementById('upstream-admin-credential').value = upstream.credential_id || ''; document.getElementById('upstream-admin-status').value = upstream.status || 'active'; }
+      function fillUpstreamEditor(id) { var upstreams = (state.overview && state.overview.upstreams) || []; var upstream = upstreams.find(function (item) { return item.id === id; }); if (!upstream) return; document.getElementById('upstream-admin-id').value = upstream.id || ''; document.getElementById('upstream-admin-name').value = upstream.name || ''; document.getElementById('upstream-admin-plugin').value = upstream.plugin_id || ''; document.getElementById('upstream-admin-provider').value = upstream.provider || ''; document.getElementById('upstream-admin-base-url').value = upstream.base_url || ''; document.getElementById('upstream-admin-credential').value = upstream.credential_id || ''; document.getElementById('upstream-admin-status').value = upstream.status || 'active'; }
       function showSection(section) { section = titles[section] ? section : 'dashboard'; document.querySelectorAll('.section').forEach(function (el) { el.classList.toggle('active', el.id === section); }); document.querySelectorAll('.nav a').forEach(function (el) { el.classList.toggle('active', el.getAttribute('data-section') === section); }); document.getElementById('page-title').textContent = titles[section]; }
       function toggleTheme() { var next = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark'; document.documentElement.setAttribute('data-theme', next); localStorage.setItem('teaven_admin_theme', next); document.getElementById('theme-toggle').textContent = next === 'dark' ? '切换浅色' : '切换深色'; }
       function stat(label, value) { return '<div class="stat"><strong>' + esc(value == null ? 0 : value) + '</strong><span>' + esc(label) + '</span></div>'; }
@@ -2596,7 +2591,7 @@ const ADMIN_HTML = `<!doctype html>
       <div class="card span-12">
         <h2>MODEL_CONFIG_JSON 校验器</h2>
         <p class="subtitle">在部署为 MODEL_CONFIG_JSON 之前，先粘贴 GatewayConfig JSON 对象进行校验。</p>
-        <textarea id="config-json" spellcheck="false" placeholder='{"upstreams":[{"id":"openai-compatible-default","name":"OpenAI Compatible Default","protocol_type":"openai-compatible","plugin_id":"openai-compatible","base_url":"https://api.openai.com/v1","credential_id":"env:OPENAI_COMPATIBLE_API_KEY","status":"active","models":[{"alias":"gpt-4o-mini","provider_model":"gpt-4o-mini","modality":"text","supports_stream":true,"priority":1,"weight":100,"status":"active"}]}]}'></textarea>
+        <textarea id="config-json" spellcheck="false" placeholder='{"upstreams":[{"id":"openai-compatible-default","name":"OpenAI Compatible Default","plugin_id":"openai-compatible","base_url":"https://api.openai.com/v1","credential_id":"env:OPENAI_COMPATIBLE_API_KEY","status":"active","models":[{"alias":"gpt-4o-mini","provider_model":"gpt-4o-mini","modality":"text","supports_stream":true,"priority":1,"weight":100,"status":"active"}]}]}'></textarea>
         <div class="toolbar" style="margin-top: 12px; justify-content: flex-start;">
           <button id="load-current-config" class="secondary" type="button">填入当前配置</button>
           <button id="validate-config" type="button">校验配置</button>

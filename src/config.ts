@@ -28,7 +28,6 @@ export async function loadGatewayConfig(env: Env): Promise<GatewayConfig> {
       {
         id: "openai-compatible-default",
         name: "OpenAI Compatible Default",
-        protocol_type: "openai-compatible",
         plugin_id: "openai-compatible",
         provider: "openai-compatible",
         base_url: env.OPENAI_COMPATIBLE_BASE_URL || "https://api.openai.com/v1",
@@ -130,9 +129,6 @@ export function validateGatewayConfig(config: GatewayConfig): void {
     }
     upstreamIds.add(upstream.id);
 
-    if (typeof upstream.protocol_type !== "string" || upstream.protocol_type.length === 0) {
-      throw new Error(`upstream ${upstream.id} 必须配置 protocol_type`);
-    }
     if (typeof upstream.plugin_id !== "string" || upstream.plugin_id.length === 0) {
       throw new Error(`upstream ${upstream.id} 必须配置 plugin_id`);
     }
@@ -167,7 +163,6 @@ function toProviderRoute(upstream: UpstreamConfig, model: UpstreamModelConfig): 
   return {
     upstream_id: upstream.id,
     upstream_name: upstream.name,
-    protocol_type: upstream.protocol_type,
     plugin_id: upstream.plugin_id,
     provider: upstream.provider,
     provider_model: model.provider_model,

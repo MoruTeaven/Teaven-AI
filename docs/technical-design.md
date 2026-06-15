@@ -577,7 +577,6 @@ Remote Plugin 必须遵循同一输入输出协议，并由平台做超时、重
     {
       "id": "siliconflow-cn",
       "name": "SiliconFlow CN",
-      "protocol_type": "openai-compatible",
       "plugin_id": "openai-compatible",
       "provider": "siliconflow",
       "base_url": "https://api.siliconflow.cn/v1",
@@ -597,7 +596,6 @@ Remote Plugin 必须遵循同一输入输出协议，并由平台做超时、重
     {
       "id": "modelark-image",
       "name": "ModelArk image",
-      "protocol_type": "async-polling-task",
       "plugin_id": "modelark",
       "provider": "modelark",
       "credential_id": "cred_modelark",
@@ -708,9 +706,7 @@ Remote Plugin 必须遵循同一输入输出协议，并由平台做超时、重
 | 字段 | 说明 |
 | --- | --- |
 | id | 上游实例 ID，例如 `openai-main`、`siliconflow-cn`。 |
-| plugin_id | Provider Plugin ID。 |
-| provider | 上游供应商展示名。 |
-| protocol_type | 协议类型，例如 `openai-compatible`、`private`、`async-polling-task`、`async-webhook-task`。 |
+| plugin_id | Provider Plugin ID。不同的插件处理不同的上游协议（如 OpenAI 兼容、异步轮询、webhook 等）。 |
 | name | 管理后台展示名。 |
 | base_url | 上游 API Base URL。 |
 | credential_id | 使用的上游凭证。 |
@@ -979,7 +975,6 @@ Remote Plugin 必须遵循同一输入输出协议，并由平台做超时、重
     {
       "id": "siliconflow-cn",
       "name": "SiliconFlow CN",
-      "protocol_type": "openai-compatible",
       "plugin_id": "openai-compatible",
       "provider": "siliconflow",
       "base_url": "https://api.siliconflow.cn/v1",

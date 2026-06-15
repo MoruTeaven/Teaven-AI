@@ -41,7 +41,6 @@ export interface UpstreamModelConfig {
 export interface UpstreamConfig {
   id: string;
   name?: string;
-  protocol_type: string;
   plugin_id: string;
   provider?: string;
   base_url?: string;
@@ -54,7 +53,6 @@ export interface UpstreamConfig {
 export interface ProviderRouteConfig {
   upstream_id: string;
   upstream_name?: string;
-  protocol_type: string;
   plugin_id: string;
   provider?: string;
   provider_model: string;
