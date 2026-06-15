@@ -1703,15 +1703,15 @@ const ADMIN_APP_HTML = `<!doctype html>
         <div class="grid">
           <div class="card span-12">
             <h3>上游列表</h3>
-            <p class="subtitle">先配置上游的 Provider Plugin、Base URL 和凭证引用，再到模型管理里把模型添加到上游。</p>
-            <div class="table-wrap"><table><thead><tr><th>ID</th><th>插件</th><th>Provider</th><th>Base URL</th><th>凭证</th><th>状态</th><th>模型</th><th>操作</th></tr></thead><tbody id="upstreams-table"></tbody></table></div>
+            <p class="subtitle">先配置上游的类型（Provider Plugin）、Base URL 和凭证引用，再到模型管理里把模型添加到上游。</p>
+            <div class="table-wrap"><table><thead><tr><th>ID</th><th>类型</th><th>Provider</th><th>Base URL</th><th>凭证</th><th>状态</th><th>模型</th><th>操作</th></tr></thead><tbody id="upstreams-table"></tbody></table></div>
           </div>
           <div class="card span-12">
             <h3>创建/更新上游</h3>
             <div class="form-grid">
               <label>上游 ID<input id="upstream-admin-id" value="openai-compatible-default"></label>
               <label>上游名称<input id="upstream-admin-name" value="OpenAI Compatible Default"></label>
-              <label>Provider Plugin<input id="upstream-admin-plugin" value="openai-compatible"></label>
+              <label>类型<select id="upstream-admin-plugin"></select></label>
               <label>供应商标识<input id="upstream-admin-provider" value="openai-compatible"></label>
               <label>Base URL<input id="upstream-admin-base-url" value="https://api.openai.com/v1"></label>
               <label>凭证引用<input id="upstream-admin-credential" value="env:OPENAI_COMPATIBLE_API_KEY"></label>
@@ -1726,7 +1726,7 @@ const ADMIN_APP_HTML = `<!doctype html>
         <div class="grid">
           <div class="card span-12">
             <h3>上游配置</h3>
-            <p class="subtitle">上游保存 Provider Plugin、Base URL 和凭证引用；模型只添加到对应上游下。</p>
+            <p class="subtitle">上游保存类型、Base URL 和凭证引用；模型只添加到对应上游下。</p>
             <div id="model-upstreams" class="stack"></div>
           </div>
           <div class="card span-12">
@@ -1894,39 +1894,53 @@ const ADMIN_APP_HTML = `<!doctype html>
 
       function renderUpstreamManagement() {
         var upstreams = (state.overview && state.overview.upstreams) || [];
+        var providers = (state.overview && state.overview.providers) || [];
+        populatePluginSelect();
         var body = document.getElementById('upstreams-table');
         body.innerHTML = upstreams.length ? upstreams.map(function (upstream) {
           var deleteDisabled = upstream.models_total > 0 ? ' disabled title="请先删除该上游下的模型"' : '';
-          return '<tr><td><code>' + esc(upstream.id) + '</code><div class="status">' + esc(upstream.name || '') + '</div></td><td>' + esc(upstream.plugin_id) + '<div class="status">' + esc(upstream.provider || '') + '</div></td><td><code>' + esc(upstream.base_url || '未配置') + '</code></td><td><code>' + esc(upstream.credential_id || '未配置') + '</code><br><span class="pill ' + (upstream.credential_configured ? 'ok' : 'danger') + '">' + (upstream.credential_configured ? '已配置' : '缺少') + '</span></td><td><span class="pill ' + statusClass(upstream.status) + '">' + esc(upstream.status) + '</span></td><td>' + esc(upstream.models_active + '/' + upstream.models_total) + '</td><td><div class="actions"><button class="secondary compact" data-upstream-edit="' + esc(upstream.id) + '">编辑</button><button class="danger compact" data-upstream-delete="' + esc(upstream.id) + '"' + deleteDisabled + '>删除</button></div></td></tr>';
+          var plugin = findProvider(providers, upstream.plugin_id);
+          return '<tr><td><code>' + esc(upstream.id) + '</code><div class="status">' + esc(upstream.name || '') + '</div></td><td>' + esc(plugin ? plugin.name : upstream.plugin_id) + '<div class="status">' + esc(upstream.provider || '') + '</div></td><td><code>' + esc(upstream.base_url || '未配置') + '</code></td><td><code>' + esc(upstream.credential_id || '未配置') + '</code><br><span class="pill ' + (upstream.credential_configured ? 'ok' : 'danger') + '">' + (upstream.credential_configured ? '已配置' : '缺少') + '</span></td><td><span class="pill ' + statusClass(upstream.status) + '">' + esc(upstream.status) + '</span></td><td>' + esc(upstream.models_active + '/' + upstream.models_total) + '</td><td><div class="actions"><button class="secondary compact" data-upstream-edit="' + esc(upstream.id) + '">编辑</button><button class="danger compact" data-upstream-delete="' + esc(upstream.id) + '"' + deleteDisabled + '>删除</button></div></td></tr>';
         }).join('') : '<tr><td colspan="8" class="empty">暂无上游配置。</td></tr>';
       }
 
       function populateUpstreamSelect() {
         var select = document.getElementById('model-upstream-select');
         var upstreams = (state.overview && state.overview.upstreams) || [];
-        select.innerHTML = upstreams.length ? '<option value="">-- 选择上游 --</option>' + upstreams.map(function (u) { return '<option value="' + esc(u.id) + '">' + esc(u.name || u.id) + ' (' + esc(u.plugin_id) + ')</option>'; }).join('') : '<option value="">-- 暂无上游，请先创建 --</option>';
+        var providers = (state.overview && state.overview.providers) || [];
+        select.innerHTML = upstreams.length ? '<option value="">-- 选择上游 --</option>' + upstreams.map(function (u) { var plugin = findProvider(providers, u.plugin_id); return '<option value="' + esc(u.id) + '">' + esc(u.name || u.id) + ' (' + esc(plugin ? plugin.name : u.plugin_id) + ')</option>'; }).join('') : '<option value="">-- 暂无上游，请先创建 --</option>';
+      }
+
+      function populatePluginSelect() {
+        var select = document.getElementById('upstream-admin-plugin');
+        var providers = (state.overview && state.overview.providers) || [];
+        select.innerHTML = providers.length ? providers.map(function (p) { return '<option value="' + esc(p.id) + '">' + esc(p.name) + ' (' + esc(p.id) + ')</option>'; }).join('') : '<option value="">-- 无可用插件 --</option>';
       }
 
       function renderModels() {
         var body = document.getElementById('models-table');
+        var providers = (state.overview && state.overview.providers) || [];
         document.getElementById('model-upstreams').innerHTML = renderUpstreams((state.overview && state.overview.upstreams) || []);
         populateUpstreamSelect();
+        populatePluginSelect();
         body.innerHTML = state.models.length ? state.models.map(function (model) {
-          var routes = (model.routes || []).map(function (route) { return '<span class="pill">' + esc(route.upstream_id + ' / ' + route.provider_model) + '</span><span class="pill">' + esc(route.plugin_id) + '</span><span class="pill ' + (route.credential_configured ? 'ok' : 'danger') + '">' + (route.credential_configured ? '上游凭证已配置' : '上游缺少凭证') + '</span>'; }).join('<br>');
+          var routes = (model.routes || []).map(function (route) { var plugin = findProvider(providers, route.plugin_id); return '<span class="pill">' + esc(route.upstream_id + ' / ' + route.provider_model) + '</span><span class="pill">' + esc(plugin ? plugin.name : route.plugin_id) + '</span><span class="pill ' + (route.credential_configured ? 'ok' : 'danger') + '">' + (route.credential_configured ? '上游凭证已配置' : '上游缺少凭证') + '</span>'; }).join('<br>');
           return '<tr><td><code>' + esc(model.alias) + '</code></td><td>' + esc(model.modality) + '</td><td><span class="pill ' + statusClass(model.status) + '">' + esc(model.status) + '</span></td><td>' + routes + '</td><td><div class="actions"><button class="secondary compact" data-model-edit="' + esc(model.alias) + '">编辑</button><button class="danger compact" data-model-delete="' + esc(model.alias) + '">删除</button></div></td></tr>';
         }).join('') : '<tr><td colspan="5" class="empty">暂无模型。</td></tr>';
         if (state.models[0] && !document.getElementById('model-json').value.trim()) fillModelEditor(state.models[0].alias);
       }
 
       function renderUpstreams(upstreams) {
+        var providers = (state.overview && state.overview.providers) || [];
         return upstreams.length ? upstreams.map(function (upstream) {
+          var plugin = findProvider(providers, upstream.plugin_id);
           var models = (upstream.models || []).map(function (model) {
             return '<span class="pill">' + esc(model.alias + ' -> ' + model.provider_model) + '</span>';
           }).join('');
           return '<div>' +
             '<span class="pill ' + statusClass(upstream.status) + '">' + esc(upstream.status) + '</span>' +
             '<strong>' + esc(upstream.name || upstream.id) + '</strong>' +
-            '<div class="status"><code>' + esc(upstream.id) + '</code> · ' + esc(upstream.plugin_id) + '</div>' +
+            '<div class="status"><code>' + esc(upstream.id) + '</code> · ' + esc(plugin ? plugin.name : upstream.plugin_id) + '</div>' +
             '<div class="status">Base URL: <code>' + esc(upstream.base_url || '未配置') + '</code></div>' +
             '<div class="status">凭证: <code>' + esc(upstream.credential_id || '未配置') + '</code> <span class="pill ' + (upstream.credential_configured ? 'ok' : 'danger') + '">' + (upstream.credential_configured ? '已配置' : '缺少') + '</span></div>' +
             '<div class="status">模型 ' + esc(upstream.models_active + '/' + upstream.models_total) + '</div>' +
@@ -1986,7 +2000,8 @@ const ADMIN_APP_HTML = `<!doctype html>
       function resetUpstreamForm() {
         document.getElementById('upstream-admin-id').value = '';
         document.getElementById('upstream-admin-name').value = '';
-        document.getElementById('upstream-admin-plugin').value = 'openai-compatible';
+        var pluginSelect = document.getElementById('upstream-admin-plugin');
+        if (pluginSelect.options.length > 0) pluginSelect.selectedIndex = 0;
         document.getElementById('upstream-admin-provider').value = '';
         document.getElementById('upstream-admin-base-url').value = '';
         document.getElementById('upstream-admin-credential').value = '';
@@ -2033,6 +2048,7 @@ const ADMIN_APP_HTML = `<!doctype html>
       function statusClass(status) { if (status === 'active' || status === 'succeeded' || status === 'running' || status === 'ok') return 'ok'; if (status === 'queued' || status === 'hidden' || status === 'warning') return 'warn'; if (status === 'disabled' || status === 'failed' || status === 'canceled' || status === 'expired' || status === 'error') return 'danger'; return ''; }
       function providerClass(status) { return statusClass(status); }
       function providerText(status) { return status === 'ok' ? '可用' : status === 'warning' ? '未使用' : status === 'error' ? '异常' : status; }
+      function findProvider(providers, pluginId) { return providers.find(function (p) { return p.id === pluginId; }) || null; }
       function featureClass(status) { return status === 'ready' ? 'ok' : status === 'blocked' ? 'danger' : 'warn'; }
       function featureText(status) { return status === 'ready' ? '就绪' : status === 'partial' ? '部分可用' : status === 'planned' ? '待实现' : status === 'blocked' ? '阻塞' : status; }
       function setStatus(message, kind) { statusEl.textContent = message; statusEl.className = 'subtitle' + (kind ? ' ' + kind : ''); }
