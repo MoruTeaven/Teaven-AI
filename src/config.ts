@@ -1,5 +1,6 @@
 import { invalidRequest } from "./http/errors";
 import { clearManagedGatewayConfig, loadManagedGatewayConfig, saveManagedGatewayConfig } from "./admin/store";
+import { createId } from "./utils/ids";
 import type { Env, GatewayConfig, ModelConfig, ProviderRouteConfig, UpstreamConfig, UpstreamModelConfig } from "./types";
 
 export async function loadGatewayConfig(env: Env): Promise<GatewayConfig> {
@@ -26,7 +27,7 @@ export async function loadGatewayConfig(env: Env): Promise<GatewayConfig> {
   return {
     upstreams: [
       {
-        id: "openai-compatible-default",
+        id: createId("up"),
         name: "OpenAI Compatible Default",
         plugin_id: "openai-compatible",
         provider: "openai-compatible",

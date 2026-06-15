@@ -33,6 +33,7 @@ import type {
   UpstreamModelConfig
 } from "../types";
 import { readJsonObject, requireString } from "../utils/request";
+import { createId } from "../utils/ids";
 
 const DEFAULT_TASK_LIMIT = 50;
 const MAX_TASK_LIMIT = 100;
@@ -945,7 +946,8 @@ function readUpstreamInput(input: Record<string, unknown>): Omit<UpstreamConfig,
     ? (rawUpstream as Record<string, unknown>)
     : input;
 
-  const id = requireString(input.upstream_id ?? upstream.id, "upstream_id");
+  const rawId = input.upstream_id ?? upstream.id;
+  const id = typeof rawId === "string" && rawId.length > 0 ? rawId : createId("up");
   return {
     id,
     name: optionalBodyString(upstream.name, "upstream.name") || id,
@@ -1704,12 +1706,12 @@ const ADMIN_APP_HTML = `<!doctype html>
           <div class="card span-12">
             <h3>上游列表</h3>
             <p class="subtitle">先配置上游的类型（Provider Plugin）、Base URL 和凭证引用，再到模型管理里把模型添加到上游。</p>
-            <div class="table-wrap"><table><thead><tr><th>ID</th><th>类型</th><th>Provider</th><th>Base URL</th><th>凭证</th><th>状态</th><th>模型</th><th>操作</th></tr></thead><tbody id="upstreams-table"></tbody></table></div>
+            <div class="table-wrap"><table><thead><tr><th>名称</th><th>类型</th><th>Provider</th><th>Base URL</th><th>凭证</th><th>状态</th><th>模型</th><th>操作</th></tr></thead><tbody id="upstreams-table"></tbody></table></div>
           </div>
           <div class="card span-12">
             <h3>创建/更新上游</h3>
             <div class="form-grid">
-              <label>上游 ID<input id="upstream-admin-id" value="openai-compatible-default"></label>
+              <input id="upstream-admin-id" type="hidden">
               <label>上游名称<input id="upstream-admin-name" value="OpenAI Compatible Default"></label>
               <label>类型<select id="upstream-admin-plugin"></select></label>
               <label>供应商标识<input id="upstream-admin-provider" value="openai-compatible"></label>
@@ -1900,7 +1902,7 @@ const ADMIN_APP_HTML = `<!doctype html>
         body.innerHTML = upstreams.length ? upstreams.map(function (upstream) {
           var deleteDisabled = upstream.models_total > 0 ? ' disabled title="请先删除该上游下的模型"' : '';
           var plugin = findProvider(providers, upstream.plugin_id);
-          return '<tr><td><code>' + esc(upstream.id) + '</code><div class="status">' + esc(upstream.name || '') + '</div></td><td>' + esc(plugin ? plugin.name : upstream.plugin_id) + '<div class="status">' + esc(upstream.provider || '') + '</div></td><td><code>' + esc(upstream.base_url || '未配置') + '</code></td><td><code>' + esc(upstream.credential_id || '未配置') + '</code><br><span class="pill ' + (upstream.credential_configured ? 'ok' : 'danger') + '">' + (upstream.credential_configured ? '已配置' : '缺少') + '</span></td><td><span class="pill ' + statusClass(upstream.status) + '">' + esc(upstream.status) + '</span></td><td>' + esc(upstream.models_active + '/' + upstream.models_total) + '</td><td><div class="actions"><button class="secondary compact" data-upstream-edit="' + esc(upstream.id) + '">编辑</button><button class="danger compact" data-upstream-delete="' + esc(upstream.id) + '"' + deleteDisabled + '>删除</button></div></td></tr>';
+          return '<tr><td><strong>' + esc(upstream.name || upstream.id) + '</strong></td><td>' + esc(plugin ? plugin.name : upstream.plugin_id) + '<div class="status">' + esc(upstream.provider || '') + '</div></td><td><code>' + esc(upstream.base_url || '未配置') + '</code></td><td><code>' + esc(upstream.credential_id || '未配置') + '</code><br><span class="pill ' + (upstream.credential_configured ? 'ok' : 'danger') + '">' + (upstream.credential_configured ? '已配置' : '缺少') + '</span></td><td><span class="pill ' + statusClass(upstream.status) + '">' + esc(upstream.status) + '</span></td><td>' + esc(upstream.models_active + '/' + upstream.models_total) + '</td><td><div class="actions"><button class="secondary compact" data-upstream-edit="' + esc(upstream.id) + '">编辑</button><button class="danger compact" data-upstream-delete="' + esc(upstream.id) + '"' + deleteDisabled + '>删除</button></div></td></tr>';
         }).join('') : '<tr><td colspan="8" class="empty">暂无上游配置。</td></tr>';
       }
 
@@ -1940,8 +1942,7 @@ const ADMIN_APP_HTML = `<!doctype html>
           return '<div>' +
             '<span class="pill ' + statusClass(upstream.status) + '">' + esc(upstream.status) + '</span>' +
             '<strong>' + esc(upstream.name || upstream.id) + '</strong>' +
-            '<div class="status"><code>' + esc(upstream.id) + '</code> · ' + esc(plugin ? plugin.name : upstream.plugin_id) + '</div>' +
-            '<div class="status">Base URL: <code>' + esc(upstream.base_url || '未配置') + '</code></div>' +
+            '<div class="status">' + esc(plugin ? plugin.name : upstream.plugin_id) + ' · Base URL: <code>' + esc(upstream.base_url || '未配置') + '</code></div>' +
             '<div class="status">凭证: <code>' + esc(upstream.credential_id || '未配置') + '</code> <span class="pill ' + (upstream.credential_configured ? 'ok' : 'danger') + '">' + (upstream.credential_configured ? '已配置' : '缺少') + '</span></div>' +
             '<div class="status">模型 ' + esc(upstream.models_active + '/' + upstream.models_total) + '</div>' +
             '<div>' + models + '</div>' +
@@ -1991,15 +1992,16 @@ const ADMIN_APP_HTML = `<!doctype html>
       async function resetModels() { if (!confirm('确定重置模型配置？')) return; await api('/admin/api/models/reset', { method: 'POST' }); document.getElementById('model-json').value = ''; await loadAll(); setStatus('模型配置已重置。', 'ok'); }
 
       async function saveUpstreamFromForm() {
-        var upstream = { id: value('upstream-admin-id'), name: value('upstream-admin-name'), plugin_id: value('upstream-admin-plugin'), provider: value('upstream-admin-provider'), base_url: value('upstream-admin-base-url'), credential_id: value('upstream-admin-credential'), status: value('upstream-admin-status') };
+        var existingId = value('upstream-admin-id');
+        var upstream = { upstream_id: existingId || undefined, id: existingId || undefined, name: value('upstream-admin-name'), plugin_id: value('upstream-admin-plugin'), provider: value('upstream-admin-provider'), base_url: value('upstream-admin-base-url'), credential_id: value('upstream-admin-credential'), status: value('upstream-admin-status') };
         await api('/admin/api/upstreams', { method: 'POST', body: JSON.stringify({ upstream: upstream }) });
         await loadAll();
-        setStatus('上游已保存：' + upstream.id, 'ok');
+        setStatus('上游已保存：' + upstream.name, 'ok');
       }
 
       function resetUpstreamForm() {
         document.getElementById('upstream-admin-id').value = '';
-        document.getElementById('upstream-admin-name').value = '';
+        document.getElementById('upstream-admin-name').value = 'OpenAI Compatible Default';
         var pluginSelect = document.getElementById('upstream-admin-plugin');
         if (pluginSelect.options.length > 0) pluginSelect.selectedIndex = 0;
         document.getElementById('upstream-admin-provider').value = '';
