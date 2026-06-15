@@ -1863,6 +1863,20 @@ const ADMIN_APP_HTML = `<!doctype html>
         <div class="actions" style="margin-top: 14px;"><button id="save-upstream-form" type="button">保存上游</button><button id="reset-upstream-form" class="secondary" type="button">清空表单</button></div>
       </section>
     </div>
+    <div id="upstream-view-modal" class="modal" aria-hidden="true">
+      <div class="modal-backdrop" data-modal-close></div>
+      <section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="upstream-view-title">
+        <div class="modal-head">
+          <div>
+            <div class="eyebrow">上游详情</div>
+            <h3 id="upstream-view-title">查看上游</h3>
+          </div>
+          <button class="secondary compact" type="button" data-modal-close>关闭</button>
+        </div>
+        <div id="upstream-view-content" class="stack"></div>
+        <pre id="upstream-view-json" class="json-view" style="margin-top: 14px;"></pre>
+      </section>
+    </div>
     <div id="model-modal" class="modal" aria-hidden="true">
       <div class="modal-backdrop" data-modal-close></div>
       <section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="model-modal-title">
@@ -2022,7 +2036,7 @@ const ADMIN_APP_HTML = `<!doctype html>
               '<div class="entity-row"><span>凭证</span><div><code>' + esc(upstream.credential_id || '未配置') + '</code><br><span class="pill ' + (upstream.credential_configured ? 'ok' : 'danger') + '">' + (upstream.credential_configured ? '已配置' : '缺少') + '</span></div></div>' +
               '<div class="entity-row"><span>模型</span><div><strong>' + esc(upstream.models_active + '/' + upstream.models_total) + '</strong><div>' + modelPills + '</div></div></div>' +
             '</div>' +
-            '<div class="actions entity-actions"><button type="button" class="secondary compact" data-upstream-edit="' + esc(upstream.id) + '">编辑</button><button type="button" class="danger compact" data-upstream-delete="' + esc(upstream.id) + '"' + deleteDisabled + '>删除</button></div>' +
+            '<div class="actions entity-actions"><button type="button" class="secondary compact" data-upstream-view="' + esc(upstream.id) + '">查看</button><button type="button" class="secondary compact" data-upstream-edit="' + esc(upstream.id) + '">编辑</button><button type="button" class="danger compact" data-upstream-delete="' + esc(upstream.id) + '"' + deleteDisabled + '>删除</button></div>' +
           '</article>';
         }).join('') : '<div class="empty">暂无上游配置。</div>';
       }
@@ -2193,7 +2207,8 @@ const ADMIN_APP_HTML = `<!doctype html>
       }
 
       async function handleUpstreamAction(event) {
-        var edit = event.target.closest('[data-upstream-edit]'); var del = event.target.closest('[data-upstream-delete]');
+        var view = event.target.closest('[data-upstream-view]'); var edit = event.target.closest('[data-upstream-edit]'); var del = event.target.closest('[data-upstream-delete]');
+        if (view) { viewUpstream(view.getAttribute('data-upstream-view')); }
         if (edit) { fillUpstreamEditor(edit.getAttribute('data-upstream-edit')); openModal('upstream-modal', 'upstream-modal-title', '编辑上游'); }
         if (del && !del.disabled && confirm('确定删除上游 ' + del.getAttribute('data-upstream-delete') + '？')) { await api('/admin/api/upstreams/' + encodeURIComponent(del.getAttribute('data-upstream-delete')), { method: 'DELETE' }); await loadAll(); }
       }
@@ -2204,6 +2219,23 @@ const ADMIN_APP_HTML = `<!doctype html>
       function fillModelEditor(alias) { var model = state.models.find(function (item) { return item.alias === alias; }); if (!model) return; var route = model.routes && model.routes[0] ? model.routes[0] : {}; document.getElementById('model-json').value = JSON.stringify(toModelInput(model), null, 2); document.getElementById('model-alias').value = model.alias; document.getElementById('model-modality').value = model.modality; document.getElementById('model-status').value = model.status; document.getElementById('model-stream').value = String(model.supports_stream !== false); var select = document.getElementById('model-upstream-select'); if (select.options.length > 1) { select.value = route.upstream_id || ''; } document.getElementById('route-provider-model').value = route.provider_model || ''; document.getElementById('route-priority').value = route.priority || 1; }
       function toModelInput(model) { var route = model.routes && model.routes[0] ? model.routes[0] : {}; return { upstream_id: route.upstream_id, alias: model.alias, provider_model: route.provider_model, modality: model.modality, supports_stream: model.supports_stream, status: model.status, priority: route.priority, weight: route.weight }; }
       function fillUpstreamEditor(id) { var upstreams = (state.overview && state.overview.upstreams) || []; var upstream = upstreams.find(function (item) { return item.id === id; }); if (!upstream) return; document.getElementById('upstream-admin-id').value = upstream.id || ''; document.getElementById('upstream-admin-name').value = upstream.name || ''; document.getElementById('upstream-admin-plugin').value = upstream.plugin_id || ''; document.getElementById('upstream-admin-base-url').value = upstream.base_url || ''; document.getElementById('upstream-admin-credential').value = upstream.credential_id || ''; document.getElementById('upstream-admin-status').value = upstream.status || 'active'; }
+      function viewUpstream(id) { var upstream = findOverviewUpstream(id); if (!upstream) { setStatus('未找到上游：' + id, 'error'); return; } var raw = findConfigUpstream(id) || upstream; var name = upstream.name || upstream.id; document.getElementById('upstream-view-title').textContent = '查看上游：' + name; document.getElementById('upstream-view-content').innerHTML = renderUpstreamDetail(upstream, raw); document.getElementById('upstream-view-json').textContent = JSON.stringify(toUpstreamDetailJson(upstream, raw), null, 2); openModal('upstream-view-modal', 'upstream-view-title', '查看上游：' + name); }
+      function renderUpstreamDetail(upstream, raw) { var providers = (state.overview && state.overview.providers) || []; var plugin = findProvider(providers, upstream.plugin_id); var models = (raw && raw.models) || upstream.models || []; var modelRows = models.length ? models.map(function (model) { return '<tr><td><code>' + esc(model.alias) + '</code></td><td><code>' + esc(model.provider_model) + '</code></td><td>' + esc(modalityText(model.modality)) + '</td><td><span class="pill ' + statusClass(model.status || 'active') + '">' + esc(statusText(model.status || 'active')) + '</span></td><td>' + (model.supports_stream !== false ? '支持' : '不支持') + '</td><td>' + esc(model.priority == null ? '未设置' : model.priority) + '</td><td>' + esc(model.weight == null ? '未设置' : model.weight) + '</td></tr>'; }).join('') : '<tr><td colspan="7" class="empty">暂无模型。</td></tr>'; return '<div class="entity-meta">' +
+          '<div class="entity-row"><span>ID</span><code>' + esc(upstream.id) + '</code></div>' +
+          '<div class="entity-row"><span>名称</span><strong>' + esc(upstream.name || upstream.id) + '</strong></div>' +
+          '<div class="entity-row"><span>类型</span><strong>' + esc(plugin ? plugin.name : upstream.plugin_id) + '</strong></div>' +
+          '<div class="entity-row"><span>插件 ID</span><code>' + esc(upstream.plugin_id) + '</code></div>' +
+          '<div class="entity-row"><span>基础地址</span><code>' + esc(upstream.base_url || '未配置') + '</code></div>' +
+          '<div class="entity-row"><span>凭证</span><div><code>' + esc(upstream.credential_id || '未配置') + '</code><br><span class="pill ' + (upstream.credential_configured ? 'ok' : 'danger') + '">' + (upstream.credential_configured ? '已配置' : '缺少') + '</span></div></div>' +
+          '<div class="entity-row"><span>状态</span><span class="pill ' + statusClass(upstream.status) + '">' + esc(statusText(upstream.status)) + '</span></div>' +
+          '<div class="entity-row"><span>模型</span><strong>' + esc(upstream.models_active + '/' + upstream.models_total) + '</strong></div>' +
+          '<div class="entity-row"><span>活跃路由</span><strong>' + esc(upstream.routes_active == null ? 0 : upstream.routes_active) + '</strong></div>' +
+        '</div>' +
+        '<div><h3>模型明细</h3><div class="table-wrap"><table><thead><tr><th>别名</th><th>上游模型</th><th>模态</th><th>状态</th><th>流式</th><th>优先级</th><th>权重</th></tr></thead><tbody>' + modelRows + '</tbody></table></div></div>' +
+        '<div class="status">下方 JSON 为当前上游完整配置。</div>'; }
+      function toUpstreamDetailJson(upstream, raw) { return Object.assign({}, raw || {}, { credential_configured: upstream.credential_configured, models_total: upstream.models_total, models_active: upstream.models_active, routes_active: upstream.routes_active == null ? 0 : upstream.routes_active }); }
+      function findOverviewUpstream(id) { var upstreams = (state.overview && state.overview.upstreams) || []; return upstreams.find(function (item) { return item.id === id; }) || null; }
+      function findConfigUpstream(id) { var upstreams = (state.config && state.config.config && state.config.config.upstreams) || []; return upstreams.find(function (item) { return item.id === id; }) || null; }
       function openModal(id, titleId, title) { var modal = document.getElementById(id); if (!modal) return; document.getElementById(titleId).textContent = title; modal.classList.add('open'); modal.setAttribute('aria-hidden', 'false'); document.body.classList.add('modal-open'); var firstField = modal.querySelector('.modal-form input:not([type="hidden"]), .modal-form select, .modal-form textarea'); if (firstField) firstField.focus(); }
       function closeModal(id) { var modals = id ? [document.getElementById(id)] : Array.prototype.slice.call(document.querySelectorAll('.modal.open')); modals.forEach(function (modal) { if (!modal) return; modal.classList.remove('open'); modal.setAttribute('aria-hidden', 'true'); }); if (!document.querySelector('.modal.open')) document.body.classList.remove('modal-open'); }
       function showSection(section) { section = titles[section] ? section : 'dashboard'; document.querySelectorAll('.section').forEach(function (el) { el.classList.toggle('active', el.id === section); }); document.querySelectorAll('.nav a').forEach(function (el) { el.classList.toggle('active', el.getAttribute('data-section') === section); }); document.getElementById('page-title').textContent = titles[section]; }
