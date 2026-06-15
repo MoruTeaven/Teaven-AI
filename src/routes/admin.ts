@@ -623,7 +623,7 @@ async function handleListAdminApiKeys(env: Env, requestId: string): Promise<Resp
 async function handleUpdateAdminApiKey(apiKeyId: string, request: Request, env: Env, requestId: string): Promise<Response> {
   const apiKey = await getAdminApiKey(env, apiKeyId);
   if (!apiKey) {
-    throw notFound("API Key 不存在");
+    throw notFound("接口密钥不存在");
   }
 
   const body = await readJsonObject(request);
@@ -756,7 +756,7 @@ async function handleProviderHealth(pluginId: string, env: Env, requestId: strin
         health.adapter_check = "passed";
       } catch (error) {
         health.status = "error";
-        health.adapter_check = error instanceof Error ? error.message : "health check failed";
+        health.adapter_check = error instanceof Error ? error.message : "健康检查失败";
       }
     }
   }
@@ -922,7 +922,7 @@ function normalizeModelInput(value: unknown): AdminModelMutation {
   const provider_model = requireString(input.provider_model, "provider_model");
   const modality = requireString(input.modality, "modality");
   if (!["text", "image", "video", "file"].includes(modality)) {
-    throw invalidRequest("modality 必须是 text、image、video 或 file", "modality");
+    throw invalidRequest("模态必须是 text、image、video 或 file", "modality");
   }
 
   const model: UpstreamModelConfig = {
@@ -979,7 +979,7 @@ function normalizeModelStatus(value: unknown): UpstreamModelConfig["status"] {
   if (value === "active" || value === "hidden" || value === "disabled") {
     return value;
   }
-  throw invalidRequest("model status 无效", "status");
+  throw invalidRequest("模型状态无效", "status");
 }
 
 function normalizeUpstreamStatus(value: unknown): UpstreamConfig["status"] {
@@ -989,7 +989,7 @@ function normalizeUpstreamStatus(value: unknown): UpstreamConfig["status"] {
   if (value === "active" || value === "disabled" || value === "degraded") {
     return value;
   }
-  throw invalidRequest("upstream status 无效", "status");
+  throw invalidRequest("上游状态无效", "status");
 }
 
 function normalizeUserRole(value: unknown): "owner" | "admin" | "member" {
@@ -999,7 +999,7 @@ function normalizeUserRole(value: unknown): "owner" | "admin" | "member" {
   if (value === "owner" || value === "admin" || value === "member") {
     return value;
   }
-  throw invalidRequest("role 无效", "role");
+  throw invalidRequest("角色无效", "role");
 }
 
 function normalizeUserStatus(value: unknown): "active" | "disabled" {
@@ -1009,14 +1009,14 @@ function normalizeUserStatus(value: unknown): "active" | "disabled" {
   if (value === "active" || value === "disabled") {
     return value;
   }
-  throw invalidRequest("user status 无效", "status");
+  throw invalidRequest("用户状态无效", "status");
 }
 
 function normalizeApiKeyStatus(value: unknown): "active" | "disabled" | "expired" {
   if (value === "active" || value === "disabled" || value === "expired") {
     return value;
   }
-  throw invalidRequest("api key status 无效", "status");
+  throw invalidRequest("接口密钥状态无效", "status");
 }
 
 function normalizeAllowedModels(value: unknown): string[] | undefined {
@@ -1088,13 +1088,13 @@ function buildWarnings(env: Env, config: GatewayConfig): string[] {
     warnings.push("未配置 ADMIN_TOKEN，管理后台无法登录。");
   }
   if (!env.DEV_API_KEY && env.AUTH_MODE !== "none") {
-    warnings.push("未配置 DEV_API_KEY，用户 API 认证将失败。");
+    warnings.push("未配置 DEV_API_KEY，用户接口认证将失败。");
   }
   if (!env.AI_GATEWAY_KV) {
-    warnings.push("未绑定 AI_GATEWAY_KV，后台保存的模型、用户、API Key、用量和任务记录仅保存在内存中。");
+    warnings.push("未绑定 AI_GATEWAY_KV，后台保存的模型、用户、接口密钥、用量和任务记录仅保存在内存中。");
   }
   if (!env.DB) {
-    warnings.push("未绑定 DB，租户、API key、配额和计费管理尚无法持久化。");
+    warnings.push("未绑定 DB，租户、接口密钥、配额和计费管理尚无法持久化。");
   }
   if (!env.TASK_QUEUE) {
     warnings.push("未绑定 TASK_QUEUE，异步任务只会入库，不会被后台队列处理。");
@@ -1172,9 +1172,9 @@ function buildFeatureMatrix(env: Env): Array<Record<string, unknown>> {
       detail: env.AI_GATEWAY_KV ? "支持后台保存上游模型配置" : env.MODEL_CONFIG_JSON ? "使用 MODEL_CONFIG_JSON" : "使用默认单上游模型"
     },
     {
-      name: "用户/API Key 管理",
+      name: "用户/接口密钥管理",
       status: env.AI_GATEWAY_KV ? "ready" : "partial",
-      detail: env.AI_GATEWAY_KV ? "用户和 Key 持久化到 KV" : "当前为内存存储，适合本地开发"
+      detail: env.AI_GATEWAY_KV ? "用户和接口密钥持久化到 KV" : "当前为内存存储，适合本地开发"
     },
     {
       name: "模型用量统计",
@@ -1749,7 +1749,7 @@ const ADMIN_APP_HTML = `<!doctype html>
           <div class="card span-8"><h3>功能状态</h3><div id="features" class="stack"></div></div>
           <div class="card span-4"><h3>告警</h3><div id="warnings" class="stack"></div></div>
           <div class="card span-6"><h3>网关状态</h3><div id="gateway-meta" class="stack"></div></div>
-          <div class="card span-6"><h3>Provider</h3><div id="providers" class="stack"></div></div>
+          <div class="card span-6"><h3>供应商</h3><div id="providers" class="stack"></div></div>
           <div class="card span-12"><h3>上游配置</h3><div id="dashboard-upstreams" class="stack"></div></div>
         </div>
       </section>
@@ -1760,7 +1760,7 @@ const ADMIN_APP_HTML = `<!doctype html>
             <div class="card-head">
               <div>
                 <h3>上游列表</h3>
-                <p class="subtitle">先配置上游的类型、Base URL 和凭证引用，再到模型管理里把模型添加到上游。</p>
+                <p class="subtitle">先配置上游的类型、基础地址和凭证引用，再到模型管理里把模型添加到上游。</p>
               </div>
               <button id="open-upstream-modal" type="button">添加上游</button>
             </div>
@@ -1773,7 +1773,7 @@ const ADMIN_APP_HTML = `<!doctype html>
         <div class="grid">
           <div class="card span-12">
             <h3>上游配置</h3>
-            <p class="subtitle">上游保存类型、Base URL 和凭证引用；模型只添加到对应上游下。</p>
+            <p class="subtitle">上游保存类型、基础地址和凭证引用；模型只添加到对应上游下。</p>
             <div id="model-upstreams" class="stack"></div>
           </div>
           <div class="card span-12">
@@ -1806,14 +1806,14 @@ const ADMIN_APP_HTML = `<!doctype html>
             </div>
             <div id="users-list" class="entity-grid"></div>
           </div>
-          <div class="card span-12"><h3>API Key 列表</h3><p class="subtitle">API Key 由用户中心创建；管理后台只负责查看、启用、禁用和调整模型权限。</p><div id="keys-list" class="entity-grid"></div></div>
+          <div class="card span-12"><h3>接口密钥列表</h3><p class="subtitle">接口密钥由用户中心创建；管理后台只负责查看、启用、禁用和调整模型权限。</p><div id="keys-list" class="entity-grid"></div></div>
         </div>
       </section>
 
       <section id="usage" class="section">
         <div class="grid">
           <div class="card span-12"><h3>用量汇总</h3><div id="usage-stats" class="stat-grid"></div></div>
-          <div class="card span-7"><h3>按模型统计</h3><div class="table-wrap"><table><thead><tr><th>模型</th><th>请求数</th><th>总 Token</th><th>输入</th><th>输出</th><th>媒体单位</th></tr></thead><tbody id="usage-models"></tbody></table></div></div>
+          <div class="card span-7"><h3>按模型统计</h3><div class="table-wrap"><table><thead><tr><th>模型</th><th>总请求数</th><th>总令牌</th><th>输入令牌</th><th>输出令牌</th><th>媒体单位</th></tr></thead><tbody id="usage-models"></tbody></table></div></div>
           <div class="card span-5"><h3>最近用量记录</h3><div id="usage-recent" class="stack"></div></div>
         </div>
       </section>
@@ -1823,7 +1823,7 @@ const ADMIN_APP_HTML = `<!doctype html>
           <div class="card span-12">
             <h3>异步任务</h3>
             <div class="form-grid">
-              <label>状态<select id="task-status"><option value="">全部</option><option value="queued">queued</option><option value="running">running</option><option value="succeeded">succeeded</option><option value="failed">failed</option><option value="canceled">canceled</option><option value="expired">expired</option></select></label>
+              <label>状态<select id="task-status"><option value="">全部</option><option value="queued">排队中</option><option value="running">运行中</option><option value="succeeded">成功</option><option value="failed">失败</option><option value="canceled">已取消</option><option value="expired">已过期</option></select></label>
               <label>关键词<input id="task-query" placeholder="任务 ID / 模型 / 租户"></label>
               <label>数量<select id="task-limit"><option value="25">25</option><option value="50" selected>50</option><option value="100">100</option></select></label>
             </div>
@@ -1836,9 +1836,9 @@ const ADMIN_APP_HTML = `<!doctype html>
 
       <section id="config" class="section">
         <div class="grid">
-          <div class="card span-6"><h3>当前 GatewayConfig</h3><pre id="current-config" class="json-view">正在加载...</pre></div>
-          <div class="card span-6"><h3>API 调用示例</h3><pre id="example-request" class="json-view">正在加载...</pre></div>
-          <div class="card span-12"><h3>MODEL_CONFIG_JSON 校验器</h3><textarea id="config-json" spellcheck="false"></textarea><div class="actions" style="margin-top: 12px;"><button id="fill-current-config" class="secondary" type="button">填入当前配置</button><button id="validate-config" type="button">校验</button></div><pre id="config-output" class="json-view" style="margin-top: 12px;">尚未执行校验。</pre></div>
+          <div class="card span-6"><h3>当前网关配置</h3><pre id="current-config" class="json-view">正在加载...</pre></div>
+          <div class="card span-6"><h3>接口调用示例</h3><pre id="example-request" class="json-view">正在加载...</pre></div>
+          <div class="card span-12"><h3>模型配置 JSON 校验器</h3><textarea id="config-json" spellcheck="false"></textarea><div class="actions" style="margin-top: 12px;"><button id="fill-current-config" class="secondary" type="button">填入当前配置</button><button id="validate-config" type="button">校验</button></div><pre id="config-output" class="json-view" style="margin-top: 12px;">尚未执行校验。</pre></div>
         </div>
       </section>
     </main>
@@ -1847,7 +1847,7 @@ const ADMIN_APP_HTML = `<!doctype html>
       <section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="upstream-modal-title">
         <div class="modal-head">
           <div>
-            <div class="eyebrow">Upstream</div>
+            <div class="eyebrow">上游</div>
             <h3 id="upstream-modal-title">添加上游</h3>
           </div>
           <button class="secondary compact" type="button" data-modal-close>关闭</button>
@@ -1856,9 +1856,9 @@ const ADMIN_APP_HTML = `<!doctype html>
           <input id="upstream-admin-id" type="hidden">
           <label>上游名称<input id="upstream-admin-name" value="OpenAI Compatible Default"></label>
           <label>类型<select id="upstream-admin-plugin"></select></label>
-          <label>Base URL<input id="upstream-admin-base-url" value="https://api.openai.com/v1"></label>
+          <label>基础地址<input id="upstream-admin-base-url" value="https://api.openai.com/v1"></label>
           <label>凭证引用<input id="upstream-admin-credential" value="env:OPENAI_COMPATIBLE_API_KEY"></label>
-          <label>状态<select id="upstream-admin-status"><option value="active">active</option><option value="degraded">degraded</option><option value="disabled">disabled</option></select></label>
+          <label>状态<select id="upstream-admin-status"><option value="active">启用</option><option value="degraded">降级</option><option value="disabled">停用</option></select></label>
         </div>
         <div class="actions" style="margin-top: 14px;"><button id="save-upstream-form" type="button">保存上游</button><button id="reset-upstream-form" class="secondary" type="button">清空表单</button></div>
       </section>
@@ -1868,7 +1868,7 @@ const ADMIN_APP_HTML = `<!doctype html>
       <section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="model-modal-title">
         <div class="modal-head">
           <div>
-            <div class="eyebrow">Model</div>
+            <div class="eyebrow">模型</div>
             <h3 id="model-modal-title">添加模型</h3>
             <p class="subtitle">如需新上游，请先到上游管理创建。</p>
           </div>
@@ -1876,9 +1876,9 @@ const ADMIN_APP_HTML = `<!doctype html>
         </div>
         <div class="form-grid modal-form">
           <label>模型别名<input id="model-alias" placeholder="gpt-4o-mini"></label>
-          <label>Provider 模型名<input id="route-provider-model" placeholder="gpt-4o-mini"></label>
-          <label>模态<select id="model-modality"><option value="text">text</option><option value="image">image</option><option value="video">video</option><option value="file">file</option></select></label>
-          <label>模型状态<select id="model-status"><option value="active">active</option><option value="hidden">hidden</option><option value="disabled">disabled</option></select></label>
+          <label>上游模型名<input id="route-provider-model" placeholder="gpt-4o-mini"></label>
+          <label>模态<select id="model-modality"><option value="text">文本</option><option value="image">图片</option><option value="video">视频</option><option value="file">文件</option></select></label>
+          <label>模型状态<select id="model-status"><option value="active">启用</option><option value="hidden">隐藏</option><option value="disabled">停用</option></select></label>
           <label>流式<select id="model-stream"><option value="true">支持</option><option value="false">不支持</option></select></label>
           <label>优先级<input id="route-priority" type="number" value="1"></label>
           <label>所属上游<select id="model-upstream-select"></select></label>
@@ -1891,7 +1891,7 @@ const ADMIN_APP_HTML = `<!doctype html>
       <section class="modal-card narrow" role="dialog" aria-modal="true" aria-labelledby="user-modal-title">
         <div class="modal-head">
           <div>
-            <div class="eyebrow">User</div>
+            <div class="eyebrow">用户</div>
             <h3 id="user-modal-title">添加用户</h3>
           </div>
           <button class="secondary compact" type="button" data-modal-close>关闭</button>
@@ -1899,7 +1899,7 @@ const ADMIN_APP_HTML = `<!doctype html>
         <div class="form-grid single modal-form">
           <label>邮箱<input id="user-email" placeholder="admin@example.com"></label>
           <label>名称<input id="user-name" placeholder="管理员"></label>
-          <label>角色<select id="user-role"><option value="owner">owner</option><option value="admin">admin</option><option value="member" selected>member</option></select></label>
+          <label>角色<select id="user-role"><option value="owner">所有者</option><option value="admin">管理员</option><option value="member" selected>成员</option></select></label>
         </div>
         <div class="actions" style="margin-top: 14px;"><button id="create-user" type="button">创建用户</button></div>
       </section>
@@ -1995,11 +1995,11 @@ const ADMIN_APP_HTML = `<!doctype html>
 
       function renderDashboard() {
         var data = state.overview || { stats: {}, warnings: [], feature_matrix: [], providers: [], upstreams: [], gateway: {} };
-        document.getElementById('stats').innerHTML = stat('模型', data.stats.models_total) + stat('上游', data.stats.upstreams_total) + stat('用户', data.stats.users_total) + stat('活跃 Key', data.stats.api_keys_active) + stat('请求数', data.stats.usage_requests) + stat('Token', data.stats.usage_tokens) + stat('任务', data.stats.recent_tasks) + stat('Provider', data.stats.providers_total) + stat('失败任务', data.stats.tasks_failed);
+        document.getElementById('stats').innerHTML = stat('模型', data.stats.models_total) + stat('上游', data.stats.upstreams_total) + stat('用户', data.stats.users_total) + stat('活跃密钥', data.stats.api_keys_active) + stat('请求数', data.stats.usage_requests) + stat('令牌', data.stats.usage_tokens) + stat('任务', data.stats.recent_tasks) + stat('供应商', data.stats.providers_total) + stat('失败任务', data.stats.tasks_failed);
         document.getElementById('warnings').innerHTML = data.warnings.length ? data.warnings.map(function (item) { return '<div class="warning">' + esc(item) + '</div>'; }).join('') : '<span class="pill ok">暂无活跃告警</span>';
         document.getElementById('features').innerHTML = data.feature_matrix.map(function (item) { return '<div><span class="pill ' + featureClass(item.status) + '">' + esc(featureText(item.status)) + '</span><strong>' + esc(item.name) + '</strong><div class="status">' + esc(item.detail) + '</div></div>'; }).join('');
-        document.getElementById('gateway-meta').innerHTML = meta('认证模式', data.gateway.auth_mode) + meta('配置来源', data.gateway.config_source) + meta('任务存储', data.gateway.task_store) + meta('绑定资源', 'DB ' + yesNo(data.gateway.db_bound) + ', KV ' + yesNo(data.gateway.kv_bound) + ', Queue ' + yesNo(data.gateway.queue_bound) + ', R2 ' + yesNo(data.gateway.r2_bound));
-        document.getElementById('providers').innerHTML = data.providers.map(function (provider) { return '<div><span class="pill ' + providerClass(provider.status) + '">' + esc(providerText(provider.status)) + '</span><strong>' + esc(provider.name) + '</strong><div class="status">' + esc(provider.id) + ' · routes ' + esc(provider.routes_configured + '/' + provider.routes_active) + '</div></div>'; }).join('') || '<div class="empty">暂无 Provider。</div>';
+        document.getElementById('gateway-meta').innerHTML = meta('认证模式', data.gateway.auth_mode) + meta('配置来源', data.gateway.config_source) + meta('任务存储', taskStoreText(data.gateway.task_store)) + meta('绑定资源', '数据库 ' + yesNo(data.gateway.db_bound) + ', KV ' + yesNo(data.gateway.kv_bound) + ', 队列 ' + yesNo(data.gateway.queue_bound) + ', R2 ' + yesNo(data.gateway.r2_bound));
+        document.getElementById('providers').innerHTML = data.providers.map(function (provider) { return '<div><span class="pill ' + providerClass(provider.status) + '">' + esc(providerText(provider.status)) + '</span><strong>' + esc(provider.name) + '</strong><div class="status">' + esc(provider.id) + ' · 路由 ' + esc(provider.routes_configured + '/' + provider.routes_active) + '</div></div>'; }).join('') || '<div class="empty">暂无供应商。</div>';
         document.getElementById('dashboard-upstreams').innerHTML = renderUpstreams(data.upstreams || []);
       }
 
@@ -2015,10 +2015,10 @@ const ADMIN_APP_HTML = `<!doctype html>
           if ((upstream.models || []).length > 4) modelPills += '<span class="pill">+' + esc(upstream.models.length - 4) + '</span>';
           if (!modelPills) modelPills = '<span class="status">暂无模型</span>';
           return '<article class="entity-card">' +
-            '<header><div class="entity-title"><strong>' + esc(upstream.name || upstream.id) + '</strong><div class="status"><code>' + esc(upstream.id) + '</code></div></div><span class="pill ' + statusClass(upstream.status) + '">' + esc(upstream.status) + '</span></header>' +
+            '<header><div class="entity-title"><strong>' + esc(upstream.name || upstream.id) + '</strong><div class="status"><code>' + esc(upstream.id) + '</code></div></div><span class="pill ' + statusClass(upstream.status) + '">' + esc(statusText(upstream.status)) + '</span></header>' +
             '<div class="entity-meta">' +
               '<div class="entity-row"><span>类型</span><strong>' + esc(plugin ? plugin.name : upstream.plugin_id) + '</strong></div>' +
-              '<div class="entity-row"><span>Base URL</span><code>' + esc(upstream.base_url || '未配置') + '</code></div>' +
+              '<div class="entity-row"><span>基础地址</span><code>' + esc(upstream.base_url || '未配置') + '</code></div>' +
               '<div class="entity-row"><span>凭证</span><div><code>' + esc(upstream.credential_id || '未配置') + '</code><br><span class="pill ' + (upstream.credential_configured ? 'ok' : 'danger') + '">' + (upstream.credential_configured ? '已配置' : '缺少') + '</span></div></div>' +
               '<div class="entity-row"><span>模型</span><div><strong>' + esc(upstream.models_active + '/' + upstream.models_total) + '</strong><div>' + modelPills + '</div></div></div>' +
             '</div>' +
@@ -2049,12 +2049,12 @@ const ADMIN_APP_HTML = `<!doctype html>
         list.innerHTML = state.models.length ? state.models.map(function (model) {
           var routes = (model.routes || []).map(function (route) {
             var plugin = findProvider(providers, route.plugin_id);
-            return '<div><span class="pill">' + esc((route.upstream_name || route.upstream_id || '未配置') + ' / ' + route.provider_model) + '</span><span class="pill">' + esc(plugin ? plugin.name : route.plugin_id) + '</span><span class="pill ' + (route.credential_configured ? 'ok' : 'danger') + '">' + (route.credential_configured ? '凭证已配置' : '缺少凭证') + '</span><span class="pill ' + statusClass(route.status) + '">' + esc(route.status) + '</span></div>';
+            return '<div><span class="pill">' + esc((route.upstream_name || route.upstream_id || '未配置') + ' / ' + route.provider_model) + '</span><span class="pill">' + esc(plugin ? plugin.name : route.plugin_id) + '</span><span class="pill ' + (route.credential_configured ? 'ok' : 'danger') + '">' + (route.credential_configured ? '凭证已配置' : '缺少凭证') + '</span><span class="pill ' + statusClass(route.status) + '">' + esc(statusText(route.status)) + '</span></div>';
           }).join('') || '<span class="status">暂无路由</span>';
           return '<article class="entity-card">' +
-            '<header><div class="entity-title"><code>' + esc(model.alias) + '</code><div class="status">Provider 路由 ' + esc((model.routes || []).length) + ' 条</div></div><span class="pill ' + statusClass(model.status) + '">' + esc(model.status) + '</span></header>' +
+            '<header><div class="entity-title"><code>' + esc(model.alias) + '</code><div class="status">上游路由 ' + esc((model.routes || []).length) + ' 条</div></div><span class="pill ' + statusClass(model.status) + '">' + esc(statusText(model.status)) + '</span></header>' +
             '<div class="entity-meta">' +
-              '<div class="entity-row"><span>模态</span><strong>' + esc(model.modality) + '</strong></div>' +
+              '<div class="entity-row"><span>模态</span><strong>' + esc(modalityText(model.modality)) + '</strong></div>' +
               '<div class="entity-row"><span>流式</span><strong>' + (model.supports_stream !== false ? '支持' : '不支持') + '</strong></div>' +
               '<div class="entity-row"><span>路由</span><div>' + routes + '</div></div>' +
             '</div>' +
@@ -2072,10 +2072,10 @@ const ADMIN_APP_HTML = `<!doctype html>
             return '<span class="pill">' + esc(model.alias + ' -> ' + model.provider_model) + '</span>';
           }).join('');
           return '<div>' +
-            '<span class="pill ' + statusClass(upstream.status) + '">' + esc(upstream.status) + '</span>' +
+            '<span class="pill ' + statusClass(upstream.status) + '">' + esc(statusText(upstream.status)) + '</span>' +
             '<strong>' + esc(upstream.name || upstream.id) + '</strong>' +
-            '<div class="status">' + esc(plugin ? plugin.name : upstream.plugin_id) + ' · Base URL: <code>' + esc(upstream.base_url || '未配置') + '</code></div>' +
-            '<div class="status">凭证: <code>' + esc(upstream.credential_id || '未配置') + '</code> <span class="pill ' + (upstream.credential_configured ? 'ok' : 'danger') + '">' + (upstream.credential_configured ? '已配置' : '缺少') + '</span></div>' +
+            '<div class="status">' + esc(plugin ? plugin.name : upstream.plugin_id) + ' · 基础地址：<code>' + esc(upstream.base_url || '未配置') + '</code></div>' +
+            '<div class="status">凭证：<code>' + esc(upstream.credential_id || '未配置') + '</code> <span class="pill ' + (upstream.credential_configured ? 'ok' : 'danger') + '">' + (upstream.credential_configured ? '已配置' : '缺少') + '</span></div>' +
             '<div class="status">模型 ' + esc(upstream.models_active + '/' + upstream.models_total) + '</div>' +
             '<div>' + models + '</div>' +
           '</div>';
@@ -2085,9 +2085,9 @@ const ADMIN_APP_HTML = `<!doctype html>
       function renderUsers() {
         document.getElementById('users-list').innerHTML = state.users.length ? state.users.map(function (user) {
           return '<article class="entity-card">' +
-            '<header><div class="entity-title"><strong>' + esc(user.email) + '</strong><div class="status">' + esc(user.name || user.id) + '</div></div><span class="pill ' + statusClass(user.status) + '">' + esc(user.status) + '</span></header>' +
+            '<header><div class="entity-title"><strong>' + esc(user.email) + '</strong><div class="status">' + esc(user.name || user.id) + '</div></div><span class="pill ' + statusClass(user.status) + '">' + esc(statusText(user.status)) + '</span></header>' +
             '<div class="entity-meta">' +
-              '<div class="entity-row"><span>角色</span><strong>' + esc(user.role) + '</strong></div>' +
+              '<div class="entity-row"><span>角色</span><strong>' + esc(roleText(user.role)) + '</strong></div>' +
               '<div class="entity-row"><span>租户</span><code>' + esc(user.tenant_id) + '</code></div>' +
             '</div>' +
             '<div class="actions entity-actions"><button type="button" class="secondary compact" data-user-toggle="' + esc(user.id) + '">' + (user.status === 'active' ? '禁用' : '启用') + '</button></div>' +
@@ -2095,28 +2095,28 @@ const ADMIN_APP_HTML = `<!doctype html>
         }).join('') : '<div class="empty">暂无用户。</div>';
         document.getElementById('keys-list').innerHTML = state.apiKeys.length ? state.apiKeys.map(function (key) {
           return '<article class="entity-card">' +
-            '<header><div class="entity-title"><strong>' + esc(key.name) + '</strong><div class="status"><code>' + esc(key.key_prefix) + '</code></div></div><span class="pill ' + statusClass(key.status) + '">' + esc(key.status) + '</span></header>' +
+            '<header><div class="entity-title"><strong>' + esc(key.name) + '</strong><div class="status"><code>' + esc(key.key_prefix) + '</code></div></div><span class="pill ' + statusClass(key.status) + '">' + esc(statusText(key.status)) + '</span></header>' +
             '<div class="entity-meta">' +
               '<div class="entity-row"><span>用户</span><code>' + esc(key.user_id) + '</code></div>' +
               '<div class="entity-row"><span>模型权限</span><div>' + esc((key.allowed_models || []).join(', ') || '全部') + '</div></div>' +
             '</div>' +
             '<div class="actions entity-actions"><button type="button" class="secondary compact" data-key-toggle="' + esc(key.id) + '">' + (key.status === 'active' ? '禁用' : '启用') + '</button></div>' +
           '</article>';
-        }).join('') : '<div class="empty">暂无 API Key。</div>';
+        }).join('') : '<div class="empty">暂无接口密钥。</div>';
       }
 
       function renderUsage() {
         var usage = state.usage || { total_requests: 0, total_tokens: 0, prompt_tokens: 0, completion_tokens: 0, media_count: 0, by_model: [], recent: [] };
-        document.getElementById('usage-stats').innerHTML = stat('请求数', usage.total_requests) + stat('总 Token', usage.total_tokens) + stat('输入 Token', usage.prompt_tokens) + stat('输出 Token', usage.completion_tokens) + stat('媒体单位', usage.media_count) + stat('成本', usage.cost || 0);
+        document.getElementById('usage-stats').innerHTML = stat('请求数', usage.total_requests) + stat('总令牌', usage.total_tokens) + stat('输入令牌', usage.prompt_tokens) + stat('输出令牌', usage.completion_tokens) + stat('媒体单位', usage.media_count) + stat('成本', usage.cost || 0);
         document.getElementById('usage-models').innerHTML = usage.by_model.length ? usage.by_model.map(function (item) { return '<tr><td><code>' + esc(item.model) + '</code></td><td>' + esc(item.requests) + '</td><td>' + esc(item.total_tokens) + '</td><td>' + esc(item.prompt_tokens) + '</td><td>' + esc(item.completion_tokens) + '</td><td>' + esc(item.media_count) + '</td></tr>'; }).join('') : '<tr><td colspan="6" class="empty">暂无用量。</td></tr>';
-        document.getElementById('usage-recent').innerHTML = usage.recent.length ? usage.recent.slice(0, 12).map(function (item) { return '<div><span class="pill">' + esc(item.endpoint) + '</span><strong>' + esc(item.model) + '</strong><div class="status">' + esc(item.total_tokens) + ' tokens · ' + esc(item.created_at) + '</div></div>'; }).join('') : '<div class="empty">暂无用量记录。</div>';
+        document.getElementById('usage-recent').innerHTML = usage.recent.length ? usage.recent.slice(0, 12).map(function (item) { return '<div><span class="pill">' + esc(item.endpoint) + '</span><strong>' + esc(item.model) + '</strong><div class="status">' + esc(item.total_tokens) + ' 令牌 · ' + esc(item.created_at) + '</div></div>'; }).join('') : '<div class="empty">暂无用量记录。</div>';
       }
 
       function renderTasks(tasks) {
         document.getElementById('tasks-table').innerHTML = tasks.length ? tasks.map(function (task) {
           var actions = '<button class="secondary compact" data-task-view="' + esc(task.id) + '">详情</button>';
           if (task.cancelable) actions += '<button class="danger compact" data-task-cancel="' + esc(task.id) + '">取消</button>';
-          return '<tr><td><code>' + esc(task.id) + '</code></td><td>' + esc(task.type) + '</td><td>' + esc(task.model) + '</td><td><span class="pill ' + statusClass(task.status) + '">' + esc(task.status) + '</span></td><td>' + esc(task.created_at) + '</td><td><div class="actions">' + actions + '</div></td></tr>';
+          return '<tr><td><code>' + esc(task.id) + '</code></td><td>' + esc(taskTypeText(task.type)) + '</td><td>' + esc(task.model) + '</td><td><span class="pill ' + statusClass(task.status) + '">' + esc(statusText(task.status)) + '</span></td><td>' + esc(task.created_at) + '</td><td><div class="actions">' + actions + '</div></td></tr>';
         }).join('') : '<tr><td colspan="6" class="empty">暂无任务。</td></tr>';
       }
 
@@ -2213,7 +2213,12 @@ const ADMIN_APP_HTML = `<!doctype html>
       function renderExample(req) { if (!req) return '暂无示例'; var quote = String.fromCharCode(39); return 'curl -X ' + req.method + ' "' + location.origin + req.endpoint + '"\\n  -H "Authorization: Bearer <DEV_API_KEY>"\\n  -H "Content-Type: application/json"\\n  -d ' + quote + JSON.stringify(req.body, null, 2) + quote; }
       function value(id) { return document.getElementById(id).value.trim(); }
       function yesNo(value) { return value ? '已绑定' : '未绑定'; }
-      function statusClass(status) { if (status === 'active' || status === 'succeeded' || status === 'running' || status === 'ok') return 'ok'; if (status === 'queued' || status === 'hidden' || status === 'warning') return 'warn'; if (status === 'disabled' || status === 'failed' || status === 'canceled' || status === 'expired' || status === 'error') return 'danger'; return ''; }
+      function taskStoreText(value) { return value === 'kv' ? 'KV' : value === 'memory' ? '内存' : value; }
+      function modalityText(value) { if (value === 'text') return '文本'; if (value === 'image') return '图片'; if (value === 'video') return '视频'; if (value === 'file') return '文件'; if (value === 'vision') return '视觉'; if (value === 'audio') return '音频'; return value; }
+      function roleText(value) { if (value === 'owner') return '所有者'; if (value === 'admin') return '管理员'; if (value === 'member') return '成员'; return value; }
+      function taskTypeText(value) { if (value === 'chat.completions') return '聊天补全'; if (value === 'image.generations') return '图片生成'; if (value === 'video.generations') return '视频生成'; return value; }
+      function statusText(status) { if (status === 'active') return '启用'; if (status === 'degraded') return '降级'; if (status === 'hidden') return '隐藏'; if (status === 'disabled') return '停用'; if (status === 'queued') return '排队中'; if (status === 'running') return '运行中'; if (status === 'succeeded') return '成功'; if (status === 'failed') return '失败'; if (status === 'canceled') return '已取消'; if (status === 'expired') return '已过期'; if (status === 'ok') return '正常'; if (status === 'warning') return '警告'; if (status === 'error') return '异常'; return status; }
+      function statusClass(status) { if (status === 'active' || status === 'succeeded' || status === 'running' || status === 'ok') return 'ok'; if (status === 'queued' || status === 'hidden' || status === 'degraded' || status === 'warning') return 'warn'; if (status === 'disabled' || status === 'failed' || status === 'canceled' || status === 'expired' || status === 'error') return 'danger'; return ''; }
       function providerClass(status) { return statusClass(status); }
       function providerText(status) { return status === 'ok' ? '可用' : status === 'warning' ? '未使用' : status === 'error' ? '异常' : status; }
       function findProvider(providers, pluginId) { return providers.find(function (p) { return p.id === pluginId; }) || null; }
@@ -2652,7 +2657,7 @@ const ADMIN_HTML = `<!doctype html>
       <div>
         <div class="eyebrow">Teaven AI Gateway</div>
         <h1>管理后台</h1>
-        <p class="subtitle">管理当前 Worker 部署：查看模型、供应商接入、存储绑定和异步任务。</p>
+        <p class="subtitle">管理当前边缘服务部署：查看模型、供应商接入、存储绑定和异步任务。</p>
       </div>
       <div class="toolbar">
         <button id="refresh" class="secondary" type="button">刷新</button>
@@ -2762,19 +2767,19 @@ const ADMIN_HTML = `<!doctype html>
 
       <div class="card span-6">
         <h2>当前模型配置</h2>
-        <p class="subtitle">这里展示 Worker 当前实际加载的 GatewayConfig，不包含任何密钥明文。</p>
+        <p class="subtitle">这里展示当前实际加载的网关配置，不包含任何密钥明文。</p>
         <pre id="current-config" class="json-view">正在加载配置...</pre>
       </div>
 
       <div class="card span-6">
-        <h2>API 调用示例</h2>
-        <p class="subtitle">用于快速验证当前模型别名和用户 API 鉴权。</p>
+        <h2>接口调用示例</h2>
+        <p class="subtitle">用于快速验证当前模型别名和用户接口鉴权。</p>
         <pre id="example-request" class="json-view">正在生成示例...</pre>
       </div>
 
       <div class="card span-12">
-        <h2>MODEL_CONFIG_JSON 校验器</h2>
-        <p class="subtitle">在部署为 MODEL_CONFIG_JSON 之前，先粘贴 GatewayConfig JSON 对象进行校验。</p>
+        <h2>模型配置 JSON 校验器</h2>
+        <p class="subtitle">在部署为 MODEL_CONFIG_JSON 之前，先粘贴网关配置 JSON 对象进行校验。</p>
         <textarea id="config-json" spellcheck="false" placeholder='{"upstreams":[{"id":"openai-compatible-default","name":"OpenAI Compatible Default","plugin_id":"openai-compatible","base_url":"https://api.openai.com/v1","credential_id":"env:OPENAI_COMPATIBLE_API_KEY","status":"active","models":[{"alias":"gpt-4o-mini","provider_model":"gpt-4o-mini","modality":"text","supports_stream":true,"priority":1,"weight":100,"status":"active"}]}]}'></textarea>
         <div class="toolbar" style="margin-top: 12px; justify-content: flex-start;">
           <button id="load-current-config" class="secondary" type="button">填入当前配置</button>
@@ -2948,7 +2953,7 @@ const ADMIN_HTML = `<!doctype html>
         try {
           var data = await api('/admin/api/providers/' + encodeURIComponent(providerId) + '/health');
           await loadOverview();
-          setStatus('Provider 检查完成：' + data.provider.name + ' / ' + providerStatusText(data.provider.status), data.provider.status === 'ok' ? 'ok' : 'error');
+          setStatus('供应商检查完成：' + data.provider.name + ' / ' + providerStatusText(data.provider.status), data.provider.status === 'ok' ? 'ok' : 'error');
         } catch (error) {
           setStatus(error.message || String(error), 'error');
         } finally {
@@ -3000,7 +3005,7 @@ const ADMIN_HTML = `<!doctype html>
           renderMeta('配置来源', data.gateway.config_source) +
           renderMeta('任务存储', taskStoreText(data.gateway.task_store)) +
           renderMeta('后台会话', Math.round(data.gateway.admin_session_ttl_seconds / 3600) + ' 小时') +
-          renderMeta('用户 API Key', data.gateway.dev_api_key_configured ? '已配置' : '未配置') +
+          renderMeta('用户接口密钥', data.gateway.dev_api_key_configured ? '已配置' : '未配置') +
           renderMeta('绑定资源', bindingsText(data.gateway));
 
         warningsEl.innerHTML = data.warnings.length
@@ -3065,13 +3070,13 @@ const ADMIN_HTML = `<!doctype html>
       function renderProvider(provider) {
         var caps = Object.keys(provider.capabilities || {}).map(function (name) {
           var capability = provider.capabilities[name];
-          return '<span class="pill">' + escapeHtml(name + ': ' + capability.execution_mode) + '</span>';
+          return '<span class="pill">' + escapeHtml(name + '：' + executionModeText(capability.execution_mode)) + '</span>';
         }).join('');
         var routes = provider.routes && provider.routes.length
           ? provider.routes.map(function (route) {
               return '<div class="status"><code>' + escapeHtml(route.model_alias) + '</code> @ ' + escapeHtml(route.upstream_id || '') + ' -> ' + escapeHtml(route.provider_model) + ' <span class="pill ' + (route.credential_configured ? 'ok' : 'danger') + '">' + (route.credential_configured ? '凭证已配置' : '缺少凭证') + '</span></div>';
             }).join('')
-          : '<div class="status">当前没有模型路由使用该 Provider。</div>';
+          : '<div class="status">当前没有模型路由使用该供应商。</div>';
 
         return '<div class="panel">' +
           '<h3>' + escapeHtml(provider.name) + '</h3>' +
@@ -3081,7 +3086,7 @@ const ADMIN_HTML = `<!doctype html>
           '<div class="pill">路由 ' + escapeHtml(provider.routes_configured + '/' + provider.routes_active) + '</div>' +
           '<div style="margin-top: 8px;">' + caps + '</div>' +
           routes +
-          '<div class="actions" style="margin-top: 10px;"><button class="secondary compact" type="button" data-provider-health="' + escapeHtml(provider.id) + '">检查 Provider</button></div>' +
+          '<div class="actions" style="margin-top: 10px;"><button class="secondary compact" type="button" data-provider-health="' + escapeHtml(provider.id) + '">检查供应商</button></div>' +
           '</div>';
       }
 
@@ -3108,7 +3113,7 @@ const ADMIN_HTML = `<!doctype html>
       }
 
       function bindingsText(gateway) {
-        return 'DB ' + yesNo(gateway.db_bound) + ', KV ' + yesNo(gateway.kv_bound) + ', Queue ' + yesNo(gateway.queue_bound) + ', R2 ' + yesNo(gateway.r2_bound);
+        return '数据库 ' + yesNo(gateway.db_bound) + ', KV ' + yesNo(gateway.kv_bound) + ', 队列 ' + yesNo(gateway.queue_bound) + ', R2 ' + yesNo(gateway.r2_bound);
       }
 
       function yesNo(value) {
@@ -3134,6 +3139,25 @@ const ADMIN_HTML = `<!doctype html>
         }
         if (value === 'audio') {
           return '音频';
+        }
+        if (value === 'image') {
+          return '图片';
+        }
+        if (value === 'video') {
+          return '视频';
+        }
+        if (value === 'file') {
+          return '文件';
+        }
+        return value;
+      }
+
+      function executionModeText(value) {
+        if (value === 'sync') {
+          return '同步';
+        }
+        if (value === 'async') {
+          return '异步';
         }
         return value;
       }
@@ -3161,6 +3185,9 @@ const ADMIN_HTML = `<!doctype html>
         if (status === 'hidden') {
           return '隐藏';
         }
+        if (status === 'degraded') {
+          return '降级';
+        }
         if (status === 'disabled') {
           return '停用';
         }
@@ -3180,7 +3207,7 @@ const ADMIN_HTML = `<!doctype html>
         if (status === 'active' || status === 'succeeded' || status === 'running') {
           return 'ok';
         }
-        if (status === 'queued' || status === 'hidden') {
+        if (status === 'queued' || status === 'hidden' || status === 'degraded') {
           return 'warn';
         }
         if (status === 'disabled' || status === 'failed' || status === 'canceled' || status === 'expired') {
