@@ -1729,7 +1729,7 @@ const ADMIN_APP_HTML = `<!doctype html>
             <div class="form-grid">
               <label>上游 ID<input id="upstream-admin-id" value="openai-compatible-default"></label>
               <label>上游名称<input id="upstream-admin-name" value="OpenAI Compatible Default"></label>
-              <label>协议类型<input id="upstream-admin-protocol" value="openai-compatible"></label>
+              <label>协议类型<select id="upstream-admin-protocol"><option value="openai-compatible">OpenAI 兼容</option><option value="private">私有协议</option><option value="async-polling-task">异步轮询任务</option><option value="async-webhook-task">异步 Webhook 任务</option></select></label>
               <label>Provider Plugin<input id="upstream-admin-plugin" value="openai-compatible"></label>
               <label>供应商标识<input id="upstream-admin-provider" value="openai-compatible"></label>
               <label>Base URL<input id="upstream-admin-base-url" value="https://api.openai.com/v1"></label>
@@ -1760,7 +1760,7 @@ const ADMIN_APP_HTML = `<!doctype html>
               <label>模型状态<select id="model-status"><option value="active">active</option><option value="hidden">hidden</option><option value="disabled">disabled</option></select></label>
               <label>上游 ID<input id="upstream-id" value="openai-compatible-default"></label>
               <label>上游名称<input id="upstream-name" value="OpenAI Compatible Default"></label>
-              <label>协议类型<input id="upstream-protocol" value="openai-compatible"></label>
+              <label>协议类型<select id="upstream-protocol"><option value="openai-compatible">OpenAI 兼容</option><option value="private">私有协议</option><option value="async-polling-task">异步轮询任务</option><option value="async-webhook-task">异步 Webhook 任务</option></select></label>
               <label>Provider Plugin<input id="route-plugin" value="openai-compatible"></label>
               <label>供应商标识<input id="upstream-provider" value="openai-compatible"></label>
               <label>上游 Base URL<input id="upstream-base-url" value="https://api.openai.com/v1"></label>
