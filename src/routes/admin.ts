@@ -101,6 +101,25 @@ export async function handleAdminRequest(
     return handleAdminConfig(env, requestId);
   }
 
+  if (request.method === "GET" && pathname === "/admin/api/upstreams") {
+    return handleListAdminUpstreams(env, requestId);
+  }
+
+  if (request.method === "POST" && pathname === "/admin/api/upstreams") {
+    return handleUpsertAdminUpstream(request, env, requestId);
+  }
+
+  const upstreamMatch = pathname.match(/^\/admin\/api\/upstreams\/([^/]+)$/);
+  if (upstreamMatch) {
+    const upstreamId = decodeURIComponent(upstreamMatch[1]);
+    if (request.method === "PUT") {
+      return handleUpsertAdminUpstream(request, env, requestId, upstreamId);
+    }
+    if (request.method === "DELETE") {
+      return handleDeleteAdminUpstream(upstreamId, env, requestId);
+    }
+  }
+
   if (request.method === "POST" && pathname === "/admin/api/config/validate") {
     return handleValidateConfig(request, requestId);
   }
@@ -360,6 +379,80 @@ async function handleListAdminModels(env: Env, requestId: string): Promise<Respo
   );
 }
 
+async function handleListAdminUpstreams(env: Env, requestId: string): Promise<Response> {
+  const config = await loadGatewayConfig(env);
+  return jsonResponse(
+    {
+      object: "list",
+      data: config.upstreams.map((upstream) => publicUpstream(upstream, config, env))
+    },
+    {
+      headers: {
+        "X-Request-Id": requestId
+      }
+    }
+  );
+}
+
+async function handleUpsertAdminUpstream(request: Request, env: Env, requestId: string, expectedId?: string): Promise<Response> {
+  const body = await readJsonObject(request);
+  const upstreamInput = normalizeUpstreamInput(body.upstream ?? body);
+  if (expectedId && upstreamInput.id !== expectedId) {
+    throw invalidRequest("上游 ID 不能与路径不一致", "id");
+  }
+
+  const config = await loadGatewayConfig(env);
+  const existing = config.upstreams.find((upstream) => upstream.id === upstreamInput.id);
+  const upstream: UpstreamConfig = {
+    ...upstreamInput,
+    models: existing?.models || []
+  };
+  const nextUpstreams = config.upstreams.filter((item) => item.id !== upstream.id);
+  nextUpstreams.push(upstream);
+  nextUpstreams.sort((left, right) => left.id.localeCompare(right.id));
+  const nextConfig = { upstreams: nextUpstreams };
+  await saveGatewayConfig(env, nextConfig);
+
+  return jsonResponse(
+    {
+      upstream: publicUpstream(upstream, nextConfig, env),
+      config_source: env.AI_GATEWAY_KV ? "AI_GATEWAY_KV" : "memory"
+    },
+    {
+      headers: {
+        "X-Request-Id": requestId
+      }
+    }
+  );
+}
+
+async function handleDeleteAdminUpstream(upstreamId: string, env: Env, requestId: string): Promise<Response> {
+  const config = await loadGatewayConfig(env);
+  const upstream = config.upstreams.find((item) => item.id === upstreamId);
+  if (!upstream) {
+    throw notFound("上游不存在");
+  }
+  if (upstream.models.length > 0) {
+    throw invalidRequest("上游下仍有模型，请先删除模型后再删除上游", "upstream_id");
+  }
+  if (config.upstreams.length === 1) {
+    throw invalidRequest("至少需要保留一个上游");
+  }
+
+  await saveGatewayConfig(env, { upstreams: config.upstreams.filter((item) => item.id !== upstreamId) });
+  return jsonResponse(
+    {
+      deleted: true,
+      upstream_id: upstreamId
+    },
+    {
+      headers: {
+        "X-Request-Id": requestId
+      }
+    }
+  );
+}
+
 async function handleUpsertAdminModel(request: Request, env: Env, requestId: string, expectedAlias?: string): Promise<Response> {
   const body = await readJsonObject(request);
   const input = normalizeModelInput(body.model ?? body);
@@ -395,21 +488,16 @@ async function handleUpsertAdminModel(request: Request, env: Env, requestId: str
 async function handleDeleteAdminModel(alias: string, env: Env, requestId: string): Promise<Response> {
   const config = await loadGatewayConfig(env);
   let deleted = false;
-  const nextUpstreams = config.upstreams
-    .map((upstream) => {
+  const nextUpstreams = config.upstreams.map((upstream) => {
       const models = upstream.models.filter((model) => model.alias !== alias);
       if (models.length !== upstream.models.length) {
         deleted = true;
       }
       return { ...upstream, models };
-    })
-    .filter((upstream) => upstream.models.length > 0);
+    });
 
   if (!deleted) {
     throw notFound("模型不存在");
-  }
-  if (nextUpstreams.length === 0) {
-    throw invalidRequest("至少需要保留一个模型");
   }
 
   await saveGatewayConfig(env, { upstreams: nextUpstreams });
@@ -818,6 +906,13 @@ function publicApiKey(apiKey: AdminApiKey): Record<string, unknown> {
     updated_at: apiKey.updated_at,
     last_used_at: apiKey.last_used_at || null
   };
+}
+
+function normalizeUpstreamInput(value: unknown): Omit<UpstreamConfig, "models"> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw invalidRequest("upstream 必须是对象", "upstream");
+  }
+  return readUpstreamInput(value as Record<string, unknown>);
 }
 
 function normalizeModelInput(value: unknown): AdminModelMutation {
@@ -1588,6 +1683,7 @@ const ADMIN_APP_HTML = `<!doctype html>
       </div>
       <nav class="nav" id="nav">
         <a href="#dashboard" data-section="dashboard">仪表盘</a>
+        <a href="#upstreams" data-section="upstreams">上游管理</a>
         <a href="#models" data-section="models">模型管理</a>
         <a href="#users" data-section="users">用户管理</a>
         <a href="#usage" data-section="usage">模型用量</a>
@@ -1617,7 +1713,31 @@ const ADMIN_APP_HTML = `<!doctype html>
           <div class="card span-4"><h3>告警</h3><div id="warnings" class="stack"></div></div>
           <div class="card span-6"><h3>网关状态</h3><div id="gateway-meta" class="stack"></div></div>
           <div class="card span-6"><h3>Provider</h3><div id="providers" class="stack"></div></div>
-          <div class="card span-12"><h3>上游配置</h3><div id="upstreams" class="stack"></div></div>
+          <div class="card span-12"><h3>上游配置</h3><div id="dashboard-upstreams" class="stack"></div></div>
+        </div>
+      </section>
+
+      <section id="upstreams" class="section">
+        <div class="grid">
+          <div class="card span-12">
+            <h3>上游列表</h3>
+            <p class="subtitle">先配置上游的协议类型、Provider Plugin、Base URL 和凭证引用，再到模型管理里把模型添加到上游。</p>
+            <div class="table-wrap"><table><thead><tr><th>ID</th><th>协议</th><th>Provider</th><th>Base URL</th><th>凭证</th><th>状态</th><th>模型</th><th>操作</th></tr></thead><tbody id="upstreams-table"></tbody></table></div>
+          </div>
+          <div class="card span-12">
+            <h3>创建/更新上游</h3>
+            <div class="form-grid">
+              <label>上游 ID<input id="upstream-admin-id" value="openai-compatible-default"></label>
+              <label>上游名称<input id="upstream-admin-name" value="OpenAI Compatible Default"></label>
+              <label>协议类型<input id="upstream-admin-protocol" value="openai-compatible"></label>
+              <label>Provider Plugin<input id="upstream-admin-plugin" value="openai-compatible"></label>
+              <label>供应商标识<input id="upstream-admin-provider" value="openai-compatible"></label>
+              <label>Base URL<input id="upstream-admin-base-url" value="https://api.openai.com/v1"></label>
+              <label>凭证引用<input id="upstream-admin-credential" value="env:OPENAI_COMPATIBLE_API_KEY"></label>
+              <label>状态<select id="upstream-admin-status"><option value="active">active</option><option value="degraded">degraded</option><option value="disabled">disabled</option></select></label>
+            </div>
+            <div class="actions" style="margin-top: 12px;"><button id="save-upstream-form" type="button">保存上游</button><button id="reset-upstream-form" class="secondary" type="button">清空表单</button></div>
+          </div>
         </div>
       </section>
 
@@ -1712,7 +1832,7 @@ const ADMIN_APP_HTML = `<!doctype html>
   <script>
     (function () {
       var state = { overview: null, config: null, models: [], users: [], apiKeys: [], usage: null, tasks: [] };
-      var titles = { dashboard: '仪表盘', models: '模型管理', users: '用户管理', usage: '模型用量', tasks: '任务管理', config: '配置工具' };
+      var titles = { dashboard: '仪表盘', upstreams: '上游管理', models: '模型管理', users: '用户管理', usage: '模型用量', tasks: '任务管理', config: '配置工具' };
       var statusEl = document.getElementById('status');
       var theme = localStorage.getItem('teaven_admin_theme') || 'dark';
       document.documentElement.setAttribute('data-theme', theme);
@@ -1728,11 +1848,14 @@ const ADMIN_APP_HTML = `<!doctype html>
       document.getElementById('save-model-form').addEventListener('click', saveModelFromForm);
       document.getElementById('save-model-json').addEventListener('click', saveModelFromJson);
       document.getElementById('reset-models').addEventListener('click', resetModels);
+      document.getElementById('save-upstream-form').addEventListener('click', saveUpstreamFromForm);
+      document.getElementById('reset-upstream-form').addEventListener('click', resetUpstreamForm);
       document.getElementById('create-user').addEventListener('click', createUser);
       document.getElementById('load-tasks').addEventListener('click', loadTasks);
       document.getElementById('fill-current-config').addEventListener('click', fillCurrentConfig);
       document.getElementById('validate-config').addEventListener('click', validateConfig);
       document.getElementById('models-table').addEventListener('click', handleModelAction);
+      document.getElementById('upstreams-table').addEventListener('click', handleUpstreamAction);
       document.getElementById('users-table').addEventListener('click', handleUserAction);
       document.getElementById('keys-table').addEventListener('click', handleKeyAction);
       document.getElementById('tasks-table').addEventListener('click', handleTaskAction);
@@ -1776,6 +1899,7 @@ const ADMIN_APP_HTML = `<!doctype html>
 
       function renderAll() {
         renderDashboard();
+        renderUpstreamManagement();
         renderModels();
         renderUsers();
         renderUsage();
@@ -1785,12 +1909,21 @@ const ADMIN_APP_HTML = `<!doctype html>
 
       function renderDashboard() {
         var data = state.overview || { stats: {}, warnings: [], feature_matrix: [], providers: [], upstreams: [], gateway: {} };
-        document.getElementById('stats').innerHTML = stat('模型', data.stats.models_total) + stat('用户', data.stats.users_total) + stat('活跃 Key', data.stats.api_keys_active) + stat('请求数', data.stats.usage_requests) + stat('Token', data.stats.usage_tokens) + stat('任务', data.stats.recent_tasks) + stat('Provider', data.stats.providers_total) + stat('失败任务', data.stats.tasks_failed);
+        document.getElementById('stats').innerHTML = stat('模型', data.stats.models_total) + stat('上游', data.stats.upstreams_total) + stat('用户', data.stats.users_total) + stat('活跃 Key', data.stats.api_keys_active) + stat('请求数', data.stats.usage_requests) + stat('Token', data.stats.usage_tokens) + stat('任务', data.stats.recent_tasks) + stat('Provider', data.stats.providers_total) + stat('失败任务', data.stats.tasks_failed);
         document.getElementById('warnings').innerHTML = data.warnings.length ? data.warnings.map(function (item) { return '<div class="warning">' + esc(item) + '</div>'; }).join('') : '<span class="pill ok">暂无活跃告警</span>';
         document.getElementById('features').innerHTML = data.feature_matrix.map(function (item) { return '<div><span class="pill ' + featureClass(item.status) + '">' + esc(featureText(item.status)) + '</span><strong>' + esc(item.name) + '</strong><div class="status">' + esc(item.detail) + '</div></div>'; }).join('');
         document.getElementById('gateway-meta').innerHTML = meta('认证模式', data.gateway.auth_mode) + meta('配置来源', data.gateway.config_source) + meta('任务存储', data.gateway.task_store) + meta('绑定资源', 'DB ' + yesNo(data.gateway.db_bound) + ', KV ' + yesNo(data.gateway.kv_bound) + ', Queue ' + yesNo(data.gateway.queue_bound) + ', R2 ' + yesNo(data.gateway.r2_bound));
         document.getElementById('providers').innerHTML = data.providers.map(function (provider) { return '<div><span class="pill ' + providerClass(provider.status) + '">' + esc(providerText(provider.status)) + '</span><strong>' + esc(provider.name) + '</strong><div class="status">' + esc(provider.id) + ' · routes ' + esc(provider.routes_configured + '/' + provider.routes_active) + '</div></div>'; }).join('') || '<div class="empty">暂无 Provider。</div>';
-        document.getElementById('upstreams').innerHTML = renderUpstreams(data.upstreams || []);
+        document.getElementById('dashboard-upstreams').innerHTML = renderUpstreams(data.upstreams || []);
+      }
+
+      function renderUpstreamManagement() {
+        var upstreams = (state.overview && state.overview.upstreams) || [];
+        var body = document.getElementById('upstreams-table');
+        body.innerHTML = upstreams.length ? upstreams.map(function (upstream) {
+          var deleteDisabled = upstream.models_total > 0 ? ' disabled title="请先删除该上游下的模型"' : '';
+          return '<tr><td><code>' + esc(upstream.id) + '</code><div class="status">' + esc(upstream.name || '') + '</div></td><td>' + esc(upstream.protocol_type) + '</td><td>' + esc(upstream.plugin_id) + '<div class="status">' + esc(upstream.provider || '') + '</div></td><td><code>' + esc(upstream.base_url || '未配置') + '</code></td><td><code>' + esc(upstream.credential_id || '未配置') + '</code><br><span class="pill ' + (upstream.credential_configured ? 'ok' : 'danger') + '">' + (upstream.credential_configured ? '已配置' : '缺少') + '</span></td><td><span class="pill ' + statusClass(upstream.status) + '">' + esc(upstream.status) + '</span></td><td>' + esc(upstream.models_active + '/' + upstream.models_total) + '</td><td><div class="actions"><button class="secondary compact" data-upstream-edit="' + esc(upstream.id) + '">编辑</button><button class="danger compact" data-upstream-delete="' + esc(upstream.id) + '"' + deleteDisabled + '>删除</button></div></td></tr>';
+        }).join('') : '<tr><td colspan="8" class="empty">暂无上游配置。</td></tr>';
       }
 
       function renderModels() {
@@ -1859,6 +1992,24 @@ const ADMIN_APP_HTML = `<!doctype html>
       async function saveModel(model) { await api('/admin/api/models', { method: 'POST', body: JSON.stringify({ model: model }) }); await loadAll(); setStatus('模型已保存：' + model.alias, 'ok'); }
       async function resetModels() { if (!confirm('确定重置模型配置？')) return; await api('/admin/api/models/reset', { method: 'POST' }); document.getElementById('model-json').value = ''; await loadAll(); setStatus('模型配置已重置。', 'ok'); }
 
+      async function saveUpstreamFromForm() {
+        var upstream = { id: value('upstream-admin-id'), name: value('upstream-admin-name'), protocol_type: value('upstream-admin-protocol'), plugin_id: value('upstream-admin-plugin'), provider: value('upstream-admin-provider'), base_url: value('upstream-admin-base-url'), credential_id: value('upstream-admin-credential'), status: value('upstream-admin-status') };
+        await api('/admin/api/upstreams', { method: 'POST', body: JSON.stringify({ upstream: upstream }) });
+        await loadAll();
+        setStatus('上游已保存：' + upstream.id, 'ok');
+      }
+
+      function resetUpstreamForm() {
+        document.getElementById('upstream-admin-id').value = '';
+        document.getElementById('upstream-admin-name').value = '';
+        document.getElementById('upstream-admin-protocol').value = 'openai-compatible';
+        document.getElementById('upstream-admin-plugin').value = 'openai-compatible';
+        document.getElementById('upstream-admin-provider').value = '';
+        document.getElementById('upstream-admin-base-url').value = '';
+        document.getElementById('upstream-admin-credential').value = '';
+        document.getElementById('upstream-admin-status').value = 'active';
+      }
+
       async function createUser() {
         var body = { email: value('user-email'), name: value('user-name'), role: value('user-role') };
         await api('/admin/api/users', { method: 'POST', body: JSON.stringify(body) });
@@ -1876,12 +2027,19 @@ const ADMIN_APP_HTML = `<!doctype html>
         if (edit) fillModelEditor(edit.getAttribute('data-model-edit'));
         if (del && confirm('确定删除模型 ' + del.getAttribute('data-model-delete') + '？')) { await api('/admin/api/models/' + encodeURIComponent(del.getAttribute('data-model-delete')), { method: 'DELETE' }); await loadAll(); }
       }
+
+      async function handleUpstreamAction(event) {
+        var edit = event.target.closest('[data-upstream-edit]'); var del = event.target.closest('[data-upstream-delete]');
+        if (edit) fillUpstreamEditor(edit.getAttribute('data-upstream-edit'));
+        if (del && !del.disabled && confirm('确定删除上游 ' + del.getAttribute('data-upstream-delete') + '？')) { await api('/admin/api/upstreams/' + encodeURIComponent(del.getAttribute('data-upstream-delete')), { method: 'DELETE' }); await loadAll(); }
+      }
       async function handleUserAction(event) { var button = event.target.closest('[data-user-toggle]'); if (!button) return; var user = state.users.find(function (item) { return item.id === button.getAttribute('data-user-toggle'); }); if (!user) return; await api('/admin/api/users/' + encodeURIComponent(user.id), { method: 'PATCH', body: JSON.stringify({ status: user.status === 'active' ? 'disabled' : 'active' }) }); await loadAll(); }
       async function handleKeyAction(event) { var button = event.target.closest('[data-key-toggle]'); if (!button) return; var key = state.apiKeys.find(function (item) { return item.id === button.getAttribute('data-key-toggle'); }); if (!key) return; await api('/admin/api/api-keys/' + encodeURIComponent(key.id), { method: 'PATCH', body: JSON.stringify({ status: key.status === 'active' ? 'disabled' : 'active' }) }); await loadAll(); }
       async function handleTaskAction(event) { var view = event.target.closest('[data-task-view]'); var cancel = event.target.closest('[data-task-cancel]'); if (view) { var detail = await api('/admin/api/tasks/' + encodeURIComponent(view.getAttribute('data-task-view'))); document.getElementById('task-detail').textContent = JSON.stringify(detail.task, null, 2); } if (cancel && confirm('确定取消任务？')) { await api('/admin/api/tasks/' + encodeURIComponent(cancel.getAttribute('data-task-cancel')) + '/cancel', { method: 'POST' }); await loadTasks(); } }
 
       function fillModelEditor(alias) { var model = state.models.find(function (item) { return item.alias === alias; }); if (!model) return; var route = model.routes && model.routes[0] ? model.routes[0] : {}; document.getElementById('model-json').value = JSON.stringify(toModelInput(model), null, 2); document.getElementById('model-alias').value = model.alias; document.getElementById('model-modality').value = model.modality; document.getElementById('model-status').value = model.status; document.getElementById('model-stream').value = String(model.supports_stream !== false); document.getElementById('upstream-id').value = route.upstream_id || 'openai-compatible-default'; document.getElementById('upstream-name').value = route.upstream_name || route.upstream_id || 'OpenAI Compatible Default'; document.getElementById('upstream-protocol').value = route.protocol_type || 'openai-compatible'; document.getElementById('route-plugin').value = route.plugin_id || 'openai-compatible'; document.getElementById('upstream-provider').value = route.provider || ''; document.getElementById('upstream-base-url').value = route.base_url || ''; document.getElementById('upstream-credential').value = route.credential_id || ''; document.getElementById('upstream-status').value = 'active'; document.getElementById('route-provider-model').value = route.provider_model || ''; document.getElementById('route-priority').value = route.priority || 1; }
       function toModelInput(model) { var route = model.routes && model.routes[0] ? model.routes[0] : {}; return { upstream_id: route.upstream_id, upstream: { id: route.upstream_id, name: route.upstream_name, protocol_type: route.protocol_type, plugin_id: route.plugin_id, provider: route.provider, base_url: route.base_url, credential_id: route.credential_id, status: 'active' }, alias: model.alias, provider_model: route.provider_model, modality: model.modality, supports_stream: model.supports_stream, status: model.status, priority: route.priority, weight: route.weight }; }
+      function fillUpstreamEditor(id) { var upstreams = (state.overview && state.overview.upstreams) || []; var upstream = upstreams.find(function (item) { return item.id === id; }); if (!upstream) return; document.getElementById('upstream-admin-id').value = upstream.id || ''; document.getElementById('upstream-admin-name').value = upstream.name || ''; document.getElementById('upstream-admin-protocol').value = upstream.protocol_type || ''; document.getElementById('upstream-admin-plugin').value = upstream.plugin_id || ''; document.getElementById('upstream-admin-provider').value = upstream.provider || ''; document.getElementById('upstream-admin-base-url').value = upstream.base_url || ''; document.getElementById('upstream-admin-credential').value = upstream.credential_id || ''; document.getElementById('upstream-admin-status').value = upstream.status || 'active'; }
       function showSection(section) { section = titles[section] ? section : 'dashboard'; document.querySelectorAll('.section').forEach(function (el) { el.classList.toggle('active', el.id === section); }); document.querySelectorAll('.nav a').forEach(function (el) { el.classList.toggle('active', el.getAttribute('data-section') === section); }); document.getElementById('page-title').textContent = titles[section]; }
       function toggleTheme() { var next = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark'; document.documentElement.setAttribute('data-theme', next); localStorage.setItem('teaven_admin_theme', next); document.getElementById('theme-toggle').textContent = next === 'dark' ? '切换浅色' : '切换深色'; }
       function stat(label, value) { return '<div class="stat"><strong>' + esc(value == null ? 0 : value) + '</strong><span>' + esc(label) + '</span></div>'; }

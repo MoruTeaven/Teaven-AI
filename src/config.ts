@@ -136,8 +136,8 @@ export function validateGatewayConfig(config: GatewayConfig): void {
     if (typeof upstream.plugin_id !== "string" || upstream.plugin_id.length === 0) {
       throw new Error(`upstream ${upstream.id} 必须配置 plugin_id`);
     }
-    if (!Array.isArray(upstream.models) || upstream.models.length === 0) {
-      throw new Error(`upstream ${upstream.id} 必须配置 models`);
+    if (!Array.isArray(upstream.models)) {
+      throw new Error(`upstream ${upstream.id} 必须配置 models 数组`);
     }
 
     for (const model of upstream.models) {
