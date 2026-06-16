@@ -1160,7 +1160,7 @@ function buildWarnings(env: Env, config: GatewayConfig): string[] {
     }
     for (const route of activeRoutes) {
       if (!isRouteCredentialConfigured(env, route)) {
-        warnings.push(`模型 ${model.alias} 在上游 ${route.upstream_id} 的 ${route.provider_model} 缺少凭证。`);
+        warnings.push(`模型 ${model.alias} 在上游 ${route.upstream_id} 的 ${route.provider_model} 缺少 API Key。`);
       }
     }
   }
@@ -1360,13 +1360,20 @@ function isRouteCredentialConfigured(env: Env | undefined, route: ProviderRouteC
 }
 
 function isCredentialIdConfigured(env: Env | undefined, credentialId: string | undefined): boolean {
-  if (!env || !credentialId) {
+  if (!credentialId) {
     return false;
   }
 
-  const secretName = credentialId.startsWith("env:") ? credentialId.slice(4) : credentialId;
-  const value = (env as unknown as Record<string, unknown>)[secretName];
-  return typeof value === "string" && value.length > 0;
+  // env: 前缀 → 检查对应的环境变量 / Secret 是否已配置
+  if (credentialId.startsWith("env:")) {
+    if (!env) return false;
+    const secretName = credentialId.slice(4);
+    const value = (env as unknown as Record<string, unknown>)[secretName];
+    return typeof value === "string" && value.length > 0;
+  }
+
+  // 无 env: 前缀 → 直接作为 API Key 使用，非空即为已配置
+  return credentialId.length > 0;
 }
 
 function isCancelableTask(task: AsyncTaskRecord): boolean {
@@ -1814,7 +1821,7 @@ const ADMIN_APP_HTML = `<!doctype html>
             <div class="card-head">
               <div>
                 <h3>上游列表</h3>
-                <p class="subtitle">先配置上游的类型、基础地址和凭证引用，再到模型管理里把模型添加到上游。</p>
+                <p class="subtitle">先配置上游的类型、基础地址和 API Key，再到模型管理里把模型添加到上游。</p>
               </div>
               <button id="open-upstream-modal" type="button">添加上游</button>
             </div>
@@ -1827,14 +1834,14 @@ const ADMIN_APP_HTML = `<!doctype html>
         <div class="grid">
           <div class="card span-12">
             <h3>上游配置</h3>
-            <p class="subtitle">上游保存类型、基础地址和凭证引用；模型只添加到对应上游下。</p>
+            <p class="subtitle">上游保存类型、基础地址和 API Key；模型只添加到对应上游下。</p>
             <div id="model-upstreams" class="stack"></div>
           </div>
           <div class="card span-12">
             <div class="card-head">
               <div>
                 <h3>模型列表</h3>
-                <p class="subtitle">模型挂载到已有上游下，继承上游的插件、域名和凭证。</p>
+                <p class="subtitle">模型挂载到已有上游下，继承上游的插件、域名和 API Key。</p>
               </div>
               <button id="open-model-modal" type="button">添加模型</button>
             </div>
@@ -1911,7 +1918,7 @@ const ADMIN_APP_HTML = `<!doctype html>
           <label>上游名称<input id="upstream-admin-name" value="OpenAI Compatible Default"></label>
           <label>类型<select id="upstream-admin-plugin"></select></label>
           <label>基础地址<input id="upstream-admin-base-url" value="https://api.openai.com/v1"></label>
-          <label>凭证引用<input id="upstream-admin-credential" value="env:OPENAI_COMPATIBLE_API_KEY"></label>
+          <label>API Key<input id="upstream-admin-credential" value="env:OPENAI_COMPATIBLE_API_KEY" placeholder="env:MY_SECRET 或直接填写 sk-..."></label>
           <label>状态<select id="upstream-admin-status"><option value="active">启用</option><option value="degraded">降级</option><option value="disabled">停用</option></select></label>
         </div>
         <div class="actions" style="margin-top: 14px;"><button id="save-upstream-form" type="button">保存上游</button><button id="reset-upstream-form" class="secondary" type="button">清空表单</button></div>
@@ -2087,7 +2094,7 @@ const ADMIN_APP_HTML = `<!doctype html>
             '<div class="entity-meta">' +
               '<div class="entity-row"><span>类型</span><strong>' + esc(plugin ? plugin.name : upstream.plugin_id) + '</strong></div>' +
               '<div class="entity-row"><span>基础地址</span><code>' + esc(upstream.base_url || '未配置') + '</code></div>' +
-              '<div class="entity-row"><span>凭证</span><div><code>' + esc(upstream.credential_id || '未配置') + '</code><br><span class="pill ' + (upstream.credential_configured ? 'ok' : 'danger') + '">' + (upstream.credential_configured ? '已配置' : '缺少') + '</span></div></div>' +
+              '<div class="entity-row"><span>API Key</span><div><code>' + esc(upstream.credential_id || '未配置') + '</code><br><span class="pill ' + (upstream.credential_configured ? 'ok' : 'danger') + '">' + (upstream.credential_configured ? '已配置' : '缺少') + '</span></div></div>' +
               '<div class="entity-row"><span>模型</span><div><strong>' + esc(upstream.models_active + '/' + upstream.models_total) + '</strong><div>' + modelPills + '</div></div></div>' +
             '</div>' +
             '<div class="actions entity-actions"><button type="button" class="secondary compact" data-upstream-view="' + esc(upstream.id) + '">查看</button><button type="button" class="secondary compact" data-upstream-edit="' + esc(upstream.id) + '">编辑</button><button type="button" class="danger compact" data-upstream-delete="' + esc(upstream.id) + '"' + deleteDisabled + '>删除</button></div>' +
@@ -2117,7 +2124,7 @@ const ADMIN_APP_HTML = `<!doctype html>
         list.innerHTML = state.models.length ? state.models.map(function (model) {
           var routes = (model.routes || []).map(function (route) {
             var plugin = findProvider(providers, route.plugin_id);
-            return '<div><span class="pill">' + esc((route.upstream_name || route.upstream_id || '未配置') + ' / ' + route.provider_model) + '</span><span class="pill">' + esc(plugin ? plugin.name : route.plugin_id) + '</span><span class="pill ' + (route.credential_configured ? 'ok' : 'danger') + '">' + (route.credential_configured ? '凭证已配置' : '缺少凭证') + '</span><span class="pill ' + statusClass(route.status) + '">' + esc(statusText(route.status)) + '</span></div>';
+            return '<div><span class="pill">' + esc((route.upstream_name || route.upstream_id || '未配置') + ' / ' + route.provider_model) + '</span><span class="pill">' + esc(plugin ? plugin.name : route.plugin_id) + '</span><span class="pill ' + (route.credential_configured ? 'ok' : 'danger') + '">' + (route.credential_configured ? 'Key 已配置' : '缺少 Key') + '</span><span class="pill ' + statusClass(route.status) + '">' + esc(statusText(route.status)) + '</span></div>';
           }).join('') || '<span class="status">暂无路由</span>';
           return '<article class="entity-card">' +
             '<header><div class="entity-title"><code>' + esc(model.alias) + '</code><div class="status">上游路由 ' + esc((model.routes || []).length) + ' 条</div></div><span class="pill ' + statusClass(model.status) + '">' + esc(statusText(model.status)) + '</span></header>' +
@@ -2143,7 +2150,7 @@ const ADMIN_APP_HTML = `<!doctype html>
             '<span class="pill ' + statusClass(upstream.status) + '">' + esc(statusText(upstream.status)) + '</span>' +
             '<strong>' + esc(upstream.name || upstream.id) + '</strong>' +
             '<div class="status">' + esc(plugin ? plugin.name : upstream.plugin_id) + ' · 基础地址：<code>' + esc(upstream.base_url || '未配置') + '</code></div>' +
-            '<div class="status">凭证：<code>' + esc(upstream.credential_id || '未配置') + '</code> <span class="pill ' + (upstream.credential_configured ? 'ok' : 'danger') + '">' + (upstream.credential_configured ? '已配置' : '缺少') + '</span></div>' +
+            '<div class="status">API Key：<code>' + esc(upstream.credential_id || '未配置') + '</code> <span class="pill ' + (upstream.credential_configured ? 'ok' : 'danger') + '">' + (upstream.credential_configured ? '已配置' : '缺少') + '</span></div>' +
             '<div class="status">模型 ' + esc(upstream.models_active + '/' + upstream.models_total) + '</div>' +
             '<div>' + models + '</div>' +
           '</div>';
@@ -2280,7 +2287,7 @@ const ADMIN_APP_HTML = `<!doctype html>
           '<div class="entity-row"><span>类型</span><strong>' + esc(plugin ? plugin.name : upstream.plugin_id) + '</strong></div>' +
           '<div class="entity-row"><span>插件 ID</span><code>' + esc(upstream.plugin_id) + '</code></div>' +
           '<div class="entity-row"><span>基础地址</span><code>' + esc(upstream.base_url || '未配置') + '</code></div>' +
-          '<div class="entity-row"><span>凭证</span><div><code>' + esc(upstream.credential_id || '未配置') + '</code><br><span class="pill ' + (upstream.credential_configured ? 'ok' : 'danger') + '">' + (upstream.credential_configured ? '已配置' : '缺少') + '</span></div></div>' +
+          '<div class="entity-row"><span>API Key</span><div><code>' + esc(upstream.credential_id || '未配置') + '</code><br><span class="pill ' + (upstream.credential_configured ? 'ok' : 'danger') + '">' + (upstream.credential_configured ? '已配置' : '缺少') + '</span></div></div>' +
           '<div class="entity-row"><span>状态</span><span class="pill ' + statusClass(upstream.status) + '">' + esc(statusText(upstream.status)) + '</span></div>' +
           '<div class="entity-row"><span>模型</span><strong>' + esc(upstream.models_active + '/' + upstream.models_total) + '</strong></div>' +
           '<div class="entity-row"><span>活跃路由</span><strong>' + esc(upstream.routes_active == null ? 0 : upstream.routes_active) + '</strong></div>' +
@@ -3139,7 +3146,7 @@ const ADMIN_HTML = `<!doctype html>
         var routes = model.routes.map(function (route) {
           return '<span class="pill">' + escapeHtml((route.upstream_id || route.plugin_id) + ' / ' + route.provider_model) + '</span>' +
             (route.selected ? '<span class="pill ok">当前路由</span>' : '') +
-            '<span class="pill ' + (route.credential_configured ? 'ok' : 'danger') + '">' + (route.credential_configured ? '凭证已配置' : '缺少凭证') + '</span>' +
+            '<span class="pill ' + (route.credential_configured ? 'ok' : 'danger') + '">' + (route.credential_configured ? 'Key 已配置' : '缺少 Key') + '</span>' +
             '<span class="pill">优先级 ' + escapeHtml(route.priority === null ? '无' : route.priority) + '</span>' +
             '<span class="pill ' + statusClass(route.status) + '">' + escapeHtml(statusText(route.status)) + '</span>';
         }).join('<br>');
@@ -3160,7 +3167,7 @@ const ADMIN_HTML = `<!doctype html>
         }).join('');
         var routes = provider.routes && provider.routes.length
           ? provider.routes.map(function (route) {
-              return '<div class="status"><code>' + escapeHtml(route.model_alias) + '</code> @ ' + escapeHtml(route.upstream_id || '') + ' -> ' + escapeHtml(route.provider_model) + ' <span class="pill ' + (route.credential_configured ? 'ok' : 'danger') + '">' + (route.credential_configured ? '凭证已配置' : '缺少凭证') + '</span></div>';
+              return '<div class="status"><code>' + escapeHtml(route.model_alias) + '</code> @ ' + escapeHtml(route.upstream_id || '') + ' -> ' + escapeHtml(route.provider_model) + ' <span class="pill ' + (route.credential_configured ? 'ok' : 'danger') + '">' + (route.credential_configured ? 'Key 已配置' : '缺少 Key') + '</span></div>';
             }).join('')
           : '<div class="status">当前没有模型路由使用该供应商。</div>';
 

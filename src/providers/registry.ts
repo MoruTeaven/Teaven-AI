@@ -34,11 +34,19 @@ export function resolveProviderCredential(env: Env, route: ProviderRouteConfig):
   if (!credentialId) {
     throw providerUnavailable(`Provider credential is not configured for upstream: ${route.upstream_id}`);
   }
-  const secretName = credentialId.startsWith("env:") ? credentialId.slice(4) : credentialId;
-  const apiKey = getEnvString(env, secretName);
 
-  if (!apiKey) {
-    throw providerUnavailable(`Provider credential is not configured: ${credentialId}`);
+  let apiKey: string | undefined;
+
+  if (credentialId.startsWith("env:")) {
+    // env: 前缀 → 从环境变量 / Secret 中读取
+    const secretName = credentialId.slice(4);
+    apiKey = getEnvString(env, secretName);
+    if (!apiKey) {
+      throw providerUnavailable(`Provider credential is not configured, env secret missing: ${secretName}`);
+    }
+  } else {
+    // 无 env: 前缀 → 直接作为 API Key 使用
+    apiKey = credentialId;
   }
 
   return {
