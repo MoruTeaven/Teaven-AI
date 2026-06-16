@@ -689,6 +689,10 @@ const ACCOUNT_APP_HTML = `<!doctype html>
     code { word-break: break-all; color: #bbf7d0; }
     .secret { display: none; margin-top: 12px; border: 1px solid rgba(52, 211, 153, 0.38); border-radius: 18px; background: rgba(52, 211, 153, 0.1); padding: 14px; }
     .notice { color: var(--muted); border: 1px dashed var(--line); border-radius: 18px; padding: 14px; background: rgba(148, 163, 184, 0.06); }
+    .checkbox-label { display: flex; align-items: center; gap: 8px; color: var(--text); font-size: 14px; font-weight: 600; cursor: pointer; }
+    .checkbox-label input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--accent); cursor: pointer; margin: 0; }
+    .key-features { margin-top: 4px; }
+    .key-features .badge { font-size: 11px; }
     @media (max-width: 980px) { .span-8, .span-6, .span-4 { grid-column: span 12; } .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); } .topbar { align-items: flex-start; flex-direction: column; } }
     @media (max-width: 640px) { .layout { padding: 18px; } .stats, .form-grid, .meta { grid-template-columns: 1fr; } .card { border-radius: 20px; } table { display: block; overflow-x: auto; white-space: nowrap; } }
   </style>
@@ -726,11 +730,13 @@ const ACCOUNT_APP_HTML = `<!doctype html>
       <section class="card span-8">
         <div class="card-head"><div><h2>创建 API Key</h2><p class="muted">密钥明文只展示一次</p></div></div>
         <form id="keyForm" class="form-grid">
-          <label>名称<input id="keyName" name="name" value="默认密钥" required></label>
-          <label>过期时间<input id="keyExpires" name="expires_at" type="datetime-local"></label>
-          <label class="full">可用模型<select id="keyModels" name="allowed_models" multiple size="4"></select></label>
+          <label class="full">名称<input id="keyName" name="name" value="默认密钥" required></label>
+          <label class="full" id="expiresLabel">过期时间<input id="keyExpires" name="expires_at" type="datetime-local"></label>
+          <div class="full row"><label class="checkbox-label"><input id="keyPermanent" type="checkbox" checked><span>永不过期</span></label></div>
+          <div class="full row"><label class="checkbox-label"><input id="keyAllModels" type="checkbox" checked><span>不限模型</span></label></div>
+          <label class="full" id="modelsLabel">指定模型<select id="keyModels" name="allowed_models" multiple size="4" disabled></select></label>
+          <div class="full row key-features"><span class="badge active">用量：不限</span><span class="badge active" id="expiresBadge">过期：永不</span><span class="badge active" id="modelsBadge">模型：全部</span></div>
           <button type="submit">创建密钥</button>
-          <button class="secondary" type="button" id="selectAllModels">使用全部模型</button>
         </form>
         <div id="secretBox" class="secret"></div>
       </section>
@@ -819,8 +825,10 @@ const ACCOUNT_APP_HTML = `<!doctype html>
 
     $('#keyForm').addEventListener('submit', async (event) => {
       event.preventDefault();
-      const allowedModels = Array.from($('#keyModels').selectedOptions).map((option) => option.value);
-      const expiresAt = $('#keyExpires').value ? new Date($('#keyExpires').value).toISOString() : null;
+      const permanent = $('#keyPermanent').checked;
+      const allModels = $('#keyAllModels').checked;
+      const allowedModels = allModels ? [] : Array.from($('#keyModels').selectedOptions).map((option) => option.value);
+      const expiresAt = permanent ? null : ($('#keyExpires').value ? new Date($('#keyExpires').value).toISOString() : null);
       const created = await api('/account/api/api-keys', { method: 'POST', body: JSON.stringify({ name: $('#keyName').value, allowed_models: allowedModels, expires_at: expiresAt }) });
       $('#secretBox').style.display = 'block';
       $('#secretBox').innerHTML = '<strong>密钥已创建，请立即复制：</strong><p><code>' + escapeHtml(created.secret) + '</code></p><button class="compact" id="copySecret">复制</button><p class="muted">' + escapeHtml(created.warning) + '</p>';
@@ -828,8 +836,20 @@ const ACCOUNT_APP_HTML = `<!doctype html>
       await load();
     });
 
-    $('#selectAllModels').addEventListener('click', () => {
-      Array.from($('#keyModels').options).forEach((option) => { option.selected = false; });
+    $('#keyPermanent').addEventListener('change', () => {
+      const permanent = $('#keyPermanent').checked;
+      $('#keyExpires').disabled = permanent;
+      $('#keyExpires').value = '';
+      $('#expiresLabel').style.opacity = permanent ? '0.45' : '1';
+      $('#expiresBadge').textContent = permanent ? '过期：永不' : ($('#keyExpires').value ? '过期：已设定' : '过期：未设');
+    });
+
+    $('#keyAllModels').addEventListener('change', () => {
+      const allModels = $('#keyAllModels').checked;
+      $('#keyModels').disabled = allModels;
+      if (allModels) Array.from($('#keyModels').options).forEach((option) => { option.selected = false; });
+      $('#modelsLabel').style.opacity = allModels ? '0.45' : '1';
+      $('#modelsBadge').textContent = allModels ? '模型：全部' : '模型：已限定';
     });
 
     document.addEventListener('click', async (event) => {
