@@ -671,6 +671,9 @@ function renderAccountLoginHtml(env: Env, errorMessage = ""): string {
 
 function escapeHtml(value: unknown): string {
   return String(value === undefined || value === null ? "" : value)
+    .replace(/\\/g, "\\\\")
+    .replace(/\n/g, "\\n")
+    .replace(/\r/g, "\\r")
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
@@ -1266,7 +1269,11 @@ Content-Type: application/json</code></pre></div>
     });
 
     function escapeHtml(value) {
-      return String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' }[char]));
+      return String(value ?? '')
+        .replace(/\\/g, '\\\\')
+        .replace(/\n/g, '\\n')
+        .replace(/\r/g, '\\r')
+        .replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' }[char]));
     }
 
     const savedTheme = localStorage.getItem('theme') || 'dark';
