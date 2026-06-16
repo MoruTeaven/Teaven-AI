@@ -157,8 +157,8 @@ async function handleAccountProfile(user: AdminUser, env: Env, requestId: string
     loadGatewayConfig(env)
   ]);
   const userApiKeyIds = new Set(apiKeys.map((apiKey) => apiKey.id));
-  const usage = summarizeUsage(usageRecords.filter((record) => record.tenant_id === user.tenant_id && userApiKeyIds.has(record.api_key_id)));
-  const userTasks = tasks.filter((task) => task.tenant_id === user.tenant_id).slice(0, DEFAULT_TASK_LIMIT);
+  const usage = summarizeUsage(usageRecords.filter((record) => record.organization_id === user.organization_id && userApiKeyIds.has(record.api_key_id)));
+  const userTasks = tasks.filter((task) => task.organization_id === user.organization_id).slice(0, DEFAULT_TASK_LIMIT);
   const models = listModels(config)
     .filter((model) => model.status !== "disabled")
     .map((model) => ({
@@ -213,7 +213,7 @@ async function handleAccountUsage(user: AdminUser, env: Env, requestId: string):
   const userApiKeyIds = new Set(apiKeys.map((apiKey) => apiKey.id));
   return jsonResponse(
     {
-      usage: summarizeUsage(usageRecords.filter((record) => record.tenant_id === user.tenant_id && userApiKeyIds.has(record.api_key_id)))
+      usage: summarizeUsage(usageRecords.filter((record) => record.organization_id === user.organization_id && userApiKeyIds.has(record.api_key_id)))
     },
     {
       headers: {
@@ -225,7 +225,7 @@ async function handleAccountUsage(user: AdminUser, env: Env, requestId: string):
 
 async function handleAccountTasks(user: AdminUser, searchParams: URLSearchParams, env: Env, requestId: string): Promise<Response> {
   const limit = normalizeTaskLimit(searchParams.get("limit"));
-  const tasks = (await listTasks(env, MAX_TASK_LIMIT)).filter((task) => task.tenant_id === user.tenant_id).slice(0, limit);
+  const tasks = (await listTasks(env, MAX_TASK_LIMIT)).filter((task) => task.organization_id === user.organization_id).slice(0, limit);
 
   return jsonResponse(
     {
@@ -246,7 +246,7 @@ async function handleCreateAccountApiKey(user: AdminUser, request: Request, env:
   const allowedModels = normalizeAllowedModels(body.allowed_models);
   const expiresAt = normalizeExpiresAt(body.expires_at);
   const created = await createAdminApiKey(env, {
-    tenant_id: user.tenant_id,
+    organization_id: user.organization_id,
     user_id: user.id,
     name,
     allowed_models: allowedModels,
@@ -325,7 +325,7 @@ async function handleDisableAccountApiKey(user: AdminUser, apiKeyId: string, env
 
 async function handleCancelAccountTask(user: AdminUser, taskId: string, env: Env, requestId: string): Promise<Response> {
   const task = await getTask(env, taskId);
-  if (!task || task.tenant_id !== user.tenant_id) {
+  if (!task || task.organization_id !== user.organization_id) {
     throw notFound("任务不存在");
   }
   if (!isCancelableTask(task)) {
@@ -352,13 +352,13 @@ async function handleCancelAccountTask(user: AdminUser, taskId: string, env: Env
 
 async function listUserApiKeys(env: Env, user: AdminUser): Promise<AdminApiKey[]> {
   return (await listAdminApiKeys(env))
-    .filter((apiKey) => apiKey.user_id === user.id && apiKey.tenant_id === user.tenant_id)
+    .filter((apiKey) => apiKey.user_id === user.id && apiKey.organization_id === user.organization_id)
     .sort((left, right) => right.created_at.localeCompare(left.created_at));
 }
 
 async function requireOwnedApiKey(env: Env, user: AdminUser, apiKeyId: string): Promise<AdminApiKey> {
   const apiKey = await getAdminApiKey(env, apiKeyId);
-  if (!apiKey || apiKey.user_id !== user.id || apiKey.tenant_id !== user.tenant_id) {
+  if (!apiKey || apiKey.user_id !== user.id || apiKey.organization_id !== user.organization_id) {
     throw notFound("接口密钥不存在");
   }
   return apiKey;
@@ -376,7 +376,7 @@ async function isAccountAuthenticated(request: Request, env: Env): Promise<boole
 function publicUser(user: AdminUser): Record<string, unknown> {
   return {
     id: user.id,
-    tenant_id: user.tenant_id,
+    organization_id: user.organization_id,
     email: user.email,
     name: user.name || null,
     role: user.role,
@@ -389,7 +389,7 @@ function publicUser(user: AdminUser): Record<string, unknown> {
 function publicApiKey(apiKey: AdminApiKey): Record<string, unknown> {
   return {
     id: apiKey.id,
-    tenant_id: apiKey.tenant_id,
+    organization_id: apiKey.organization_id,
     user_id: apiKey.user_id,
     name: apiKey.name,
     key_prefix: apiKey.key_prefix,
@@ -984,7 +984,7 @@ const ACCOUNT_APP_HTML = `<!doctype html>
       $('#subtitle').textContent = user.name ? user.name + ' · ' + user.email : user.email;
       $('#status').textContent = '数据已更新';
       $('#profileName').value = user.name || '';
-      $('#profileMeta').innerHTML = '<div class="entity-row"><span>用户 ID</span><code>' + escapeHtml(user.id) + '</code></div><div class="entity-row"><span>租户 ID</span><code>' + escapeHtml(user.tenant_id) + '</code></div><div class="entity-row"><span>角色</span><span>' + escapeHtml(user.role) + '</span></div><div class="entity-row"><span>存储</span><span>' + escapeHtml(state.storage.source) + '</span></div>';
+      $('#profileMeta').innerHTML = '<div class="entity-row"><span>用户 ID</span><code>' + escapeHtml(user.id) + '</code></div><div class="entity-row"><span>组织 ID</span><code>' + escapeHtml(user.organization_id) + '</code></div><div class="entity-row"><span>角色</span><span>' + escapeHtml(user.role) + '</span></div><div class="entity-row"><span>存储</span><span>' + escapeHtml(state.storage.source) + '</span></div>';
       $('#statKeys').textContent = fmt.format(state.api_keys.length);
       $('#statRequests').textContent = fmt.format(state.usage.total_requests);
       $('#statTokens').textContent = fmt.format(state.usage.total_tokens);

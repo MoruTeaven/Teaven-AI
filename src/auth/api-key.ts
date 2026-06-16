@@ -5,7 +5,7 @@ import type { AuthContext, Env } from "../types";
 export async function authenticate(request: Request, env: Env): Promise<AuthContext> {
   if (env.AUTH_MODE === "none") {
     return {
-      tenant_id: "dev_tenant",
+      organization_id: "dev_organization",
       api_key_id: "dev_key"
     };
   }
@@ -19,7 +19,7 @@ export async function authenticate(request: Request, env: Env): Promise<AuthCont
   const token = match[1];
   if (env.DEV_API_KEY && token === env.DEV_API_KEY) {
     return {
-      tenant_id: "dev_tenant",
+      organization_id: "dev_organization",
       api_key_id: "dev_key"
     };
   }
@@ -44,7 +44,7 @@ export async function authenticate(request: Request, env: Env): Promise<AuthCont
   await touchAdminApiKey(env, managedKey);
 
   return {
-    tenant_id: managedKey.tenant_id,
+    organization_id: managedKey.organization_id,
     api_key_id: managedKey.id,
     allowed_models: managedKey.allowed_models
   };

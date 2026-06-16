@@ -67,7 +67,7 @@ export async function handleChatCompletions(
 
   await recordChatUsage(env, {
     request_id: requestId,
-    tenant_id: auth.tenant_id,
+    organization_id: auth.organization_id,
     api_key_id: auth.api_key_id,
     endpoint: "/v1/chat/completions",
     model: modelName,

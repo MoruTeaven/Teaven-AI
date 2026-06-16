@@ -18,7 +18,7 @@ export interface Env {
 }
 
 export interface AuthContext {
-  tenant_id: string;
+  organization_id: string;
   api_key_id: string;
   allowed_models?: string[];
 }
@@ -115,7 +115,7 @@ export interface AsyncTaskOutputItem {
 export interface AsyncTaskRecord {
   id: string;
   object: "task";
-  tenant_id: string;
+  organization_id: string;
   api_key_id: string;
   type: string;
   model: string;

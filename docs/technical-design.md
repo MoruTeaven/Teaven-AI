@@ -85,8 +85,8 @@ Teaven AI Gateway 是一个多租户 AI API 网关，计划部署在 Cloudflare 
 
 | 概念 | 说明 |
 | --- | --- |
-| Tenant | 租户，计费、配额和数据隔离的顶层单位。 |
-| User | 平台登录用户，属于某个租户。 |
+| Organization | 组织，计费、配额和数据隔离的顶层单位。 |
+| User | 平台登录用户，属于某个组织。 |
 | API Key | 用户调用平台 API 的凭证，可绑定权限、模型范围和配额。 |
 | Provider Plugin（类型） | 不同插件处理不同上游协议，例如 OpenAI 兼容、硅基流动、模力方舟。 |
 | Upstream | 已配置的上游实例，绑定插件（即协议类型）、endpoint、区域、凭证和运行状态。 |
@@ -651,12 +651,12 @@ Remote Plugin 必须遵循同一输入输出协议，并由平台做超时、重
 
 ## 9. 数据模型草案
 
-### 9.1 tenants
+### 9.1 organizations
 
 | 字段 | 说明 |
 | --- | --- |
-| id | 租户 ID。 |
-| name | 租户名称。 |
+| id | 组织 ID。 |
+| name | 组织名称。 |
 | status | active、disabled。 |
 | plan | 套餐。 |
 | created_at | 创建时间。 |
@@ -666,7 +666,7 @@ Remote Plugin 必须遵循同一输入输出协议，并由平台做超时、重
 | 字段 | 说明 |
 | --- | --- |
 | id | 用户 ID。 |
-| tenant_id | 所属租户。 |
+| organization_id | 所属组织。 |
 | email | 邮箱。 |
 | role | owner、admin、member。 |
 | status | active、disabled。 |
@@ -676,7 +676,7 @@ Remote Plugin 必须遵循同一输入输出协议，并由平台做超时、重
 | 字段 | 说明 |
 | --- | --- |
 | id | Key ID。 |
-| tenant_id | 所属租户。 |
+| organization_id | 所属组织。 |
 | name | Key 名称。 |
 | key_hash | Key 哈希。 |
 | key_prefix | 展示和排障用前缀。 |
@@ -739,7 +739,7 @@ Remote Plugin 必须遵循同一输入输出协议，并由平台做超时、重
 | --- | --- |
 | id | 上游模型条目 ID。 |
 | alias_id | 模型别名 ID。 |
-| tenant_id | 可选，租户级覆盖。 |
+| organization_id | 可选，组织级覆盖。 |
 | upstream_id | 上游实例 ID。 |
 | provider_model | 上游真实模型名。 |
 | modality | text、image、video、file。 |
@@ -755,7 +755,7 @@ Remote Plugin 必须遵循同一输入输出协议，并由平台做超时、重
 | 字段 | 说明 |
 | --- | --- |
 | id | 请求 ID。 |
-| tenant_id | 租户 ID。 |
+| organization_id | 组织 ID。 |
 | api_key_id | API Key ID。 |
 | endpoint | 请求路径。 |
 | model | 对外模型名。 |
@@ -774,7 +774,7 @@ Remote Plugin 必须遵循同一输入输出协议，并由平台做超时、重
 | --- | --- |
 | id | 用量记录 ID。 |
 | request_id | 请求 ID 或任务 ID。 |
-| tenant_id | 租户 ID。 |
+| organization_id | 组织 ID。 |
 | model | 对外模型名。 |
 | upstream_id | 实际上游实例。 |
 | plugin_id | Provider Plugin ID。 |
@@ -791,7 +791,7 @@ Remote Plugin 必须遵循同一输入输出协议，并由平台做超时、重
 | 字段 | 说明 |
 | --- | --- |
 | id | 任务 ID。 |
-| tenant_id | 租户 ID。 |
+| organization_id | 组织 ID。 |
 | api_key_id | API Key ID。 |
 | type | 任务类型。 |
 | model | 对外模型名。 |

@@ -18,7 +18,7 @@ const MEMORY = {
 
 export interface AdminUser {
   id: string;
-  tenant_id: string;
+  organization_id: string;
   email: string;
   name?: string;
   role: "owner" | "admin" | "member";
@@ -29,11 +29,13 @@ export interface AdminUser {
 
 export interface AdminApiKey {
   id: string;
-  tenant_id: string;
+  organization_id: string;
   user_id: string;
   name: string;
   key_hash: string;
   key_prefix: string;
+  encrypted_key?: string;
+  encrypted_key_iv?: string;
   allowed_models?: string[];
   status: "active" | "disabled" | "expired";
   expires_at?: string | null;
@@ -50,7 +52,7 @@ export interface CreatedAdminApiKey {
 export interface UsageRecord {
   id: string;
   request_id: string;
-  tenant_id: string;
+  organization_id: string;
   api_key_id: string;
   endpoint: string;
   model: string;
@@ -130,12 +132,12 @@ export async function findAdminUserByEmail(env: Env, email: string): Promise<Adm
 
 export async function createAdminUser(
   env: Env,
-  input: Pick<AdminUser, "email"> & Partial<Pick<AdminUser, "name" | "role" | "status" | "tenant_id">>
+  input: Pick<AdminUser, "email"> & Partial<Pick<AdminUser, "name" | "role" | "status" | "organization_id">>
 ): Promise<AdminUser> {
   const now = new Date().toISOString();
   const user: AdminUser = {
     id: createId("user"),
-    tenant_id: input.tenant_id || createId("tenant"),
+    organization_id: input.organization_id || createId("organization"),
     email: input.email,
     name: input.name,
     role: input.role || "member",
@@ -166,17 +168,20 @@ export async function getAdminApiKey(env: Env, apiKeyId: string): Promise<AdminA
 
 export async function createAdminApiKey(
   env: Env,
-  input: Pick<AdminApiKey, "tenant_id" | "user_id" | "name"> & Partial<Pick<AdminApiKey, "allowed_models" | "expires_at">>
+  input: Pick<AdminApiKey, "organization_id" | "user_id" | "name"> & Partial<Pick<AdminApiKey, "allowed_models" | "expires_at">>
 ): Promise<CreatedAdminApiKey> {
   const now = new Date().toISOString();
   const token = createApiToken();
+  const encrypted = await encryptApiToken(token, env);
   const apiKey: AdminApiKey = {
     id: createId("key"),
-    tenant_id: input.tenant_id,
+    organization_id: input.organization_id,
     user_id: input.user_id,
     name: input.name,
     key_hash: await sha256Base64Url(token),
     key_prefix: token.slice(0, 14),
+    encrypted_key: encrypted.ciphertext,
+    encrypted_key_iv: encrypted.iv,
     allowed_models: input.allowed_models,
     status: "active",
     expires_at: input.expires_at || null,
@@ -187,6 +192,13 @@ export async function createAdminApiKey(
 
   await saveAdminApiKey(env, apiKey);
   return { apiKey, token };
+}
+
+export async function revealAdminApiKeyToken(env: Env, apiKey: AdminApiKey): Promise<string | undefined> {
+  if (!apiKey.encrypted_key || !apiKey.encrypted_key_iv) {
+    return undefined;
+  }
+  return decryptApiToken(apiKey.encrypted_key, apiKey.encrypted_key_iv, env);
 }
 
 export async function findAdminApiKeyByToken(env: Env, token: string): Promise<AdminApiKey | undefined> {
@@ -233,7 +245,7 @@ export async function recordChatUsage(
   env: Env,
   input: {
     request_id: string;
-    tenant_id: string;
+    organization_id: string;
     api_key_id: string;
     endpoint: string;
     model: string;
@@ -248,7 +260,7 @@ export async function recordChatUsage(
   const record: UsageRecord = {
     id: createId("usage"),
     request_id: input.request_id,
-    tenant_id: input.tenant_id,
+    organization_id: input.organization_id,
     api_key_id: input.api_key_id,
     endpoint: input.endpoint,
     model: input.model,
@@ -273,7 +285,7 @@ export async function recordTaskUsage(env: Env, task: AsyncTaskRecord, statusCod
   await saveUsageRecord(env, {
     id: createId("usage"),
     request_id: task.id,
-    tenant_id: task.tenant_id,
+    organization_id: task.organization_id,
     api_key_id: task.api_key_id,
     endpoint: "/v1/tasks",
     model: task.model,
@@ -403,7 +415,7 @@ function isAdminUser(value: unknown): value is AdminUser {
   }
 
   const user = value as Partial<AdminUser>;
-  return typeof user.id === "string" && typeof user.email === "string" && typeof user.tenant_id === "string";
+  return typeof user.id === "string" && typeof user.email === "string" && typeof user.organization_id === "string";
 }
 
 function isAdminApiKey(value: unknown): value is AdminApiKey {
@@ -428,6 +440,47 @@ function createApiToken(): string {
   const bytes = new Uint8Array(32);
   crypto.getRandomValues(bytes);
   return `tvai_${base64UrlEncode(bytes.buffer)}`;
+}
+
+async function encryptApiToken(token: string, env: Env): Promise<{ ciphertext: string; iv: string }> {
+  const encryptionKey = await deriveEncryptionKey(env);
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const encrypted = await crypto.subtle.encrypt(
+    { name: "AES-GCM", iv },
+    encryptionKey,
+    new TextEncoder().encode(token)
+  );
+  return {
+    ciphertext: base64UrlEncode(encrypted),
+    iv: base64UrlEncode(iv.buffer)
+  };
+}
+
+async function decryptApiToken(ciphertext: string, iv: string, env: Env): Promise<string> {
+  const encryptionKey = await deriveEncryptionKey(env);
+  const decrypted = await crypto.subtle.decrypt(
+    { name: "AES-GCM", iv: base64UrlDecodeToBuffer(iv) },
+    encryptionKey,
+    base64UrlDecodeToBuffer(ciphertext)
+  );
+  return new TextDecoder().decode(decrypted);
+}
+
+async function deriveEncryptionKey(env: Env): Promise<CryptoKey> {
+  const token = env.ADMIN_TOKEN || "teaven-default-encryption-key";
+  const hash = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(token));
+  return crypto.subtle.importKey("raw", hash, { name: "AES-GCM" }, false, ["encrypt", "decrypt"]);
+}
+
+function base64UrlDecodeToBuffer(value: string): Uint8Array {
+  const base64 = value.replace(/-/g, "+").replace(/_/g, "/");
+  const padding = "=".repeat((4 - (base64.length % 4)) % 4);
+  const binary = atob(base64 + padding);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
 }
 
 async function sha256Base64Url(value: string): Promise<string> {

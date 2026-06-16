@@ -27,7 +27,7 @@ export async function handleCreateTask(request: Request, env: Env, auth: AuthCon
   const task: AsyncTaskRecord = {
     id: createId("task"),
     object: "task",
-    tenant_id: auth.tenant_id,
+    organization_id: auth.organization_id,
     api_key_id: auth.api_key_id,
     type,
     model,
@@ -61,7 +61,7 @@ export async function handleCreateTask(request: Request, env: Env, auth: AuthCon
 
 export async function handleGetTask(taskId: string, env: Env, auth: AuthContext, requestId: string): Promise<Response> {
   const task = await getTask(env, taskId);
-  if (!task || task.tenant_id !== auth.tenant_id) {
+  if (!task || task.organization_id !== auth.organization_id) {
     throw notFound("Task not found");
   }
 
@@ -74,7 +74,7 @@ export async function handleGetTask(taskId: string, env: Env, auth: AuthContext,
 
 export async function handleCancelTask(taskId: string, env: Env, auth: AuthContext, requestId: string): Promise<Response> {
   const task = await getTask(env, taskId);
-  if (!task || task.tenant_id !== auth.tenant_id) {
+  if (!task || task.organization_id !== auth.organization_id) {
     throw notFound("Task not found");
   }
 

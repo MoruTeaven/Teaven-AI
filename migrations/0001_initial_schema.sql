@@ -2,9 +2,9 @@
 -- 对应今天的字段清理：已移除 protocol_type 和 provider 冗余字段
 
 -- ============================================================
--- 租户
+-- 组织
 -- ============================================================
-CREATE TABLE IF NOT EXISTS tenants (
+CREATE TABLE IF NOT EXISTS organizations (
   id            TEXT PRIMARY KEY,
   name          TEXT NOT NULL DEFAULT '',
   status        TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'disabled')),
@@ -16,23 +16,23 @@ CREATE TABLE IF NOT EXISTS tenants (
 -- 用户
 -- ============================================================
 CREATE TABLE IF NOT EXISTS users (
-  id            TEXT PRIMARY KEY,
-  tenant_id     TEXT NOT NULL REFERENCES tenants(id),
-  email         TEXT NOT NULL,
-  name          TEXT NOT NULL DEFAULT '',
-  role          TEXT NOT NULL DEFAULT 'member' CHECK (role IN ('owner', 'admin', 'member')),
-  status        TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'disabled')),
-  created_at    TEXT NOT NULL DEFAULT (datetime('now')),
-  updated_at    TEXT NOT NULL DEFAULT (datetime('now'))
+  id                 TEXT PRIMARY KEY,
+  organization_id    TEXT NOT NULL REFERENCES organizations(id),
+  email              TEXT NOT NULL,
+  name               TEXT NOT NULL DEFAULT '',
+  role               TEXT NOT NULL DEFAULT 'member' CHECK (role IN ('owner', 'admin', 'member')),
+  status             TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'disabled')),
+  created_at         TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at         TEXT NOT NULL DEFAULT (datetime('now'))
 );
-CREATE INDEX IF NOT EXISTS idx_users_tenant ON users(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_users_organization ON users(organization_id);
 
 -- ============================================================
 -- API Key
 -- ============================================================
 CREATE TABLE IF NOT EXISTS api_keys (
   id              TEXT PRIMARY KEY,
-  tenant_id       TEXT NOT NULL REFERENCES tenants(id),
+  organization_id TEXT NOT NULL REFERENCES organizations(id),
   user_id         TEXT NOT NULL REFERENCES users(id),
   name            TEXT NOT NULL DEFAULT '',
   key_hash        TEXT NOT NULL,
@@ -44,7 +44,7 @@ CREATE TABLE IF NOT EXISTS api_keys (
   created_at      TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
 );
-CREATE INDEX IF NOT EXISTS idx_api_keys_tenant  ON api_keys(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_api_keys_organization  ON api_keys(organization_id);
 CREATE INDEX IF NOT EXISTS idx_api_keys_user    ON api_keys(user_id);
 CREATE INDEX IF NOT EXISTS idx_api_keys_hash    ON api_keys(key_hash);
 
@@ -64,7 +64,7 @@ CREATE TABLE IF NOT EXISTS gateway_configs (
 CREATE TABLE IF NOT EXISTS usage_records (
   id                TEXT PRIMARY KEY,
   request_id        TEXT NOT NULL,
-  tenant_id         TEXT NOT NULL,
+  organization_id   TEXT NOT NULL,
   api_key_id        TEXT NOT NULL,
   endpoint          TEXT NOT NULL DEFAULT '',
   model             TEXT NOT NULL DEFAULT '',
@@ -81,7 +81,7 @@ CREATE TABLE IF NOT EXISTS usage_records (
   cost              REAL    NOT NULL DEFAULT 0,
   created_at        TEXT    NOT NULL DEFAULT (datetime('now'))
 );
-CREATE INDEX IF NOT EXISTS idx_usage_tenant     ON usage_records(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_usage_organization     ON usage_records(organization_id);
 CREATE INDEX IF NOT EXISTS idx_usage_key        ON usage_records(api_key_id);
 CREATE INDEX IF NOT EXISTS idx_usage_model      ON usage_records(model);
 CREATE INDEX IF NOT EXISTS idx_usage_created    ON usage_records(created_at);
@@ -92,7 +92,7 @@ CREATE INDEX IF NOT EXISTS idx_usage_created    ON usage_records(created_at);
 -- ============================================================
 CREATE TABLE IF NOT EXISTS async_tasks (
   id                      TEXT PRIMARY KEY,
-  tenant_id               TEXT NOT NULL,
+  organization_id         TEXT NOT NULL,
   api_key_id              TEXT NOT NULL,
   type                    TEXT NOT NULL DEFAULT '',
   model                   TEXT NOT NULL DEFAULT '',
@@ -116,7 +116,7 @@ CREATE TABLE IF NOT EXISTS async_tasks (
   updated_at              TEXT NOT NULL DEFAULT (datetime('now')),
   completed_at            TEXT
 );
-CREATE INDEX IF NOT EXISTS idx_tasks_tenant      ON async_tasks(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_tasks_organization      ON async_tasks(organization_id);
 CREATE INDEX IF NOT EXISTS idx_tasks_status      ON async_tasks(status);
 CREATE INDEX IF NOT EXISTS idx_tasks_idempotency ON async_tasks(idempotency_key);
 CREATE INDEX IF NOT EXISTS idx_tasks_created     ON async_tasks(created_at);

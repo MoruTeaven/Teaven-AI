@@ -22,6 +22,7 @@ import {
   getAdminUser,
   listAdminApiKeys,
   listAdminUsers,
+  revealAdminApiKeyToken,
   saveAdminApiKey,
   saveAdminUser,
   summarizeUsage
@@ -179,6 +180,11 @@ export async function handleAdminRequest(
   const apiKeyMatch = pathname.match(/^\/admin\/api\/api-keys\/([^/]+)$/);
   if (request.method === "PATCH" && apiKeyMatch) {
     return handleUpdateAdminApiKey(decodeURIComponent(apiKeyMatch[1]), request, env, requestId);
+  }
+
+  const apiKeyRevealMatch = pathname.match(/^\/admin\/api\/api-keys\/([^/]+)\/reveal$/);
+  if (request.method === "POST" && apiKeyRevealMatch) {
+    return handleRevealAdminApiKey(decodeURIComponent(apiKeyRevealMatch[1]), request, env, requestId);
   }
 
   if (request.method === "GET" && pathname === "/admin/api/usage") {
@@ -567,7 +573,7 @@ async function handleCreateAdminUser(request: Request, env: Env, requestId: stri
     name: optionalBodyString(body.name, "name"),
     role: normalizeUserRole(body.role),
     status: normalizeUserStatus(body.status),
-    tenant_id: optionalBodyString(body.tenant_id, "tenant_id")
+    organization_id: optionalBodyString(body.organization_id, "organization_id")
   });
 
   return jsonResponse(
@@ -634,7 +640,7 @@ async function handleImpersonateUser(request: Request, userId: string, env: Env,
         id: user.id,
         email: user.email,
         name: user.name || null,
-        tenant_id: user.tenant_id
+        organization_id: user.organization_id
       },
       redirect: "/account"
     },
@@ -687,6 +693,37 @@ async function handleUpdateAdminApiKey(apiKeyId: string, request: Request, env: 
   return jsonResponse(
     {
       api_key: publicApiKey(apiKey)
+    },
+    {
+      headers: {
+        "X-Request-Id": requestId
+      }
+    }
+  );
+}
+
+async function handleRevealAdminApiKey(apiKeyId: string, request: Request, env: Env, requestId: string): Promise<Response> {
+  const apiKey = await getAdminApiKey(env, apiKeyId);
+  if (!apiKey) {
+    throw notFound("接口密钥不存在");
+  }
+
+  const body = await readJsonObject(request);
+  const password = requireString(body.password, "password");
+
+  if (!(await verifyAdminPassword(password, env))) {
+    throw invalidRequest("管理员密码不正确");
+  }
+
+  const token = await revealAdminApiKeyToken(env, apiKey);
+  if (!token) {
+    throw notFound("该密钥创建于旧版本，无法查看明文，请重新创建");
+  }
+
+  return jsonResponse(
+    {
+      api_key_id: apiKey.id,
+      token
     },
     {
       headers: {
@@ -915,7 +952,7 @@ function publicProvider(manifest: ProviderPluginManifest, config: GatewayConfig,
 function publicTaskSummary(task: AsyncTaskRecord): Record<string, unknown> {
   return {
     id: task.id,
-    tenant_id: task.tenant_id,
+    organization_id: task.organization_id,
     api_key_id: task.api_key_id,
     type: task.type,
     model: task.model,
@@ -933,7 +970,7 @@ function publicTaskSummary(task: AsyncTaskRecord): Record<string, unknown> {
 function publicApiKey(apiKey: AdminApiKey): Record<string, unknown> {
   return {
     id: apiKey.id,
-    tenant_id: apiKey.tenant_id,
+    organization_id: apiKey.organization_id,
     user_id: apiKey.user_id,
     name: apiKey.name,
     key_prefix: apiKey.key_prefix,
@@ -1322,7 +1359,7 @@ function filterTasks(tasks: AsyncTaskRecord[], searchParams: URLSearchParams): A
     if (type && task.type !== type) {
       return false;
     }
-    if (query && !`${task.id} ${task.tenant_id} ${task.api_key_id} ${task.model} ${task.type}`.toLowerCase().includes(query)) {
+    if (query && !`${task.id} ${task.organization_id} ${task.api_key_id} ${task.model} ${task.type}`.toLowerCase().includes(query)) {
       return false;
     }
     return true;
@@ -1726,6 +1763,8 @@ const ADMIN_APP_HTML = `<!doctype html>
     .table-wrap { overflow-x: auto; }
     .actions { display: flex; gap: 7px; flex-wrap: wrap; }
     .empty { color: var(--muted); padding: 12px 0; }
+    .secret { border: 1px solid rgba(125, 211, 252, 0.38); border-radius: 18px; background: rgba(125, 211, 252, 0.1); padding: 14px; }
+    .alert { border: 1px solid rgba(251, 113, 133, 0.35); border-radius: 16px; background: rgba(251, 113, 133, 0.1); color: #fecdd3; padding: 12px 14px; font-size: 13px; }
     .modal {
       position: fixed;
       inset: 0;
@@ -1974,6 +2013,25 @@ const ADMIN_APP_HTML = `<!doctype html>
         <div class="actions" style="margin-top: 14px;"><button id="create-user" type="button">创建用户</button></div>
       </section>
     </div>
+    <div id="key-reveal-modal" class="modal" aria-hidden="true">
+      <div class="modal-backdrop" data-modal-close></div>
+      <section class="modal-card narrow" role="dialog" aria-modal="true" aria-labelledby="key-reveal-title">
+        <div class="modal-head">
+          <div>
+            <div class="eyebrow">安全验证</div>
+            <h3 id="key-reveal-title">查看密钥明文</h3>
+            <p class="subtitle">请再次输入管理员密码以验证身份。</p>
+          </div>
+          <button class="secondary compact" type="button" data-modal-close>取消</button>
+        </div>
+        <div class="form-grid single modal-form">
+          <label>管理员密码<input id="reveal-password" type="password" placeholder="请输入管理员密码" autocomplete="current-password"></label>
+        </div>
+        <div id="reveal-error" class="alert" style="display:none;"></div>
+        <div id="reveal-result" class="secret" style="display:none; margin-top: 14px;"></div>
+        <div class="actions" style="margin-top: 14px;"><button id="reveal-key-confirm" type="button">验证并查看</button></div>
+      </section>
+    </div>
   </div>
   <script>
     (function () {
@@ -2007,6 +2065,7 @@ const ADMIN_APP_HTML = `<!doctype html>
       document.getElementById('save-upstream-form').addEventListener('click', saveUpstreamFromForm);
       document.getElementById('reset-upstream-form').addEventListener('click', resetUpstreamForm);
       document.getElementById('create-user').addEventListener('click', createUser);
+      document.getElementById('reveal-key-confirm').addEventListener('click', revealApiKey);
       document.getElementById('load-tasks').addEventListener('click', loadTasks);
       document.getElementById('fill-current-config').addEventListener('click', fillCurrentConfig);
       document.getElementById('validate-config').addEventListener('click', validateConfig);
@@ -2159,7 +2218,7 @@ const ADMIN_APP_HTML = `<!doctype html>
             '<header><div class="entity-title"><strong>' + esc(user.email) + '</strong><div class="status">' + esc(user.name || user.id) + '</div></div><span class="pill ' + statusClass(user.status) + '">' + esc(statusText(user.status)) + '</span></header>' +
             '<div class="entity-meta">' +
               '<div class="entity-row"><span>角色</span><strong>' + esc(roleText(user.role)) + '</strong></div>' +
-              '<div class="entity-row"><span>租户</span><code>' + esc(user.tenant_id) + '</code></div>' +
+              '<div class="entity-row"><span>组织</span><code>' + esc(user.organization_id) + '</code></div>' +
             '</div>' +
             '<div class="actions entity-actions"><button type="button" class="secondary compact" data-user-toggle="' + esc(user.id) + '">' + (user.status === 'active' ? '禁用' : '启用') + '</button>' + (user.status === 'active' ? '<button type="button" class="compact" data-user-impersonate="' + esc(user.id) + '" style="background:var(--accent);color:#052e1d;margin-left:4px;">登录为</button>' : '') + '</div>' +
           '</article>';
@@ -2171,7 +2230,7 @@ const ADMIN_APP_HTML = `<!doctype html>
               '<div class="entity-row"><span>用户</span><code>' + esc(key.user_id) + '</code></div>' +
               '<div class="entity-row"><span>模型权限</span><div>' + esc((key.allowed_models || []).join(', ') || '全部') + '</div></div>' +
             '</div>' +
-            '<div class="actions entity-actions"><button type="button" class="secondary compact" data-key-toggle="' + esc(key.id) + '">' + (key.status === 'active' ? '禁用' : '启用') + '</button></div>' +
+            '<div class="actions entity-actions"><button type="button" class="secondary compact" data-key-view="' + esc(key.id) + '">查看密钥</button><button type="button" class="secondary compact" data-key-toggle="' + esc(key.id) + '">' + (key.status === 'active' ? '禁用' : '启用') + '</button></div>' +
           '</article>';
         }).join('') : '<div class="empty">暂无接口密钥。</div>';
       }
@@ -2250,6 +2309,22 @@ const ADMIN_APP_HTML = `<!doctype html>
         await api('/admin/api/users', { method: 'POST', body: JSON.stringify(body) });
         await loadAll(); setStatus('用户已创建：' + body.email, 'ok'); closeModal('user-modal'); resetUserForm();
       }
+      async function revealApiKey() {
+        var keyId = document.getElementById('reveal-key-confirm').getAttribute('data-reveal-key-id');
+        var password = document.getElementById('reveal-password').value;
+        if (!password) { document.getElementById('reveal-error').style.display = 'block'; document.getElementById('reveal-error').textContent = '请输入管理员密码。'; return; }
+        document.getElementById('reveal-error').style.display = 'none';
+        try {
+          var data = await api('/admin/api/api-keys/' + encodeURIComponent(keyId) + '/reveal', { method: 'POST', body: JSON.stringify({ password: password }) });
+          document.getElementById('reveal-result').style.display = 'block';
+          document.getElementById('reveal-result').innerHTML = '<strong>密钥明文：</strong><p><code style="word-break:break-all;">' + esc(data.token) + '</code></p><button class="compact" id="copy-revealed-key" type="button">复制</button><p class="muted">请妥善保管，关闭窗口后需再次验证。</p>';
+          document.getElementById('copy-revealed-key').addEventListener('click', function () { navigator.clipboard.writeText(data.token); setStatus('密钥已复制到剪贴板', 'ok'); });
+          document.getElementById('reveal-password').value = '';
+        } catch (error) {
+          document.getElementById('reveal-error').style.display = 'block';
+          document.getElementById('reveal-error').textContent = error.message || '验证失败';
+        }
+      }
       async function loadTasks() {
         var params = new URLSearchParams(); params.set('limit', value('task-limit')); if (value('task-status')) params.set('status', value('task-status')); if (value('task-query')) params.set('q', value('task-query'));
         var data = await api('/admin/api/tasks?' + params.toString()); state.tasks = data.data || []; renderTasks(state.tasks); setStatus('任务已加载。', 'ok');
@@ -2270,7 +2345,7 @@ const ADMIN_APP_HTML = `<!doctype html>
         if (del && !del.disabled && confirm('确定删除上游 ' + del.getAttribute('data-upstream-delete') + '？')) { await api('/admin/api/upstreams/' + encodeURIComponent(del.getAttribute('data-upstream-delete')), { method: 'DELETE' }); await loadAll(); }
       }
       async function handleUserAction(event) { var toggleBtn = event.target.closest('[data-user-toggle]'); var impersonateBtn = event.target.closest('[data-user-impersonate]'); if (impersonateBtn) { var impersonateId = impersonateBtn.getAttribute('data-user-impersonate'); var impersonateUser = state.users.find(function (item) { return item.id === impersonateId; }); if (!impersonateUser) return; if (!confirm('将以 ' + impersonateUser.email + ' 的身份登录用户中心，确认继续？')) return; setStatus('正在模拟登录...', 'ok'); try { var impersonateRes = await fetch('/admin/api/users/' + encodeURIComponent(impersonateId) + '/impersonate', { method: 'POST' }); if (impersonateRes.ok) { window.open('/account', '_blank'); setStatus('已在新窗口打开用户中心：' + impersonateUser.email, 'ok'); } else { setStatus('模拟登录失败', 'error'); } } catch (e) { setStatus('模拟登录失败', 'error'); } return; } if (!toggleBtn) return; var user = state.users.find(function (item) { return item.id === toggleBtn.getAttribute('data-user-toggle'); }); if (!user) return; await api('/admin/api/users/' + encodeURIComponent(user.id), { method: 'PATCH', body: JSON.stringify({ status: user.status === 'active' ? 'disabled' : 'active' }) }); await loadAll(); }
-      async function handleKeyAction(event) { var button = event.target.closest('[data-key-toggle]'); if (!button) return; var key = state.apiKeys.find(function (item) { return item.id === button.getAttribute('data-key-toggle'); }); if (!key) return; await api('/admin/api/api-keys/' + encodeURIComponent(key.id), { method: 'PATCH', body: JSON.stringify({ status: key.status === 'active' ? 'disabled' : 'active' }) }); await loadAll(); }
+      async function handleKeyAction(event) { var viewBtn = event.target.closest('[data-key-view]'); var toggleBtn = event.target.closest('[data-key-toggle]'); if (viewBtn) { var keyId = viewBtn.getAttribute('data-key-view'); var key = state.apiKeys.find(function (item) { return item.id === keyId; }); if (!key) return; document.getElementById('key-reveal-title').textContent = '查看密钥：' + esc(key.name); document.getElementById('reveal-password').value = ''; document.getElementById('reveal-error').style.display = 'none'; document.getElementById('reveal-result').style.display = 'none'; document.getElementById('reveal-key-confirm').setAttribute('data-reveal-key-id', keyId); openModal('key-reveal-modal', 'key-reveal-title', '查看密钥：' + esc(key.name)); return; } if (!toggleBtn) return; var key = state.apiKeys.find(function (item) { return item.id === toggleBtn.getAttribute('data-key-toggle'); }); if (!key) return; await api('/admin/api/api-keys/' + encodeURIComponent(key.id), { method: 'PATCH', body: JSON.stringify({ status: key.status === 'active' ? 'disabled' : 'active' }) }); await loadAll(); }
       async function handleTaskAction(event) { var view = event.target.closest('[data-task-view]'); var cancel = event.target.closest('[data-task-cancel]'); if (view) { var detail = await api('/admin/api/tasks/' + encodeURIComponent(view.getAttribute('data-task-view'))); document.getElementById('task-detail').textContent = JSON.stringify(detail.task, null, 2); } if (cancel && confirm('确定取消任务？')) { await api('/admin/api/tasks/' + encodeURIComponent(cancel.getAttribute('data-task-cancel')) + '/cancel', { method: 'POST' }); await loadTasks(); } }
 
       function fillModelEditor(alias) { var model = state.models.find(function (item) { return item.alias === alias; }); if (!model) return; var route = model.routes && model.routes[0] ? model.routes[0] : {}; document.getElementById('model-json').value = JSON.stringify(toModelInput(model), null, 2); document.getElementById('model-alias').value = model.alias; document.getElementById('model-modality').value = model.modality; document.getElementById('model-status').value = model.status; document.getElementById('model-stream').value = String(model.supports_stream !== false); var select = document.getElementById('model-upstream-select'); if (select.options.length > 1) { select.value = route.upstream_id || ''; } document.getElementById('route-provider-model').value = route.provider_model || ''; document.getElementById('route-priority').value = route.priority || 1; }
