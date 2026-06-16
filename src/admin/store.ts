@@ -472,7 +472,7 @@ async function deriveEncryptionKey(env: Env): Promise<CryptoKey> {
   return crypto.subtle.importKey("raw", hash, { name: "AES-GCM" }, false, ["encrypt", "decrypt"]);
 }
 
-function base64UrlDecodeToBuffer(value: string): Uint8Array {
+function base64UrlDecodeToBuffer(value: string): ArrayBuffer {
   const base64 = value.replace(/-/g, "+").replace(/_/g, "/");
   const padding = "=".repeat((4 - (base64.length % 4)) % 4);
   const binary = atob(base64 + padding);
@@ -480,7 +480,7 @@ function base64UrlDecodeToBuffer(value: string): Uint8Array {
   for (let i = 0; i < binary.length; i++) {
     bytes[i] = binary.charCodeAt(i);
   }
-  return bytes;
+  return bytes.buffer as ArrayBuffer;
 }
 
 async function sha256Base64Url(value: string): Promise<string> {

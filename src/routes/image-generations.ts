@@ -20,7 +20,7 @@ export async function handleImageGenerations(
     throw invalidRequest("n must be an integer between 1 and 10", "n");
   }
 
-  if (body.response_format !== undefined && !["url", "b64_json"].includes(body.response_format)) {
+  if (body.response_format !== undefined && (typeof body.response_format !== "string" || !["url", "b64_json"].includes(body.response_format))) {
     throw invalidRequest('response_format must be "url" or "b64_json"', "response_format");
   }
 
