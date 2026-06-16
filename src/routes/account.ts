@@ -537,7 +537,7 @@ function redirectResponse(location: string, requestId: string, init: ResponseIni
   });
 }
 
-function serializeAccountSessionCookie(request: Request, value: string, maxAge: number): string {
+export function serializeAccountSessionCookie(request: Request, value: string, maxAge: number): string {
   const attributes = [
     `${ACCOUNT_SESSION_COOKIE}=${value}`,
     "Path=/account",

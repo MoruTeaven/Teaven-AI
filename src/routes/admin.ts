@@ -5,9 +5,16 @@ import {
   createAdminSession,
   verifyAdminPassword
 } from "../auth/admin";
+import {
+  ACCOUNT_SESSION_COOKIE,
+  ACCOUNT_SESSION_TTL_SECONDS,
+  createAccountSession
+} from "../auth/account";
 import { listModels, listProviderRoutes, loadGatewayConfig, resetGatewayConfig, saveGatewayConfig, validateGatewayConfig } from "../config";
 import { conflict, invalidRequest, notFound } from "../http/errors";
 import { jsonResponse } from "../http/response";
+// eslint-disable-next-line import/no-cycle -- admin.ts and account.ts share serialization helper
+import { serializeAccountSessionCookie } from "./account";
 import {
   type AdminApiKey,
   createAdminUser,
@@ -158,6 +165,11 @@ export async function handleAdminRequest(
   const userMatch = pathname.match(/^\/admin\/api\/users\/([^/]+)$/);
   if (request.method === "PATCH" && userMatch) {
     return handleUpdateAdminUser(decodeURIComponent(userMatch[1]), request, env, requestId);
+  }
+
+  const impersonateMatch = pathname.match(/^\/admin\/api\/users\/([^/]+)\/impersonate$/);
+  if (request.method === "POST" && impersonateMatch) {
+    return handleImpersonateUser(request, decodeURIComponent(impersonateMatch[1]), env, requestId);
   }
 
   if (request.method === "GET" && pathname === "/admin/api/api-keys") {
@@ -599,6 +611,36 @@ async function handleUpdateAdminUser(userId: string, request: Request, env: Env,
     },
     {
       headers: {
+        "X-Request-Id": requestId
+      }
+    }
+  );
+}
+
+async function handleImpersonateUser(request: Request, userId: string, env: Env, requestId: string): Promise<Response> {
+  const user = await getAdminUser(env, userId);
+  if (!user) {
+    throw notFound("用户不存在");
+  }
+  if (user.status !== "active") {
+    throw invalidRequest("该用户已被禁用，无法模拟登录");
+  }
+
+  const session = await createAccountSession(env, user.id);
+
+  return jsonResponse(
+    {
+      user: {
+        id: user.id,
+        email: user.email,
+        name: user.name || null,
+        tenant_id: user.tenant_id
+      },
+      redirect: "/account"
+    },
+    {
+      headers: {
+        "Set-Cookie": serializeAccountSessionCookie(request, session, ACCOUNT_SESSION_TTL_SECONDS),
         "X-Request-Id": requestId
       }
     }
@@ -2116,7 +2158,7 @@ const ADMIN_APP_HTML = `<!doctype html>
               '<div class="entity-row"><span>角色</span><strong>' + esc(roleText(user.role)) + '</strong></div>' +
               '<div class="entity-row"><span>租户</span><code>' + esc(user.tenant_id) + '</code></div>' +
             '</div>' +
-            '<div class="actions entity-actions"><button type="button" class="secondary compact" data-user-toggle="' + esc(user.id) + '">' + (user.status === 'active' ? '禁用' : '启用') + '</button></div>' +
+            '<div class="actions entity-actions"><button type="button" class="secondary compact" data-user-toggle="' + esc(user.id) + '">' + (user.status === 'active' ? '禁用' : '启用') + '</button>' + (user.status === 'active' ? '<button type="button" class="compact" data-user-impersonate="' + esc(user.id) + '" style="background:var(--accent);color:#052e1d;margin-left:4px;">登录为</button>' : '') + '</div>' +
           '</article>';
         }).join('') : '<div class="empty">暂无用户。</div>';
         document.getElementById('keys-list').innerHTML = state.apiKeys.length ? state.apiKeys.map(function (key) {
@@ -2224,7 +2266,7 @@ const ADMIN_APP_HTML = `<!doctype html>
         if (edit) { fillUpstreamEditor(edit.getAttribute('data-upstream-edit')); openModal('upstream-modal', 'upstream-modal-title', '编辑上游'); }
         if (del && !del.disabled && confirm('确定删除上游 ' + del.getAttribute('data-upstream-delete') + '？')) { await api('/admin/api/upstreams/' + encodeURIComponent(del.getAttribute('data-upstream-delete')), { method: 'DELETE' }); await loadAll(); }
       }
-      async function handleUserAction(event) { var button = event.target.closest('[data-user-toggle]'); if (!button) return; var user = state.users.find(function (item) { return item.id === button.getAttribute('data-user-toggle'); }); if (!user) return; await api('/admin/api/users/' + encodeURIComponent(user.id), { method: 'PATCH', body: JSON.stringify({ status: user.status === 'active' ? 'disabled' : 'active' }) }); await loadAll(); }
+      async function handleUserAction(event) { var toggleBtn = event.target.closest('[data-user-toggle]'); var impersonateBtn = event.target.closest('[data-user-impersonate]'); if (impersonateBtn) { var impersonateId = impersonateBtn.getAttribute('data-user-impersonate'); var impersonateUser = state.users.find(function (item) { return item.id === impersonateId; }); if (!impersonateUser) return; if (!confirm('将以 ' + impersonateUser.email + ' 的身份登录用户中心，确认继续？')) return; try { await fetch('/admin/api/users/' + encodeURIComponent(impersonateId) + '/impersonate', { method: 'POST' }); } catch (e) { setStatus('模拟登录成功，正在跳转...', 'ok'); } window.location.href = '/account'; return; } if (!toggleBtn) return; var user = state.users.find(function (item) { return item.id === toggleBtn.getAttribute('data-user-toggle'); }); if (!user) return; await api('/admin/api/users/' + encodeURIComponent(user.id), { method: 'PATCH', body: JSON.stringify({ status: user.status === 'active' ? 'disabled' : 'active' }) }); await loadAll(); }
       async function handleKeyAction(event) { var button = event.target.closest('[data-key-toggle]'); if (!button) return; var key = state.apiKeys.find(function (item) { return item.id === button.getAttribute('data-key-toggle'); }); if (!key) return; await api('/admin/api/api-keys/' + encodeURIComponent(key.id), { method: 'PATCH', body: JSON.stringify({ status: key.status === 'active' ? 'disabled' : 'active' }) }); await loadAll(); }
       async function handleTaskAction(event) { var view = event.target.closest('[data-task-view]'); var cancel = event.target.closest('[data-task-cancel]'); if (view) { var detail = await api('/admin/api/tasks/' + encodeURIComponent(view.getAttribute('data-task-view'))); document.getElementById('task-detail').textContent = JSON.stringify(detail.task, null, 2); } if (cancel && confirm('确定取消任务？')) { await api('/admin/api/tasks/' + encodeURIComponent(cancel.getAttribute('data-task-cancel')) + '/cancel', { method: 'POST' }); await loadTasks(); } }
 
