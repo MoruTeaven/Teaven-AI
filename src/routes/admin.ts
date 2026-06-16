@@ -1833,11 +1833,6 @@ const ADMIN_APP_HTML = `<!doctype html>
       <section id="models" class="section">
         <div class="grid">
           <div class="card span-12">
-            <h3>上游配置</h3>
-            <p class="subtitle">上游保存类型、基础地址和 API Key；模型只添加到对应上游下。</p>
-            <div id="model-upstreams" class="stack"></div>
-          </div>
-          <div class="card span-12">
             <div class="card-head">
               <div>
                 <h3>模型列表</h3>

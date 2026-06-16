@@ -1,4 +1,4 @@
-import type { ChatCompletionRequest, Env, ProviderRouteConfig } from "../types";
+import type { ChatCompletionRequest, Env, ImageGenerationRequest, ProviderRouteConfig } from "../types";
 
 export type ExecutionMode = "sync" | "stream" | "stream_or_sync" | "async_polling" | "async_webhook";
 
@@ -36,6 +36,7 @@ export interface ProviderRequestContext {
 export interface ProviderAdapter {
   manifest: ProviderPluginManifest;
   chatCompletions?: (request: ChatCompletionRequest, context: ProviderRequestContext) => Promise<Response>;
+  imageGenerations?: (request: ImageGenerationRequest, context: ProviderRequestContext) => Promise<Response>;
   healthCheck?: (context: ProviderRequestContext) => Promise<void>;
 }
 

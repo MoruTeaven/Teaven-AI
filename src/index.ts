@@ -4,6 +4,7 @@ import { invalidRequest, notFound } from "./http/errors";
 import { handleAdminRequest } from "./routes/admin";
 import { handleAccountRequest } from "./routes/account";
 import { handleChatCompletions } from "./routes/chat-completions";
+import { handleImageGenerations } from "./routes/image-generations";
 import { handleListModels } from "./routes/models";
 import { handleCancelTask, handleCreateTask, handleGetTask } from "./routes/tasks";
 import type { Env } from "./types";
@@ -64,6 +65,10 @@ async function routeRequest(request: Request, env: Env, requestId: string): Prom
 
   if (request.method === "POST" && pathname === "/v1/chat/completions") {
     return handleChatCompletions(request, env, auth, requestId);
+  }
+
+  if (request.method === "POST" && pathname === "/v1/images/generations") {
+    return handleImageGenerations(request, env, auth, requestId);
   }
 
   if (request.method === "POST" && pathname === "/v1/tasks") {

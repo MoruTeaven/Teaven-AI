@@ -84,6 +84,17 @@ export interface ChatCompletionRequest {
   [key: string]: unknown;
 }
 
+export interface ImageGenerationRequest {
+  model: string;
+  prompt: string;
+  n?: number;
+  size?: string;
+  response_format?: "url" | "b64_json";
+  quality?: string;
+  style?: string;
+  [key: string]: unknown;
+}
+
 export type AsyncTaskStatus =
   | "queued"
   | "running"

@@ -1,6 +1,6 @@
 import { jsonResponse } from "../http/response";
 import { upstreamError } from "../http/errors";
-import type { ChatCompletionRequest, Env } from "../types";
+import type { ChatCompletionRequest, Env, ImageGenerationRequest } from "../types";
 import type { ProviderPlugin, ProviderPluginManifest, ProviderRequestContext } from "./types";
 
 const MANIFEST: ProviderPluginManifest = {
@@ -12,6 +12,9 @@ const MANIFEST: ProviderPluginManifest = {
     "chat.completions": {
       execution_mode: "stream_or_sync",
       supports_stream: true
+    },
+    "images.generations": {
+      execution_mode: "sync"
     }
   }
 };
@@ -24,6 +27,9 @@ export function createOpenAICompatiblePlugin(_env: Env): ProviderPlugin {
         manifest: MANIFEST,
         async chatCompletions(request: ChatCompletionRequest, context: ProviderRequestContext): Promise<Response> {
           return forwardChatCompletion(request, context);
+        },
+        async imageGenerations(request: ImageGenerationRequest, context: ProviderRequestContext): Promise<Response> {
+          return forwardImageGeneration(request, context);
         }
       };
     }
@@ -100,6 +106,43 @@ async function mapUpstreamError(response: Response): Promise<Error> {
 
   const status = response.status >= 400 && response.status < 500 ? response.status : 502;
   return upstreamError(message, status, code);
+}
+
+async function forwardImageGeneration(request: ImageGenerationRequest, context: ProviderRequestContext): Promise<Response> {
+  const apiKey = context.credential.api_key;
+  if (!apiKey) {
+    throw upstreamError("Provider API key is missing", 503, "provider_unavailable");
+  }
+
+  const baseUrl = context.credential.base_url || "https://api.openai.com/v1";
+  const upstreamUrl = joinUrl(baseUrl, "/images/generations");
+  const upstreamRequest = {
+    ...request,
+    model: context.route.provider_model
+  };
+
+  const upstream = await fetch(upstreamUrl, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+      "X-Request-Id": context.request_id
+    },
+    body: JSON.stringify(upstreamRequest),
+    signal: context.signal
+  });
+
+  if (!upstream.ok) {
+    throw await mapUpstreamError(upstream);
+  }
+
+  const data = (await upstream.json()) as Record<string, unknown>;
+  return jsonResponse(data, {
+    status: 200,
+    headers: {
+      "X-Request-Id": context.request_id
+    }
+  });
 }
 
 function joinUrl(baseUrl: string, path: string): string {
