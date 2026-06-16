@@ -16,6 +16,7 @@ import {
   getAdminApiKey,
   listAdminApiKeys,
   listUsageRecords,
+  revealAdminApiKeyToken,
   saveAdminApiKey,
   saveAdminUser,
   type AdminApiKey,
@@ -103,6 +104,11 @@ export async function handleAccountRequest(request: Request, env: Env, requestId
     if (request.method === "DELETE") {
       return handleDisableAccountApiKey(user, apiKeyId, env, requestId);
     }
+  }
+
+  const apiKeyRevealMatch = pathname.match(/^\/account\/api\/api-keys\/([^/]+)\/reveal$/);
+  if (request.method === "POST" && apiKeyRevealMatch) {
+    return handleRevealAccountApiKey(user, decodeURIComponent(apiKeyRevealMatch[1]), request, env, requestId);
   }
 
   const taskCancelMatch = pathname.match(/^\/account\/api\/tasks\/([^/]+)\/cancel$/);
@@ -314,6 +320,40 @@ async function handleDisableAccountApiKey(user: AdminUser, apiKeyId: string, env
   return jsonResponse(
     {
       api_key: publicApiKey(apiKey)
+    },
+    {
+      headers: {
+        "X-Request-Id": requestId
+      }
+    }
+  );
+}
+
+async function handleRevealAccountApiKey(
+  user: AdminUser,
+  apiKeyId: string,
+  request: Request,
+  env: Env,
+  requestId: string
+): Promise<Response> {
+  const apiKey = await requireOwnedApiKey(env, user, apiKeyId);
+
+  const body = await readJsonObject(request);
+  const accessToken = requireString(body.access_token, "access_token");
+
+  if (!(await verifyAccountAccessToken(accessToken, env))) {
+    throw invalidRequest("访问口令不正确");
+  }
+
+  const token = await revealAdminApiKeyToken(env, apiKey);
+  if (!token) {
+    throw notFound("该密钥创建于旧版本，无法查看明文，请重新创建");
+  }
+
+  return jsonResponse(
+    {
+      api_key_id: apiKey.id,
+      token
     },
     {
       headers: {
@@ -1003,7 +1043,7 @@ const ACCOUNT_APP_HTML = `<!doctype html>
     }
 
     function renderKeys() {
-      $('#keyList').innerHTML = state.api_keys.length ? state.api_keys.map((key) => '<article class="item"><header><div><strong>' + escapeHtml(key.name) + '</strong><div class="muted"><code>' + escapeHtml(key.key_prefix) + '...</code></div></div><span class="badge ' + escapeHtml(key.status) + '">' + escapeHtml(key.status) + '</span></header><div class="entity-meta"><div class="entity-row"><span>模型</span><span>' + escapeHtml(key.allowed_models.length ? key.allowed_models.join(', ') : '全部模型') + '</span></div><div class="entity-row"><span>过期</span><span>' + escapeHtml(key.expires_at ? formatDate(key.expires_at) : '永不过期') + '</span></div><div class="entity-row"><span>最后使用</span><span>' + escapeHtml(key.last_used_at ? formatDate(key.last_used_at) : '尚未使用') + '</span></div></div><div class="actions"><button class="compact danger" data-disable-key="' + escapeHtml(key.id) + '" ' + (key.status === 'disabled' ? 'disabled' : '') + '>禁用</button></div></article>').join('') : '<div class="notice">还没有 API Key。创建第一个密钥后即可调用 /v1 接口。</div>';
+      $('#keyList').innerHTML = state.api_keys.length ? state.api_keys.map((key) => '<article class="item"><header><div><strong>' + escapeHtml(key.name) + '</strong><div class="muted"><code>' + escapeHtml(key.key_prefix) + '...</code></div></div><span class="badge ' + escapeHtml(key.status) + '">' + escapeHtml(key.status) + '</span></header><div class="entity-meta"><div class="entity-row"><span>模型</span><span>' + escapeHtml(key.allowed_models.length ? key.allowed_models.join(', ') : '全部模型') + '</span></div><div class="entity-row"><span>过期</span><span>' + escapeHtml(key.expires_at ? formatDate(key.expires_at) : '永不过期') + '</span></div><div class="entity-row"><span>最后使用</span><span>' + escapeHtml(key.last_used_at ? formatDate(key.last_used_at) : '尚未使用') + '</span></div></div><div class="actions"><button class="compact" data-reveal-key="' + escapeHtml(key.id) + '">查看密钥</button><button class="compact danger" data-disable-key="' + escapeHtml(key.id) + '" ' + (key.status === 'disabled' ? 'disabled' : '') + '>禁用</button></div><div id="reveal-' + escapeHtml(key.id) + '" class="secret" style="display:none;"></div></article>').join('') : '<div class="notice">还没有 API Key。创建第一个密钥后即可调用 /v1 接口。</div>';
     }
 
     function renderUsage() {
@@ -1105,6 +1145,27 @@ const ACCOUNT_APP_HTML = `<!doctype html>
       if (disableKey && confirm('确定禁用这个 API Key？')) {
         await api('/account/api/api-keys/' + encodeURIComponent(disableKey.dataset.disableKey), { method: 'DELETE' });
         await load();
+      }
+      const revealKey = event.target.closest('[data-reveal-key]');
+      if (revealKey) {
+        const keyId = revealKey.dataset.revealKey;
+        const box = $('#reveal-' + keyId);
+        const isOpen = box.style.display === 'block';
+        if (isOpen) { box.style.display = 'none'; return; }
+        box.style.display = 'block';
+        box.innerHTML = '<label class="full">请输入访问口令以验证身份<input id="reveal-token-' + keyId + '" type="password" placeholder="用户中心访问口令" autocomplete="current-password"></label><button class="compact" id="reveal-confirm-' + keyId + '" type="button">验证并查看</button><div id="reveal-result-' + keyId + '"></div>';
+        $('#reveal-confirm-' + keyId).addEventListener('click', async () => {
+          const accessToken = $('#reveal-token-' + keyId).value;
+          if (!accessToken) return;
+          try {
+            const data = await api('/account/api/api-keys/' + encodeURIComponent(keyId) + '/reveal', { method: 'POST', body: JSON.stringify({ access_token: accessToken }) });
+            $('#reveal-result-' + keyId).innerHTML = '<strong>密钥明文：</strong><p class="row"><code style="word-break:break-all;flex:1;">' + escapeHtml(data.token) + '</code><button class="compact" id="copy-reveal-' + keyId + '" type="button">复制</button></p><p class="muted">请妥善保管。</p>';
+            $('#copy-reveal-' + keyId).addEventListener('click', () => { navigator.clipboard.writeText(data.token); $('#status').textContent = '密钥已复制到剪贴板'; });
+            $('#reveal-token-' + keyId).value = '';
+          } catch (error) {
+            $('#reveal-result-' + keyId).innerHTML = '<p class="muted" style="color:var(--danger);">' + escapeHtml(error.message) + '</p>';
+          }
+        });
       }
       const cancelTask = event.target.closest('[data-cancel-task]');
       if (cancelTask && confirm('确定取消这个任务？')) {

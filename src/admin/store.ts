@@ -467,7 +467,7 @@ async function decryptApiToken(ciphertext: string, iv: string, env: Env): Promis
 }
 
 async function deriveEncryptionKey(env: Env): Promise<CryptoKey> {
-  const token = env.ADMIN_TOKEN || "teaven-default-encryption-key";
+  const token = env.ADMIN_TOKEN || env.USER_CENTER_TOKEN || "teaven-default-encryption-key";
   const hash = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(token));
   return crypto.subtle.importKey("raw", hash, { name: "AES-GCM" }, false, ["encrypt", "decrypt"]);
 }
