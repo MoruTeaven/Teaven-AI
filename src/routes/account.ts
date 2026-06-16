@@ -7,7 +7,7 @@ import {
   isAccountCenterConfigured,
   verifyAccountAccessToken
 } from "../auth/account";
-import { listModels, loadGatewayConfig } from "../config";
+import { listModels, loadGatewayConfig, findModel, selectRoute } from "../config";
 import { conflict, invalidRequest, notFound } from "../http/errors";
 import { jsonResponse } from "../http/response";
 import {
@@ -25,6 +25,7 @@ import {
   type UsageSummary
 } from "../admin/store";
 import { getTask, listTasks, saveTask } from "../tasks/store";
+import { createProviderRegistry, resolveProviderCredential } from "../providers/registry";
 import type { AsyncTaskRecord, Env } from "../types";
 import { readJsonObject, requireString } from "../utils/request";
 
@@ -85,6 +86,10 @@ export async function handleAccountRequest(request: Request, env: Env, requestId
 
   if (request.method === "GET" && pathname === "/account/api/usage") {
     return handleAccountUsage(user, env, requestId);
+  }
+
+  if (request.method === "POST" && pathname === "/account/api/test") {
+    return handleAccountTest(user, request, env, requestId);
   }
 
   if (request.method === "GET" && pathname === "/account/api/tasks") {
@@ -388,6 +393,107 @@ async function handleCancelAccountTask(user: AdminUser, taskId: string, env: Env
       }
     }
   );
+}
+
+async function handleAccountTest(user: AdminUser, request: Request, env: Env, requestId: string): Promise<Response> {
+  const body = await readJsonObject(request);
+  const modelName = requireString(body.model, "model");
+  const mode = body.mode || "sync";
+  const prompt = requireString(body.prompt, "prompt");
+  const temperature = body.temperature || 0.7;
+  const maxTokens = body.max_tokens || 1000;
+
+  const config = await loadGatewayConfig(env);
+  const model = findModel(config, modelName);
+  if (!model) {
+    throw invalidRequest(`Unknown model: ${modelName}`, "model", "model_not_found");
+  }
+
+  if (model.modality !== "text") {
+    throw invalidRequest(`Only text models are supported for testing. Model modality is "${model.modality}"`, "model");
+  }
+
+  if (mode === "stream" && model.supports_stream === false) {
+    throw invalidRequest(`Model does not support stream: ${modelName}`, "mode");
+  }
+
+  const route = selectRoute(model, mode === "stream");
+  if (!route) {
+    throw invalidRequest(`No active provider route for model: ${modelName}`);
+  }
+
+  const registry = createProviderRegistry(env);
+  const plugin = registry.get(route.plugin_id);
+  const adapter = plugin.createAdapter(env);
+  if (!adapter.chatCompletions) {
+    throw invalidRequest(`Provider plugin does not support chat completions: ${route.plugin_id}`);
+  }
+
+  const credential = resolveProviderCredential(env, route);
+  
+  const chatRequest = {
+    model: modelName,
+    messages: [{ role: "user", content: prompt }],
+    temperature: temperature,
+    max_tokens: maxTokens,
+    stream: mode === "stream"
+  };
+
+  const startTime = Date.now();
+  const response = await adapter.chatCompletions(chatRequest as any, {
+    env,
+    request_id: requestId,
+    route,
+    credential,
+    signal: request.signal
+  });
+
+  // For stream mode, we need to collect the streamed data
+  if (mode === "stream") {
+    const chunks = [];
+    const reader = response.body?.getReader();
+    if (reader) {
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          chunks.push(new TextDecoder().decode(value));
+        }
+      } finally {
+        reader.releaseLock();
+      }
+    }
+    
+    return jsonResponse(
+      {
+        mode: "stream",
+        model: modelName,
+        duration_ms: Date.now() - startTime,
+        content: chunks.join("")
+      },
+      {
+        headers: {
+          "X-Request-Id": requestId
+        }
+      }
+    );
+  } else {
+    // For sync mode, parse the JSON response
+    const data = await response.json();
+    return jsonResponse(
+      {
+        mode: "sync",
+        model: modelName,
+        duration_ms: Date.now() - startTime,
+        response: data
+      },
+      {
+        headers: {
+          "X-Request-Id": requestId
+        }
+      }
+    );
+  }
 }
 
 async function listUserApiKeys(env: Env, user: AdminUser): Promise<AdminApiKey[]> {
@@ -894,14 +1000,15 @@ const ACCOUNT_APP_HTML = String.raw`<!doctype html>
         <p class="subtitle" id="subtitle">正在载入账户信息...</p>
       </div>
       <nav class="nav" id="nav">
-        <a href="#dashboard" data-section="dashboard">仪表盘</a>
-        <a href="#profile" data-section="profile">个人资料</a>
-        <a href="#api-keys" data-section="api-keys">API Key</a>
-        <a href="#models" data-section="models">可用模型</a>
-        <a href="#api-docs" data-section="api-docs">接口文档</a>
-        <a href="#usage" data-section="usage">用量统计</a>
-        <a href="#tasks" data-section="tasks">任务管理</a>
-      </nav>
+         <a href="#dashboard" data-section="dashboard">仪表盘</a>
+         <a href="#profile" data-section="profile">个人资料</a>
+         <a href="#api-keys" data-section="api-keys">API Key</a>
+         <a href="#models" data-section="models">可用模型</a>
+         <a href="#test" data-section="test">测试体验</a>
+         <a href="#api-docs" data-section="api-docs">接口文档</a>
+         <a href="#usage" data-section="usage">用量统计</a>
+         <a href="#tasks" data-section="tasks">任务管理</a>
+       </nav>
       <div class="sidebar-footer">
         <button id="theme-toggle" class="secondary" type="button">切换浅色</button>
         <form action="/account/logout" method="post"><button class="secondary" type="submit" style="width: 100%;">退出登录</button></form>
@@ -978,13 +1085,53 @@ const ACCOUNT_APP_HTML = String.raw`<!doctype html>
       </section>
 
       <section id="models" class="section">
-        <div class="grid">
-          <div class="card span-8">
-            <div class="card-head"><h3>可用模型</h3></div>
-            <div id="modelList" class="list"></div>
-          </div>
-        </div>
-      </section>
+         <div class="grid">
+           <div class="card span-8">
+             <div class="card-head"><h3>可用模型</h3></div>
+             <div id="modelList" class="list"></div>
+           </div>
+         </div>
+       </section>
+
+       <section id="test" class="section">
+         <div class="grid">
+           <div class="card span-12">
+             <div class="card-head"><h3>模型测试</h3><p class="subtitle">直接调用模型进行测试</p></div>
+             <form id="testForm" class="form-grid">
+               <label class="full">模型<select id="testModel" name="model" required></select></label>
+               <label class="full" id="testModeLabel">请求模式<select id="testMode" name="mode">
+                 <option value="sync">同步</option>
+                 <option value="stream">流式 (仅文本)</option>
+               </select></label>
+               
+               <label class="full" id="testPromptLabel">提示词<textarea id="testPrompt" name="prompt" rows="4" placeholder="输入你的提示词或问题..." required></textarea></label>
+               
+               <label class="full checkbox-label"><input id="testAdvanced" type="checkbox"><span>高级参数</span></label>
+               
+               <div class="full" id="advancedParams" style="display:none;grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;align-items:end;">
+                 <label>温度 (Temperature)<input id="testTemperature" type="number" min="0" max="2" step="0.1" value="0.7" placeholder="0-2"></label>
+                 <label>最大 Token<input id="testMaxTokens" type="number" min="1" step="1" value="1000" placeholder="最大生成 token 数"></label>
+               </div>
+               
+               <button class="full" type="submit" id="testSubmit">发送测试</button>
+             </form>
+           </div>
+
+           <div class="card span-12">
+             <div class="card-head"><h3>测试结果</h3></div>
+             <div id="testResult" class="stack" style="display:none;">
+               <div style="font-size:12px;color:var(--muted);">
+                 <div><span style="font-weight:bold;">状态:</span> <span id="testStatus"></span></div>
+                 <div><span style="font-weight:bold;">耗时:</span> <span id="testDuration">-</span>ms</div>
+               </div>
+               <div style="border:1px solid var(--line);border-radius:12px;background:var(--panel-strong);padding:12px;overflow:auto;max-height:400px;font-family:Consolas,'SFMono-Regular',monospace;font-size:13px;line-height:1.5;">
+                 <pre id="testOutput" style="margin:0;white-space:pre-wrap;word-break:break-word;"></pre>
+               </div>
+             </div>
+             <div id="testEmpty" class="notice">执行测试后将显示结果</div>
+           </div>
+         </div>
+       </section>
 
       <section id="api-docs" class="section">
         <div class="grid">
@@ -1075,7 +1222,7 @@ Content-Type: application/json</code></pre></div>
     let state = null;
     const $ = (selector) => document.querySelector(selector);
     const fmt = new Intl.NumberFormat('zh-CN');
-    const pageTitles = { dashboard: '仪表盘', profile: '个人资料', 'api-keys': 'API Key', models: '可用模型', 'api-docs': '接口文档', usage: '用量统计', tasks: '任务管理' };
+    const pageTitles = { dashboard: '仪表盘', profile: '个人资料', 'api-keys': 'API Key', models: '可用模型', test: '测试体验', 'api-docs': '接口文档', usage: '用量统计', tasks: '任务管理' };
 
     async function api(path, options = {}) {
       const response = await fetch(path, {
@@ -1093,28 +1240,50 @@ Content-Type: application/json</code></pre></div>
     }
 
     function render() {
-      const user = state.user;
-      $('#subtitle').textContent = user.name ? user.name + ' · ' + user.email : user.email;
-      $('#status').textContent = '数据已更新';
-      $('#profileName').value = user.name || '';
-      $('#profileMeta').innerHTML = '<div class="entity-row"><span>用户 ID</span><code>' + escapeHtml(user.id) + '</code></div><div class="entity-row"><span>组织 ID</span><code>' + escapeHtml(user.organization_id) + '</code></div><div class="entity-row"><span>角色</span><span>' + escapeHtml(user.role) + '</span></div><div class="entity-row"><span>存储</span><span>' + escapeHtml(state.storage.source) + '</span></div>';
-      $('#statKeys').textContent = fmt.format(state.api_keys.length);
-      $('#statRequests').textContent = fmt.format(state.usage.total_requests);
-      $('#statTokens').textContent = fmt.format(state.usage.total_tokens);
-      $('#statTasks').textContent = fmt.format(state.tasks.length);
-      renderModels();
-      renderKeys();
-      renderUsage();
-      renderTasks();
-      renderApiDocs();
-      renderUsageDetail();
-      renderTaskDetail();
-    }
+       const user = state.user;
+       $('#subtitle').textContent = user.name ? user.name + ' · ' + user.email : user.email;
+       $('#status').textContent = '数据已更新';
+       $('#profileName').value = user.name || '';
+       $('#profileMeta').innerHTML = '<div class="entity-row"><span>用户 ID</span><code>' + escapeHtml(user.id) + '</code></div><div class="entity-row"><span>组织 ID</span><code>' + escapeHtml(user.organization_id) + '</code></div><div class="entity-row"><span>角色</span><span>' + escapeHtml(user.role) + '</span></div><div class="entity-row"><span>存储</span><span>' + escapeHtml(state.storage.source) + '</span></div>';
+       $('#statKeys').textContent = fmt.format(state.api_keys.length);
+       $('#statRequests').textContent = fmt.format(state.usage.total_requests);
+       $('#statTokens').textContent = fmt.format(state.usage.total_tokens);
+       $('#statTasks').textContent = fmt.format(state.tasks.length);
+       renderModels();
+       renderTestModels();
+       renderKeys();
+       renderUsage();
+       renderTasks();
+       renderApiDocs();
+       renderUsageDetail();
+       renderTaskDetail();
+     }
 
     function renderModels() {
-      $('#keyModels').innerHTML = state.models.map((model) => '<option value="' + escapeHtml(model.id) + '">' + escapeHtml(model.id) + ' · ' + escapeHtml(model.modality) + '</option>').join('');
-      $('#modelList').innerHTML = state.models.length ? state.models.map((model) => '<div class="item"><header><strong>' + escapeHtml(model.id) + '</strong><span class="badge ok">' + escapeHtml(model.modality) + '</span></header><span class="muted">流式：' + (model.supports_stream ? '支持' : '不支持') + '</span></div>').join('') : '<div class="notice">暂无可用模型。</div>';
-    }
+       $('#keyModels').innerHTML = state.models.map((model) => '<option value="' + escapeHtml(model.id) + '">' + escapeHtml(model.id) + ' · ' + escapeHtml(model.modality) + '</option>').join('');
+       $('#modelList').innerHTML = state.models.length ? state.models.map((model) => '<div class="item"><header><strong>' + escapeHtml(model.id) + '</strong><span class="badge ok">' + escapeHtml(model.modality) + '</span></header><span class="muted">流式：' + (model.supports_stream ? '支持' : '不支持') + '</span></div>').join('') : '<div class="notice">暂无可用模型。</div>';
+     }
+
+     function renderTestModels() {
+       const textModels = state.models.filter((model) => model.modality === 'text');
+       if (textModels.length === 0) {
+         $('#testForm').style.display = 'none';
+         $('#testModel').innerHTML = '';
+         return;
+       }
+       $('#testForm').style.display = 'block';
+       $('#testModel').innerHTML = textModels.map((model) => '<option value="' + escapeHtml(model.id) + '">' + escapeHtml(model.id) + '</option>').join('');
+       
+       const firstModel = textModels[0];
+       const supportsStream = firstModel.supports_stream;
+       
+       if (supportsStream) {
+         $('#testModeLabel').style.display = 'block';
+       } else {
+         $('#testModeLabel').style.display = 'none';
+         $('#testMode').value = 'sync';
+       }
+     }
 
     function renderKeys() {
       $('#keyList').innerHTML = state.api_keys.length ? state.api_keys.map((key) => '<article class="item"><header><div><strong>' + escapeHtml(key.name) + '</strong><div class="muted"><code>' + escapeHtml(key.key_prefix) + '...</code></div></div><span class="badge ' + escapeHtml(key.status) + '">' + escapeHtml(key.status) + '</span></header><div class="entity-meta"><div class="entity-row"><span>模型</span><span>' + escapeHtml(key.allowed_models.length ? key.allowed_models.join(', ') : '全部模型') + '</span></div><div class="entity-row"><span>过期</span><span>' + escapeHtml(key.expires_at ? formatDate(key.expires_at) : '永不过期') + '</span></div><div class="entity-row"><span>最后使用</span><span>' + escapeHtml(key.last_used_at ? formatDate(key.last_used_at) : '尚未使用') + '</span></div></div><div class="actions"><button class="compact" data-reveal-key="' + escapeHtml(key.id) + '">查看密钥</button><button class="compact danger" data-disable-key="' + escapeHtml(key.id) + '" ' + (key.status === 'disabled' ? 'disabled' : '') + '>禁用</button></div><div id="reveal-' + escapeHtml(key.id) + '" class="secret" style="display:none;"></div></article>').join('') : '<div class="notice">还没有 API Key。创建第一个密钥后即可调用 /v1 接口。</div>';
@@ -1179,10 +1348,59 @@ Content-Type: application/json</code></pre></div>
     }
 
     $('#profileForm').addEventListener('submit', async (event) => {
-      event.preventDefault();
-      await api('/account/api/profile', { method: 'PATCH', body: JSON.stringify({ name: $('#profileName').value }) });
-      await load();
-    });
+       event.preventDefault();
+       await api('/account/api/profile', { method: 'PATCH', body: JSON.stringify({ name: $('#profileName').value }) });
+       await load();
+     });
+
+     $('#testForm').addEventListener('submit', async (event) => {
+       event.preventDefault();
+       const model = $('#testModel').value;
+       const mode = $('#testMode').value;
+       const prompt = $('#testPrompt').value;
+       const temperature = parseFloat($('#testTemperature').value) || 0.7;
+       const maxTokens = parseInt($('#testMaxTokens').value) || 1000;
+       
+       $('#testResult').style.display = 'none';
+       $('#testEmpty').style.display = 'block';
+       $('#testSubmit').disabled = true;
+       
+       const startTime = Date.now();
+       
+       try {
+         const result = await api('/account/api/test', {
+           method: 'POST',
+           body: JSON.stringify({
+             model,
+             mode,
+             prompt,
+             temperature,
+             max_tokens: maxTokens
+           })
+         });
+         
+         const duration = Date.now() - startTime;
+         $('#testStatus').textContent = '成功';
+         $('#testDuration').textContent = duration;
+         $('#testOutput').textContent = JSON.stringify(result, null, 2);
+         $('#testEmpty').style.display = 'none';
+         $('#testResult').style.display = 'block';
+       } catch (error) {
+         const duration = Date.now() - startTime;
+         $('#testStatus').textContent = '失败';
+         $('#testDuration').textContent = duration;
+         $('#testOutput').textContent = error.message;
+         $('#testEmpty').style.display = 'none';
+         $('#testResult').style.display = 'block';
+       } finally {
+         $('#testSubmit').disabled = false;
+       }
+     });
+
+     $('#testAdvanced').addEventListener('change', () => {
+       const checked = $('#testAdvanced').checked;
+       $('#advancedParams').style.display = checked ? 'grid' : 'none';
+     });
 
     $('#keyForm').addEventListener('submit', async (event) => {
       event.preventDefault();
