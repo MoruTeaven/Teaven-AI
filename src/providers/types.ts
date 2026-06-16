@@ -9,6 +9,12 @@ export interface ProviderCapability {
   poll_interval_seconds?: number;
 }
 
+export interface AsyncTaskResponse {
+  task_id: string;
+  status: "queued" | "running" | "succeeded" | "failed";
+  [key: string]: unknown;
+}
+
 export interface ProviderPluginManifest {
   id: string;
   name: string;

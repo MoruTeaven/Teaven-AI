@@ -80,6 +80,7 @@ export function listModels(config: GatewayConfig): ModelConfig[] {
       if (existing) {
         existing.routes.push(route);
         existing.supports_stream = existing.supports_stream !== false || upstreamModel.supports_stream !== false;
+        existing.supports_async = existing.supports_async !== false || upstreamModel.supports_async !== false;
         if (existing.status === "hidden" && upstreamModel.status !== "hidden") {
           existing.status = upstreamModel.status || "active";
         }
@@ -88,6 +89,7 @@ export function listModels(config: GatewayConfig): ModelConfig[] {
           alias: upstreamModel.alias,
           modality: upstreamModel.modality,
           supports_stream: upstreamModel.supports_stream !== false,
+          supports_async: upstreamModel.supports_async !== false,
           status: upstreamModel.status || "active",
           routes: [route]
         });
@@ -170,6 +172,7 @@ function toProviderRoute(upstream: UpstreamConfig, model: UpstreamModelConfig): 
     config: upstream.config,
     modality: model.modality,
     supports_stream: model.supports_stream !== false,
+    supports_async: model.supports_async !== false,
     priority: model.priority,
     weight: model.weight,
     status: model.status || "active"

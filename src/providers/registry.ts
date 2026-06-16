@@ -1,6 +1,7 @@
 import { providerUnavailable } from "../http/errors";
 import type { Env, ProviderRouteConfig } from "../types";
 import { createOpenAICompatiblePlugin } from "./openai-compatible";
+import { createMoarkAsyncPlugin } from "./moark-async";
 import type { ProviderCredential, ProviderPlugin } from "./types";
 
 export class ProviderRegistry {
@@ -26,6 +27,7 @@ export class ProviderRegistry {
 export function createProviderRegistry(env: Env): ProviderRegistry {
   const registry = new ProviderRegistry();
   registry.register(createOpenAICompatiblePlugin(env));
+  registry.register(createMoarkAsyncPlugin(env));
   return registry;
 }
 

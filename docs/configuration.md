@@ -276,3 +276,108 @@ wrangler secret put OPENAI_COMPATIBLE_API_KEY
 ```
 
 如果 `OPENAI_COMPATIBLE_BASE_URL` 和 `OPENAI_COMPATIBLE_DEFAULT_MODEL` 仍使用默认值，可以不写在 `wrangler.toml` 里。
+
+## 模力方舟异步接口配置
+
+`moark-async` 是用于对接模力方舟（Gitee AI）异步图像生成接口的 Provider Plugin。
+
+### 请求流程
+
+1. 用户请求 `POST /v1/async/images/generations`，请求体中指定 `model` 为平台模型别名。
+2. 网关根据配置找到对应的上游实例和提供者插件。
+3. 网关将请求转发到模力方舟的异步接口 `POST /async/images/generations`。
+4. 模力方舟返回 `task_id` 和异步任务状态。
+5. 网关创建本地异步任务记录并返回 `202 Accepted` 和 `task_id` 给用户。
+6. 用户可通过 `GET /v1/tasks/{task_id}` 查询任务状态。
+7. 后台通过异步队列对已发送到上游的任务进行轮询，获取最终结果。
+
+### 配置示例
+
+```json
+{
+  "upstreams": [
+    {
+      "id": "moark-image-gen",
+      "name": "Moark Async Image Generation",
+      "plugin_id": "moark-async",
+      "base_url": "https://api.gitee.com/v1",
+      "credential_id": "env:MOARK_API_KEY",
+      "status": "active",
+      "models": [
+        {
+          "alias": "imagen-3",
+          "provider_model": "imagen-3",
+          "modality": "image",
+          "supports_async": true,
+          "priority": 1,
+          "weight": 100,
+          "status": "active"
+        },
+        {
+          "alias": "imagen-2",
+          "provider_model": "imagen-2",
+          "modality": "image",
+          "supports_async": true,
+          "priority": 2,
+          "weight": 100,
+          "status": "active"
+        }
+      ]
+    }
+  ]
+}
+```
+
+### 环境变量配置
+
+在 `.dev.vars` 或 Cloudflare Secret 中设置 API Key：
+
+```bash
+MOARK_API_KEY=your-moark-api-key
+```
+
+### 请求示例
+
+创建异步图像生成任务：
+
+```bash
+curl -X POST http://localhost:8787/v1/async/images/generations \
+  -H "Authorization: Bearer dev-only-change-me" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "imagen-3",
+    "prompt": "A beautiful sunset over mountains",
+    "n": 1,
+    "size": "1024x1024",
+    "response_format": "url"
+  }'
+```
+
+响应示例（202 Accepted）：
+
+```json
+{
+  "id": "task_abc123def456",
+  "object": "task",
+  "type": "image_generation",
+  "status": "queued",
+  "created_at": "2026-06-16T15:30:00Z",
+  "updated_at": "2026-06-16T15:30:00Z"
+}
+```
+
+### 支持的模型属性
+
+- `supports_async`：标记该模型是否支持异步模式（必须为 `true`）。
+- `modality`：模式必须为 `image`。
+- 其他属性与同步接口相同。
+
+### 关键字段说明
+
+| 字段 | 含义 | 示例 |
+| --- | --- | --- |
+| `supports_async` | 模型是否支持异步执行 | `true` |
+| `modality` | 模型模式，图像生成应为 `image` | `"image"` |
+| `plugin_id` | 提供者插件 ID | `"moark-async"` |
+| `base_url` | 模力方舟 API Base URL | `"https://api.gitee.com/v1"` |
+| `credential_id` | API 凭证配置引用 | `"env:MOARK_API_KEY"` |

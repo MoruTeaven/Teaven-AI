@@ -34,6 +34,7 @@ export interface UpstreamModelConfig {
   provider_model: string;
   modality: Modality;
   supports_stream?: boolean;
+  supports_async?: boolean;
   priority?: number;
   weight?: number;
   status?: UpstreamModelStatus;
@@ -60,6 +61,7 @@ export interface ProviderRouteConfig {
   config?: Record<string, unknown>;
   modality: Modality;
   supports_stream?: boolean;
+  supports_async?: boolean;
   priority?: number;
   weight?: number;
   status?: UpstreamModelStatus;
@@ -69,6 +71,7 @@ export interface ModelConfig {
   alias: string;
   modality: Modality;
   supports_stream?: boolean;
+  supports_async?: boolean;
   status?: ModelStatus;
   routes: ProviderRouteConfig[];
 }
