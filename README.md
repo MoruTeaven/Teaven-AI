@@ -114,6 +114,7 @@ npm run typecheck
 
 - `GET /health`
 - `GET /admin`
+- `GET /account`
 - `GET /v1/models`
 - `POST /v1/chat/completions`
 - `POST /v1/tasks`
@@ -155,6 +156,39 @@ http://localhost:8787/admin
 
 ```bash
 ADMIN_TOKEN=admin-dev-only-change-me
+```
+
+### 用户中心
+
+本地启动后访问：
+
+```text
+http://localhost:8787/account
+```
+
+用户中心使用 `USER_CENTER_TOKEN` 作为当前 MVP 的访问口令。首次使用邮箱和访问口令登录时会自动创建用户；登录后支持：
+
+- 查看个人资料、租户 ID、可用模型和存储状态。
+- 自助创建 API Key，密钥明文只展示一次。
+- 禁用自己的 API Key，配置 Key 可访问模型和过期时间。
+- 查看当前用户的用量汇总和最近异步任务。
+- 取消当前租户下仍处于 queued/running 状态的任务。
+
+用户中心 API：
+
+- `GET /account/api/profile`
+- `PATCH /account/api/profile`
+- `GET /account/api/usage`
+- `GET /account/api/tasks`
+- `POST /account/api/api-keys`
+- `PATCH /account/api/api-keys/{api_key_id}`
+- `DELETE /account/api/api-keys/{api_key_id}`
+- `POST /account/api/tasks/{task_id}/cancel`
+
+示例本地环境变量：
+
+```bash
+USER_CENTER_TOKEN=user-center-dev-only-change-me
 ```
 
 默认内置一个 `openai-compatible` Provider Plugin，使用：

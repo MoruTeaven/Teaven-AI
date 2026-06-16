@@ -42,6 +42,11 @@ export interface AdminApiKey {
   last_used_at?: string | null;
 }
 
+export interface CreatedAdminApiKey {
+  apiKey: AdminApiKey;
+  token: string;
+}
+
 export interface UsageRecord {
   id: string;
   request_id: string;
@@ -117,6 +122,12 @@ export async function getAdminUser(env: Env, userId: string): Promise<AdminUser 
   return getStoredObject<AdminUser>(env, `${USER_PREFIX}${userId}`, MEMORY.users, userId, isAdminUser);
 }
 
+export async function findAdminUserByEmail(env: Env, email: string): Promise<AdminUser | undefined> {
+  const normalizedEmail = email.trim().toLowerCase();
+  const users = await listAdminUsers(env);
+  return users.find((user) => user.email.toLowerCase() === normalizedEmail);
+}
+
 export async function createAdminUser(
   env: Env,
   input: Pick<AdminUser, "email"> & Partial<Pick<AdminUser, "name" | "role" | "status" | "tenant_id">>
@@ -151,6 +162,31 @@ export async function listAdminApiKeys(env: Env): Promise<AdminApiKey[]> {
 
 export async function getAdminApiKey(env: Env, apiKeyId: string): Promise<AdminApiKey | undefined> {
   return getStoredObject<AdminApiKey>(env, `${API_KEY_PREFIX}${apiKeyId}`, MEMORY.apiKeys, apiKeyId, isAdminApiKey);
+}
+
+export async function createAdminApiKey(
+  env: Env,
+  input: Pick<AdminApiKey, "tenant_id" | "user_id" | "name"> & Partial<Pick<AdminApiKey, "allowed_models" | "expires_at">>
+): Promise<CreatedAdminApiKey> {
+  const now = new Date().toISOString();
+  const token = createApiToken();
+  const apiKey: AdminApiKey = {
+    id: createId("key"),
+    tenant_id: input.tenant_id,
+    user_id: input.user_id,
+    name: input.name,
+    key_hash: await sha256Base64Url(token),
+    key_prefix: token.slice(0, 14),
+    allowed_models: input.allowed_models,
+    status: "active",
+    expires_at: input.expires_at || null,
+    created_at: now,
+    updated_at: now,
+    last_used_at: null
+  };
+
+  await saveAdminApiKey(env, apiKey);
+  return { apiKey, token };
 }
 
 export async function findAdminApiKeyByToken(env: Env, token: string): Promise<AdminApiKey | undefined> {
@@ -386,6 +422,12 @@ function isUsageRecord(value: unknown): value is UsageRecord {
 
   const record = value as Partial<UsageRecord>;
   return typeof record.id === "string" && typeof record.model === "string" && typeof record.request_id === "string";
+}
+
+function createApiToken(): string {
+  const bytes = new Uint8Array(32);
+  crypto.getRandomValues(bytes);
+  return `tvai_${base64UrlEncode(bytes.buffer)}`;
 }
 
 async function sha256Base64Url(value: string): Promise<string> {

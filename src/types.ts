@@ -9,6 +9,7 @@ export interface Env {
   TASK_QUEUE?: Queue<AsyncTaskQueueMessage>;
   AUTH_MODE?: string;
   ADMIN_TOKEN?: string;
+  USER_CENTER_TOKEN?: string;
   DEV_API_KEY?: string;
   MODEL_CONFIG_JSON?: string;
   OPENAI_COMPATIBLE_API_KEY?: string;

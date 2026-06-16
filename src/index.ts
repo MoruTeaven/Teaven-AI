@@ -2,6 +2,7 @@ import { authenticate } from "./auth/api-key";
 import { errorResponse, emptyResponse, jsonResponse, withCors } from "./http/response";
 import { invalidRequest, notFound } from "./http/errors";
 import { handleAdminRequest } from "./routes/admin";
+import { handleAccountRequest } from "./routes/account";
 import { handleChatCompletions } from "./routes/chat-completions";
 import { handleListModels } from "./routes/models";
 import { handleCancelTask, handleCreateTask, handleGetTask } from "./routes/tasks";
@@ -45,6 +46,10 @@ async function routeRequest(request: Request, env: Env, requestId: string): Prom
 
   if (pathname === "/admin" || pathname.startsWith("/admin/")) {
     return handleAdminRequest(request, env, requestId, pathname);
+  }
+
+  if (pathname === "/account" || pathname.startsWith("/account/")) {
+    return handleAccountRequest(request, env, requestId, pathname);
   }
 
   if (!pathname.startsWith("/v1/")) {

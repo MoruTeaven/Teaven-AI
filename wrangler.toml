@@ -3,7 +3,7 @@ main = "src/index.ts"
 compatibility_date = "2026-06-12"
 
 [[kv_namespaces]]
-binding = "teaven-ai"
+binding = "AI_GATEWAY_KV"
 id = "9b3b75b6e5784d62a6a48bdc3bfde967"
 
 [[d1_databases]]
@@ -16,5 +16,6 @@ tag = "v1"
 
 [vars]
 ADMIN_TOKEN = "admin-dev-only-change-me"
+USER_CENTER_TOKEN = "user-center-dev-only-change-me"
 OPENAI_COMPATIBLE_BASE_URL = "https://api.openai.com/v1"
 OPENAI_COMPATIBLE_DEFAULT_MODEL = "gpt-4o-mini"

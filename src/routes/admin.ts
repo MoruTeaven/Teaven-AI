@@ -1077,7 +1077,8 @@ function buildGatewayInfo(env: Env): Record<string, unknown> {
     queue_bound: Boolean(env.TASK_QUEUE),
     r2_bound: Boolean(env.FILES),
     dev_api_key_configured: Boolean(env.DEV_API_KEY),
-    admin_auth_configured: Boolean(env.ADMIN_TOKEN)
+    admin_auth_configured: Boolean(env.ADMIN_TOKEN),
+    user_center_auth_configured: Boolean(env.USER_CENTER_TOKEN || env.ADMIN_TOKEN)
   };
 }
 
@@ -1089,6 +1090,9 @@ function buildWarnings(env: Env, config: GatewayConfig): string[] {
   }
   if (!env.DEV_API_KEY && env.AUTH_MODE !== "none") {
     warnings.push("未配置 DEV_API_KEY，用户接口认证将失败。");
+  }
+  if (!env.USER_CENTER_TOKEN && !env.ADMIN_TOKEN) {
+    warnings.push("未配置 USER_CENTER_TOKEN，用户中心无法登录。");
   }
   if (!env.AI_GATEWAY_KV) {
     warnings.push("未绑定 AI_GATEWAY_KV，后台保存的模型、用户、接口密钥、用量和任务记录仅保存在内存中。");
@@ -1177,6 +1181,11 @@ function buildFeatureMatrix(env: Env): Array<Record<string, unknown>> {
       detail: env.AI_GATEWAY_KV ? "用户和接口密钥持久化到 KV" : "当前为内存存储，适合本地开发"
     },
     {
+      name: "用户中心",
+      status: env.USER_CENTER_TOKEN || env.ADMIN_TOKEN ? "ready" : "blocked",
+      detail: env.USER_CENTER_TOKEN ? "USER_CENTER_TOKEN 已配置" : env.ADMIN_TOKEN ? "暂用 ADMIN_TOKEN 作为访问口令" : "需要 USER_CENTER_TOKEN"
+    },
+    {
       name: "模型用量统计",
       status: env.AI_GATEWAY_KV ? "ready" : "partial",
       detail: env.AI_GATEWAY_KV ? "用量记录持久化到 KV" : "当前为内存聚合"
@@ -1207,6 +1216,9 @@ function buildFeatureMatrix(env: Env): Array<Record<string, unknown>> {
 function buildEndpointList(): Array<Record<string, string>> {
   return [
     { method: "GET", path: "/health", auth: "无" },
+    { method: "GET", path: "/account", auth: "用户中心会话" },
+    { method: "GET", path: "/account/api/profile", auth: "用户中心会话" },
+    { method: "POST", path: "/account/api/api-keys", auth: "用户中心会话" },
     { method: "GET", path: "/v1/models", auth: "DEV_API_KEY" },
     { method: "POST", path: "/v1/chat/completions", auth: "DEV_API_KEY" },
     { method: "POST", path: "/v1/tasks", auth: "DEV_API_KEY" },
