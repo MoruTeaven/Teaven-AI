@@ -681,7 +681,7 @@ function escapeHtml(value: unknown): string {
     .replace(/'/g, "&#039;");
 }
 
-const ACCOUNT_APP_HTML = `<!doctype html>
+const ACCOUNT_APP_HTML = String.raw`<!doctype html>
 <html lang="zh-CN" data-theme="dark">
 <head>
   <meta charset="utf-8">
