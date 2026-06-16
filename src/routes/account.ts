@@ -857,6 +857,10 @@ const ACCOUNT_APP_HTML = `<!doctype html>
 
     .secret { display: none; margin-top: 12px; border: 1px solid rgba(125, 211, 252, 0.38); border-radius: 18px; background: rgba(125, 211, 252, 0.1); padding: 14px; }
     .notice { color: var(--muted); border: 1px dashed var(--line); border-radius: 18px; padding: 14px; background: rgba(148, 163, 184, 0.06); }
+    .doc-block { display: grid; gap: 12px; }
+    .doc-block p { margin: 0; color: var(--muted); line-height: 1.7; }
+    .doc-list { margin: 0; padding-left: 18px; color: var(--muted); line-height: 1.8; }
+    .code-card { overflow: auto; border: 1px solid var(--line); border-radius: 16px; background: var(--panel-strong); padding: 14px; }
     .checkbox-label { display: flex; align-items: center; gap: 8px; color: var(--text); font-size: 14px; font-weight: 600; cursor: pointer; }
     .checkbox-label input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--accent); cursor: pointer; margin: 0; }
     .key-features { margin-top: 4px; }
@@ -891,6 +895,7 @@ const ACCOUNT_APP_HTML = `<!doctype html>
         <a href="#profile" data-section="profile">个人资料</a>
         <a href="#api-keys" data-section="api-keys">API Key</a>
         <a href="#models" data-section="models">可用模型</a>
+        <a href="#api-docs" data-section="api-docs">接口文档</a>
         <a href="#usage" data-section="usage">用量统计</a>
         <a href="#tasks" data-section="tasks">任务管理</a>
       </nav>
@@ -978,6 +983,71 @@ const ACCOUNT_APP_HTML = `<!doctype html>
         </div>
       </section>
 
+      <section id="api-docs" class="section">
+        <div class="grid">
+          <div class="card span-12 doc-block">
+            <div class="card-head"><h3>异步生图、视频接口</h3></div>
+            <p>图片、视频等媒体能力统一使用异步任务接口。创建任务会立即返回 <code>queued</code> 状态，后续通过任务查询接口轮询结果；如传入 <code>callback_url</code>，后台完成后可向该地址投递任务结果。</p>
+            <div id="mediaModelDocs"></div>
+          </div>
+
+          <div class="card span-6 doc-block">
+            <h3>鉴权</h3>
+            <p>使用用户中心创建的 API Key 调用 <code>/v1</code> 接口。</p>
+            <div class="code-card"><pre><code>Authorization: Bearer YOUR_API_KEY
+Content-Type: application/json</code></pre></div>
+            <p>重复提交保护可选传入 <code>Idempotency-Key</code> 请求头。</p>
+          </div>
+
+          <div class="card span-6 doc-block">
+            <h3>任务状态</h3>
+            <ul class="doc-list">
+              <li><code>queued</code>：已入队，等待后台执行。</li>
+              <li><code>running</code>：执行中。</li>
+              <li><code>succeeded</code>：成功，查看 <code>output</code>。</li>
+              <li><code>failed</code>：失败，查看 <code>error</code>。</li>
+              <li><code>canceled</code> / <code>expired</code>：已取消或已过期。</li>
+            </ul>
+          </div>
+
+          <div class="card span-12 doc-block">
+            <h3>创建生图任务</h3>
+            <div class="code-card"><pre><code id="imageTaskExample"></code></pre></div>
+          </div>
+
+          <div class="card span-12 doc-block">
+            <h3>创建视频任务</h3>
+            <div class="code-card"><pre><code id="videoTaskExample"></code></pre></div>
+          </div>
+
+          <div class="card span-6 doc-block">
+            <h3>查询任务</h3>
+            <div class="code-card"><pre><code id="getTaskExample"></code></pre></div>
+          </div>
+
+          <div class="card span-6 doc-block">
+            <h3>取消任务</h3>
+            <div class="code-card"><pre><code id="cancelTaskExample"></code></pre></div>
+          </div>
+
+          <div class="card span-12 doc-block">
+            <h3>创建任务字段</h3>
+            <table>
+              <thead><tr><th>字段</th><th>类型</th><th>说明</th></tr></thead>
+              <tbody>
+                <tr><td><code>type</code></td><td>string</td><td>任务类型，例如 <code>image.generation</code>、<code>video.generation</code>。</td></tr>
+                <tr><td><code>model</code></td><td>string</td><td>模型别名，建议从“可用模型”或本页媒体模型列表选择。</td></tr>
+                <tr><td><code>input</code></td><td>object</td><td>模型输入。常见字段包括 <code>prompt</code>、<code>size</code>、<code>duration</code>、<code>fps</code> 等，具体以模型配置为准。</td></tr>
+                <tr><td><code>store_output</code></td><td>boolean</td><td>是否把结果文件转存到平台存储，默认 <code>false</code>。</td></tr>
+                <tr><td><code>storage_ttl_seconds</code></td><td>integer</td><td>平台文件保留时间，默认且最大 <code>86400</code> 秒。</td></tr>
+                <tr><td><code>callback_url</code></td><td>string</td><td>可选，任务完成后回调地址。</td></tr>
+                <tr><td><code>metadata</code></td><td>object</td><td>可选，自定义业务元数据，会随任务记录返回。</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
       <section id="usage" class="section">
         <div class="grid">
           <div class="card span-12">
@@ -1002,7 +1072,7 @@ const ACCOUNT_APP_HTML = `<!doctype html>
     let state = null;
     const $ = (selector) => document.querySelector(selector);
     const fmt = new Intl.NumberFormat('zh-CN');
-    const pageTitles = { dashboard: '仪表盘', profile: '个人资料', 'api-keys': 'API Key', models: '可用模型', usage: '用量统计', tasks: '任务管理' };
+    const pageTitles = { dashboard: '仪表盘', profile: '个人资料', 'api-keys': 'API Key', models: '可用模型', 'api-docs': '接口文档', usage: '用量统计', tasks: '任务管理' };
 
     async function api(path, options = {}) {
       const response = await fetch(path, {
@@ -1033,6 +1103,7 @@ const ACCOUNT_APP_HTML = `<!doctype html>
       renderKeys();
       renderUsage();
       renderTasks();
+      renderApiDocs();
       renderUsageDetail();
       renderTaskDetail();
     }
@@ -1054,6 +1125,26 @@ const ACCOUNT_APP_HTML = `<!doctype html>
     function renderTasks() {
       const rows = state.tasks.map((task) => '<tr><td><code>' + escapeHtml(task.id) + '</code></td><td>' + escapeHtml(task.model) + '</td><td><span class="badge ' + escapeHtml(task.status) + '">' + escapeHtml(task.status) + '</span></td><td>' + formatDate(task.created_at) + '</td><td>' + (task.cancelable ? '<button class="compact danger" data-cancel-task="' + escapeHtml(task.id) + '">取消</button>' : '') + '</td></tr>').join('');
       $('#taskTable').innerHTML = rows ? '<table><thead><tr><th>任务</th><th>模型</th><th>状态</th><th>创建</th><th></th></tr></thead><tbody>' + rows + '</tbody></table>' : '<div class="notice">暂无任务。</div>';
+    }
+
+    function renderApiDocs() {
+      const origin = window.location.origin;
+      const imageModel = findModelByModality('image') || 'image-basic';
+      const videoModel = findModelByModality('video') || 'video-basic';
+      const mediaModels = state.models.filter((model) => model.modality === 'image' || model.modality === 'video');
+      const imageBody = JSON.stringify({ type: 'image.generation', model: imageModel, input: { prompt: '一只猫坐在云端', size: '1024x1024', n: 1 }, store_output: true, storage_ttl_seconds: 86400, callback_url: 'https://example.com/webhooks/ai-task', metadata: { biz_id: 'order_123' } }, null, 2);
+      const videoBody = JSON.stringify({ type: 'video.generation', model: videoModel, input: { prompt: '海面日出，电影感镜头推进', duration: 5, size: '1280x720', fps: 24 }, store_output: true, storage_ttl_seconds: 86400, metadata: { scene: 'landing-page' } }, null, 2);
+
+      $('#mediaModelDocs').innerHTML = mediaModels.length ? '<table><thead><tr><th>模型</th><th>类型</th><th>流式</th></tr></thead><tbody>' + mediaModels.map((model) => '<tr><td><code>' + escapeHtml(model.id) + '</code></td><td>' + escapeHtml(model.modality) + '</td><td>' + (model.supports_stream ? '支持' : '不支持') + '</td></tr>').join('') + '</tbody></table>' : '<div class="notice">当前没有配置 image/video 模型。可先在后台添加媒体模型，再按下方异步任务接口调用。</div>';
+      $('#imageTaskExample').textContent = ['POST ' + origin + '/v1/tasks', 'Authorization: Bearer YOUR_API_KEY', 'Content-Type: application/json', 'Idempotency-Key: image-demo-001', '', imageBody].join('\n');
+      $('#videoTaskExample').textContent = ['POST ' + origin + '/v1/tasks', 'Authorization: Bearer YOUR_API_KEY', 'Content-Type: application/json', '', videoBody].join('\n');
+      $('#getTaskExample').textContent = ['GET ' + origin + '/v1/tasks/task_xxx', 'Authorization: Bearer YOUR_API_KEY'].join('\n');
+      $('#cancelTaskExample').textContent = ['POST ' + origin + '/v1/tasks/task_xxx/cancel', 'Authorization: Bearer YOUR_API_KEY'].join('\n');
+    }
+
+    function findModelByModality(modality) {
+      const model = state.models.find((item) => item.modality === modality);
+      return model ? model.id : '';
     }
 
     function renderUsageDetail() {
