@@ -639,134 +639,330 @@ function escapeHtml(value: unknown): string {
 }
 
 const ACCOUNT_APP_HTML = `<!doctype html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-theme="dark">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Teaven AI 用户中心</title>
   <style>
-    :root { color-scheme: dark; --bg: #071012; --panel: rgba(15, 23, 42, 0.9); --panel-strong: #101827; --line: #263443; --text: #f8fafc; --muted: #94a3b8; --accent: #34d399; --accent-soft: rgba(52, 211, 153, 0.14); --warn: #f59e0b; --danger: #fb7185; --shadow: rgba(0, 0, 0, 0.28); }
+    :root {
+      color-scheme: dark;
+      --bg: #07111f;
+      --panel: rgba(15, 23, 42, 0.9);
+      --panel-strong: #111827;
+      --line: #26364f;
+      --text: #f8fafc;
+      --muted: #94a3b8;
+      --accent: #7dd3fc;
+      --accent-strong: #38bdf8;
+      --accent-soft: rgba(125, 211, 252, 0.13);
+      --ok: #86efac;
+      --warn: #fbbf24;
+      --danger: #fb7185;
+      --shadow: rgba(0, 0, 0, 0.28);
+    }
+
+    html[data-theme="light"] {
+      color-scheme: light;
+      --bg: #f4f7fb;
+      --panel: rgba(255, 255, 255, 0.92);
+      --panel-strong: #ffffff;
+      --line: #d9e2ef;
+      --text: #0f172a;
+      --muted: #64748b;
+      --accent: #0369a1;
+      --accent-strong: #0284c7;
+      --accent-soft: rgba(3, 105, 161, 0.13);
+      --ok: #15803d;
+      --warn: #a16207;
+      --danger: #be123c;
+      --shadow: rgba(15, 23, 42, 0.12);
+    }
+
     * { box-sizing: border-box; }
-    body { margin: 0; min-height: 100vh; color: var(--text); background: radial-gradient(circle at top left, rgba(52, 211, 153, 0.18), transparent 28rem), radial-gradient(circle at 90% 10%, rgba(56, 189, 248, 0.12), transparent 24rem), var(--bg); font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-    button, input, select { font: inherit; }
-    button { border: 0; border-radius: 999px; background: var(--accent); color: #052e1d; cursor: pointer; font-weight: 900; padding: 10px 14px; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background:
+        radial-gradient(circle at top left, rgba(56, 189, 248, 0.18), transparent 30rem),
+        var(--bg);
+      color: var(--text);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    button, input, select, textarea { font: inherit; }
+    button {
+      border: 0;
+      border-radius: 999px;
+      background: var(--accent);
+      color: #06111f;
+      cursor: pointer;
+      font-weight: 800;
+      padding: 10px 14px;
+      transition: transform 150ms ease, background 150ms ease;
+    }
+    button:hover {
+      background: var(--accent-strong);
+      transform: translateY(-1px);
+    }
     button.secondary { background: transparent; color: var(--text); border: 1px solid var(--line); }
-    button.danger { background: rgba(251, 113, 133, 0.14); color: #fecdd3; border: 1px solid rgba(251, 113, 133, 0.36); }
-    button.compact { padding: 7px 10px; font-size: 12px; }
-    button:disabled { opacity: 0.55; cursor: not-allowed; }
-    input, select { width: 100%; color: var(--text); background: var(--panel-strong); border: 1px solid var(--line); border-radius: 12px; outline: none; padding: 10px 12px; }
-    input:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(52, 211, 153, 0.12); }
-    .layout { width: min(1480px, 100%); margin: 0 auto; padding: 28px; }
-    .topbar { display: flex; justify-content: space-between; gap: 16px; align-items: flex-end; margin-bottom: 20px; }
-    .eyebrow { color: var(--accent); font-size: 11px; font-weight: 900; letter-spacing: 0.2em; text-transform: uppercase; }
-    h1 { margin: 8px 0 0; font-size: clamp(36px, 6vw, 68px); letter-spacing: -0.07em; line-height: 0.92; }
-    h2, h3, p { margin: 0; }
-    .subtitle, .muted { color: var(--muted); }
+    button.danger { background: rgba(251, 113, 133, 0.16); color: var(--danger); border: 1px solid rgba(251, 113, 133, 0.35); }
+    button.compact { padding: 6px 10px; font-size: 12px; }
+    button:disabled { cursor: not-allowed; opacity: 0.55; }
+    input, select {
+      width: 100%;
+      color: var(--text);
+      background: var(--panel-strong);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      outline: none;
+      padding: 10px 12px;
+    }
+    input:focus, select:focus { border-color: var(--accent-strong); box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.12); }
+
+    .layout { display: grid; grid-template-columns: 270px 1fr; min-height: 100vh; }
+    .sidebar {
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      padding: 22px 16px;
+      background: color-mix(in srgb, var(--panel) 92%, transparent);
+      border-right: 1px solid var(--line);
+      backdrop-filter: blur(18px);
+      display: flex;
+      flex-direction: column;
+      gap: 18px;
+    }
+    .brand { padding: 6px 8px 14px; border-bottom: 1px solid var(--line); }
+    .eyebrow { color: var(--accent); font-size: 11px; font-weight: 900; letter-spacing: 0.22em; text-transform: uppercase; }
+    .brand h1 { margin: 8px 0 0; font-size: 24px; letter-spacing: -0.04em; }
+    .nav { display: grid; gap: 7px; }
+    .nav a {
+      color: var(--muted);
+      text-decoration: none;
+      padding: 11px 12px;
+      border-radius: 14px;
+      font-weight: 800;
+    }
+    .nav a.active, .nav a:hover { color: var(--text); background: var(--accent-soft); }
+    .sidebar-footer { margin-top: auto; display: grid; gap: 10px; }
+    .content { padding: 28px; min-width: 0; }
+    .topbar { display: flex; justify-content: space-between; gap: 16px; align-items: flex-end; margin-bottom: 22px; }
+    .topbar h2 { margin: 0; font-size: clamp(30px, 5vw, 54px); letter-spacing: -0.06em; line-height: 0.95; }
+    .subtitle { color: var(--muted); margin: 10px 0 0; }
+    .toolbar { display: flex; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
+
     .grid { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 16px; }
-    .card { background: var(--panel); border: 1px solid var(--line); border-radius: 24px; padding: 18px; box-shadow: 0 22px 72px var(--shadow); backdrop-filter: blur(18px); min-width: 0; }
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 22px;
+      padding: 18px;
+      box-shadow: 0 20px 70px var(--shadow);
+      backdrop-filter: blur(18px);
+    }
     .span-12 { grid-column: span 12; }
     .span-8 { grid-column: span 8; }
     .span-6 { grid-column: span 6; }
     .span-4 { grid-column: span 4; }
-    .card-head { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; margin-bottom: 14px; }
-    .stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
-    .stat { border: 1px solid var(--line); border-radius: 18px; padding: 14px; background: var(--panel-strong); }
-    .stat strong { display: block; font-size: 26px; letter-spacing: -0.04em; }
+    .card h3 { margin: 0 0 12px; font-size: 17px; }
+    .card-head { display: flex; justify-content: space-between; gap: 16px; align-items: flex-start; margin-bottom: 14px; }
+    .card-head h3 { margin-bottom: 6px; }
+    .stat-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+    .stat { padding: 15px; background: var(--panel-strong); border: 1px solid var(--line); border-radius: 16px; }
+    .stat strong { display: block; font-size: 28px; letter-spacing: -0.04em; }
+    .stat span, label { color: var(--muted); font-size: 12px; font-weight: 800; }
+
     .form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; align-items: end; }
+    .form-grid label { display: grid; gap: 6px; }
     .full { grid-column: 1 / -1; }
-    .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    .stack { display: grid; gap: 10px; }
     .list { display: grid; gap: 10px; }
-    .item { border: 1px solid var(--line); background: var(--panel-strong); border-radius: 18px; padding: 14px; display: grid; gap: 10px; }
+    .item {
+      display: grid;
+      gap: 12px;
+      min-width: 0;
+      padding: 16px;
+      background: var(--panel-strong);
+      border: 1px solid var(--line);
+      border-radius: 18px;
+    }
+    .item:hover { border-color: color-mix(in srgb, var(--accent) 42%, var(--line)); }
     .item header { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; }
-    .meta { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 14px; color: var(--muted); font-size: 13px; }
-    .badge { display: inline-flex; align-items: center; width: max-content; border: 1px solid var(--line); border-radius: 999px; padding: 4px 9px; color: var(--muted); font-size: 12px; font-weight: 800; }
-    .badge.active { color: #bbf7d0; border-color: rgba(52, 211, 153, 0.38); background: var(--accent-soft); }
-    .badge.disabled, .badge.failed { color: #fecdd3; border-color: rgba(251, 113, 133, 0.38); background: rgba(251, 113, 133, 0.12); }
-    .badge.queued, .badge.running { color: #fde68a; border-color: rgba(245, 158, 11, 0.4); background: rgba(245, 158, 11, 0.12); }
-    table { width: 100%; border-collapse: collapse; font-size: 13px; }
-    th, td { padding: 10px 8px; text-align: left; border-bottom: 1px solid var(--line); vertical-align: top; }
-    th { color: var(--muted); font-size: 12px; }
-    code { word-break: break-all; color: #bbf7d0; }
-    .secret { display: none; margin-top: 12px; border: 1px solid rgba(52, 211, 153, 0.38); border-radius: 18px; background: rgba(52, 211, 153, 0.1); padding: 14px; }
+    .entity-title { min-width: 0; }
+    .entity-title strong { display: block; font-size: 16px; line-height: 1.3; word-break: break-word; }
+    .entity-title code { word-break: break-all; }
+    .entity-meta { display: grid; gap: 8px; }
+    .entity-row { display: grid; grid-template-columns: 88px minmax(0, 1fr); gap: 10px; align-items: start; font-size: 13px; }
+    .entity-row > span:first-child { color: var(--muted); font-size: 12px; font-weight: 900; }
+    .entity-row code { word-break: break-all; }
+    .entity-actions { padding-top: 2px; }
+    .section { display: none; }
+    .section.active { display: block; }
+
+    .badge { display: inline-flex; border: 1px solid var(--line); border-radius: 999px; padding: 3px 8px; color: var(--muted); font-size: 12px; margin: 2px 4px 2px 0; }
+    .badge.ok { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 35%, transparent); background: rgba(134, 239, 172, 0.1); }
+    .badge.warn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 35%, transparent); background: rgba(251, 191, 36, 0.1); }
+    .badge.danger { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 35%, transparent); background: rgba(251, 113, 133, 0.1); }
+    .badge.active { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 35%, transparent); background: rgba(134, 239, 172, 0.1); }
+    .badge.disabled { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 35%, transparent); background: rgba(251, 113, 133, 0.1); }
+    .badge.queued, .badge.running { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 35%, transparent); background: rgba(251, 191, 36, 0.1); }
+    .badge.failed { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 35%, transparent); background: rgba(251, 113, 133, 0.1); }
+
+    table { width: 100%; border-collapse: collapse; }
+    th, td { border-bottom: 1px solid var(--line); padding: 10px 8px; text-align: left; vertical-align: top; font-size: 13px; }
+    th { color: var(--muted); font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; }
+    code, pre { font-family: Consolas, "SFMono-Regular", monospace; }
+    pre { margin: 0; white-space: pre-wrap; word-break: break-word; }
+    code { color: var(--accent); }
+
+    .secret { display: none; margin-top: 12px; border: 1px solid rgba(125, 211, 252, 0.38); border-radius: 18px; background: rgba(125, 211, 252, 0.1); padding: 14px; }
     .notice { color: var(--muted); border: 1px dashed var(--line); border-radius: 18px; padding: 14px; background: rgba(148, 163, 184, 0.06); }
     .checkbox-label { display: flex; align-items: center; gap: 8px; color: var(--text); font-size: 14px; font-weight: 600; cursor: pointer; }
     .checkbox-label input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--accent); cursor: pointer; margin: 0; }
     .key-features { margin-top: 4px; }
     .key-features .badge { font-size: 11px; }
-    @media (max-width: 980px) { .span-8, .span-6, .span-4 { grid-column: span 12; } .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); } .topbar { align-items: flex-start; flex-direction: column; } }
-    @media (max-width: 640px) { .layout { padding: 18px; } .stats, .form-grid, .meta { grid-template-columns: 1fr; } .card { border-radius: 20px; } table { display: block; overflow-x: auto; white-space: nowrap; } }
+    .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    .actions { display: flex; gap: 7px; flex-wrap: wrap; }
+
+    @media (max-width: 980px) {
+      .layout { grid-template-columns: 1fr; }
+      .sidebar { position: static; height: auto; }
+      .content { padding: 18px; }
+      .topbar { display: grid; }
+      .toolbar { justify-content: flex-start; }
+      .stat-grid, .form-grid { grid-template-columns: 1fr; }
+      .card-head { display: grid; }
+      .card-head button { width: 100%; }
+      .entity-row { grid-template-columns: 1fr; gap: 4px; }
+      .span-4, .span-6, .span-8, .span-12 { grid-column: span 12; }
+    }
   </style>
 </head>
 <body>
-  <main class="layout">
-    <header class="topbar">
-      <div>
+  <div class="layout">
+    <aside class="sidebar">
+      <div class="brand">
         <div class="eyebrow">Teaven AI Gateway</div>
         <h1>用户中心</h1>
         <p class="subtitle" id="subtitle">正在载入账户信息...</p>
       </div>
-      <form action="/account/logout" method="post"><button class="secondary" type="submit">退出登录</button></form>
-    </header>
+      <nav class="nav" id="nav">
+        <a href="#dashboard" data-section="dashboard">仪表盘</a>
+        <a href="#profile" data-section="profile">个人资料</a>
+        <a href="#api-keys" data-section="api-keys">API Key</a>
+        <a href="#models" data-section="models">可用模型</a>
+        <a href="#usage" data-section="usage">用量统计</a>
+        <a href="#tasks" data-section="tasks">任务管理</a>
+      </nav>
+      <div class="sidebar-footer">
+        <button id="theme-toggle" class="secondary" type="button">切换浅色</button>
+        <form action="/account/logout" method="post"><button class="secondary" type="submit" style="width: 100%;">退出登录</button></form>
+      </div>
+    </aside>
+    <main class="content">
+      <div class="topbar">
+        <div>
+          <h2 id="page-title">仪表盘</h2>
+          <p id="status" class="subtitle"></p>
+        </div>
+        <div class="toolbar">
+          <button id="refresh" class="secondary" type="button">刷新</button>
+        </div>
+      </div>
 
-    <section class="grid">
-      <section class="card span-12">
-        <div class="stats">
-          <div class="stat"><span class="muted">API Key</span><strong id="statKeys">0</strong></div>
-          <div class="stat"><span class="muted">请求数</span><strong id="statRequests">0</strong></div>
-          <div class="stat"><span class="muted">Token</span><strong id="statTokens">0</strong></div>
-          <div class="stat"><span class="muted">任务</span><strong id="statTasks">0</strong></div>
+      <section id="dashboard" class="section">
+        <div class="grid">
+          <div class="card span-12">
+            <div class="stat-grid">
+              <div class="stat"><span>API Key</span><strong id="statKeys">0</strong></div>
+              <div class="stat"><span>请求数</span><strong id="statRequests">0</strong></div>
+              <div class="stat"><span>Token</span><strong id="statTokens">0</strong></div>
+              <div class="stat"><span>任务</span><strong id="statTasks">0</strong></div>
+            </div>
+          </div>
+
+          <div class="card span-6">
+            <div class="card-head"><h3>用量概览</h3></div>
+            <div id="usageTable"></div>
+          </div>
+
+          <div class="card span-6">
+            <div class="card-head"><h3>最近任务</h3></div>
+            <div id="taskTable"></div>
+          </div>
         </div>
       </section>
 
-      <section class="card span-4">
-        <div class="card-head"><div><h2>个人资料</h2><p class="muted">账户和租户信息</p></div></div>
-        <form id="profileForm" class="form-grid">
-          <label class="full">显示名称<input id="profileName" name="name" placeholder="可选"></label>
-          <div class="full meta" id="profileMeta"></div>
-          <button class="full" type="submit">保存资料</button>
-        </form>
+      <section id="profile" class="section">
+        <div class="grid">
+          <div class="card span-6">
+            <div class="card-head"><h3>个人资料</h3></div>
+            <form id="profileForm" class="form-grid">
+              <label class="full">显示名称<input id="profileName" name="name" placeholder="可选"></label>
+              <div class="full" id="profileMeta"></div>
+              <button class="full" type="submit">保存资料</button>
+            </form>
+          </div>
+        </div>
       </section>
 
-      <section class="card span-8">
-        <div class="card-head"><div><h2>创建 API Key</h2><p class="muted">密钥明文只展示一次</p></div></div>
-        <form id="keyForm" class="form-grid">
-          <label class="full">名称<input id="keyName" name="name" value="默认密钥" required></label>
-          <label class="full" id="expiresLabel">过期时间<input id="keyExpires" name="expires_at" type="datetime-local"></label>
-          <div class="full row"><label class="checkbox-label"><input id="keyPermanent" type="checkbox" checked><span>永不过期</span></label></div>
-          <div class="full row"><label class="checkbox-label"><input id="keyAllModels" type="checkbox" checked><span>不限模型</span></label></div>
-          <label class="full" id="modelsLabel">指定模型<select id="keyModels" name="allowed_models" multiple size="4" disabled></select></label>
-          <div class="full row key-features"><span class="badge active">用量：不限</span><span class="badge active" id="expiresBadge">过期：永不</span><span class="badge active" id="modelsBadge">模型：全部</span></div>
-          <button type="submit">创建密钥</button>
-        </form>
-        <div id="secretBox" class="secret"></div>
+      <section id="api-keys" class="section">
+        <div class="grid">
+          <div class="card span-8">
+            <div class="card-head"><h3>创建 API Key</h3></div>
+            <form id="keyForm" class="form-grid">
+              <label class="full">名称<input id="keyName" name="name" value="默认密钥" required></label>
+              <label class="full" id="expiresLabel">过期时间<input id="keyExpires" name="expires_at" type="datetime-local"></label>
+              <div class="full row"><label class="checkbox-label"><input id="keyPermanent" type="checkbox" checked><span>永不过期</span></label></div>
+              <div class="full row"><label class="checkbox-label"><input id="keyAllModels" type="checkbox" checked><span>不限模型</span></label></div>
+              <label class="full" id="modelsLabel">指定模型<select id="keyModels" name="allowed_models" multiple size="4" disabled></select></label>
+              <div class="full row key-features"><span class="badge ok">用量：不限</span><span class="badge ok" id="expiresBadge">过期：永不</span><span class="badge ok" id="modelsBadge">模型：全部</span></div>
+              <button type="submit">创建密钥</button>
+            </form>
+            <div id="secretBox" class="secret"></div>
+          </div>
+
+          <div class="card span-4">
+            <div class="card-head"><h3>我的 API Key</h3></div>
+            <div id="keyList" class="list"></div>
+          </div>
+        </div>
       </section>
 
-      <section class="card span-8">
-        <div class="card-head"><div><h2>我的 API Key</h2><p class="muted">禁用后该密钥将无法调用接口</p></div></div>
-        <div id="keyList" class="list"></div>
+      <section id="models" class="section">
+        <div class="grid">
+          <div class="card span-8">
+            <div class="card-head"><h3>可用模型</h3></div>
+            <div id="modelList" class="list"></div>
+          </div>
+        </div>
       </section>
 
-      <section class="card span-4">
-        <div class="card-head"><div><h2>可用模型</h2><p class="muted">创建密钥时可限制模型范围</p></div></div>
-        <div id="modelList" class="list"></div>
+      <section id="usage" class="section">
+        <div class="grid">
+          <div class="card span-12">
+            <div class="card-head"><h3>用量统计</h3></div>
+            <div id="usageDetail"></div>
+          </div>
+        </div>
       </section>
 
-      <section class="card span-6">
-        <div class="card-head"><div><h2>用量</h2><p class="muted">按模型聚合</p></div></div>
-        <div id="usageTable"></div>
+      <section id="tasks" class="section">
+        <div class="grid">
+          <div class="card span-12">
+            <div class="card-head"><h3>任务列表</h3></div>
+            <div id="taskDetail"></div>
+          </div>
+        </div>
       </section>
-
-      <section class="card span-6">
-        <div class="card-head"><div><h2>最近任务</h2><p class="muted">仅展示当前租户任务</p></div></div>
-        <div id="taskTable"></div>
-      </section>
-    </section>
-  </main>
+    </main>
+  </div>
 
   <script>
     let state = null;
     const $ = (selector) => document.querySelector(selector);
     const fmt = new Intl.NumberFormat('zh-CN');
+    const pageTitles = { dashboard: '仪表盘', profile: '个人资料', 'api-keys': 'API Key', models: '可用模型', usage: '用量统计', tasks: '任务管理' };
 
     async function api(path, options = {}) {
       const response = await fetch(path, {
@@ -786,8 +982,9 @@ const ACCOUNT_APP_HTML = `<!doctype html>
     function render() {
       const user = state.user;
       $('#subtitle').textContent = user.name ? user.name + ' · ' + user.email : user.email;
+      $('#status').textContent = '数据已更新';
       $('#profileName').value = user.name || '';
-      $('#profileMeta').innerHTML = '<span>用户 ID</span><code>' + escapeHtml(user.id) + '</code><span>租户 ID</span><code>' + escapeHtml(user.tenant_id) + '</code><span>角色</span><span>' + escapeHtml(user.role) + '</span><span>存储</span><span>' + escapeHtml(state.storage.source) + '</span>';
+      $('#profileMeta').innerHTML = '<div class="entity-row"><span>用户 ID</span><code>' + escapeHtml(user.id) + '</code></div><div class="entity-row"><span>租户 ID</span><code>' + escapeHtml(user.tenant_id) + '</code></div><div class="entity-row"><span>角色</span><span>' + escapeHtml(user.role) + '</span></div><div class="entity-row"><span>存储</span><span>' + escapeHtml(state.storage.source) + '</span></div>';
       $('#statKeys').textContent = fmt.format(state.api_keys.length);
       $('#statRequests').textContent = fmt.format(state.usage.total_requests);
       $('#statTokens').textContent = fmt.format(state.usage.total_tokens);
@@ -796,15 +993,17 @@ const ACCOUNT_APP_HTML = `<!doctype html>
       renderKeys();
       renderUsage();
       renderTasks();
+      renderUsageDetail();
+      renderTaskDetail();
     }
 
     function renderModels() {
       $('#keyModels').innerHTML = state.models.map((model) => '<option value="' + escapeHtml(model.id) + '">' + escapeHtml(model.id) + ' · ' + escapeHtml(model.modality) + '</option>').join('');
-      $('#modelList').innerHTML = state.models.length ? state.models.map((model) => '<div class="item"><header><strong>' + escapeHtml(model.id) + '</strong><span class="badge active">' + escapeHtml(model.modality) + '</span></header><span class="muted">流式：' + (model.supports_stream ? '支持' : '不支持') + '</span></div>').join('') : '<div class="notice">暂无可用模型。</div>';
+      $('#modelList').innerHTML = state.models.length ? state.models.map((model) => '<div class="item"><header><strong>' + escapeHtml(model.id) + '</strong><span class="badge ok">' + escapeHtml(model.modality) + '</span></header><span class="muted">流式：' + (model.supports_stream ? '支持' : '不支持') + '</span></div>').join('') : '<div class="notice">暂无可用模型。</div>';
     }
 
     function renderKeys() {
-      $('#keyList').innerHTML = state.api_keys.length ? state.api_keys.map((key) => '<article class="item"><header><div><strong>' + escapeHtml(key.name) + '</strong><div class="muted"><code>' + escapeHtml(key.key_prefix) + '...</code></div></div><span class="badge ' + escapeHtml(key.status) + '">' + escapeHtml(key.status) + '</span></header><div class="meta"><span>模型</span><span>' + escapeHtml(key.allowed_models.length ? key.allowed_models.join(', ') : '全部模型') + '</span><span>过期</span><span>' + escapeHtml(key.expires_at || '永不过期') + '</span><span>最后使用</span><span>' + escapeHtml(key.last_used_at || '尚未使用') + '</span></div><div class="row"><button class="compact danger" data-disable-key="' + escapeHtml(key.id) + '" ' + (key.status === 'disabled' ? 'disabled' : '') + '>禁用</button></div></article>').join('') : '<div class="notice">还没有 API Key。创建第一个密钥后即可调用 /v1 接口。</div>';
+      $('#keyList').innerHTML = state.api_keys.length ? state.api_keys.map((key) => '<article class="item"><header><div><strong>' + escapeHtml(key.name) + '</strong><div class="muted"><code>' + escapeHtml(key.key_prefix) + '...</code></div></div><span class="badge ' + escapeHtml(key.status) + '">' + escapeHtml(key.status) + '</span></header><div class="entity-meta"><div class="entity-row"><span>模型</span><span>' + escapeHtml(key.allowed_models.length ? key.allowed_models.join(', ') : '全部模型') + '</span></div><div class="entity-row"><span>过期</span><span>' + escapeHtml(key.expires_at ? formatDate(key.expires_at) : '永不过期') + '</span></div><div class="entity-row"><span>最后使用</span><span>' + escapeHtml(key.last_used_at ? formatDate(key.last_used_at) : '尚未使用') + '</span></div></div><div class="actions"><button class="compact danger" data-disable-key="' + escapeHtml(key.id) + '" ' + (key.status === 'disabled' ? 'disabled' : '') + '>禁用</button></div></article>').join('') : '<div class="notice">还没有 API Key。创建第一个密钥后即可调用 /v1 接口。</div>';
     }
 
     function renderUsage() {
@@ -813,8 +1012,36 @@ const ACCOUNT_APP_HTML = `<!doctype html>
     }
 
     function renderTasks() {
-      const rows = state.tasks.map((task) => '<tr><td><code>' + escapeHtml(task.id) + '</code></td><td>' + escapeHtml(task.model) + '</td><td><span class="badge ' + escapeHtml(task.status) + '">' + escapeHtml(task.status) + '</span></td><td>' + escapeHtml(task.created_at) + '</td><td>' + (task.cancelable ? '<button class="compact danger" data-cancel-task="' + escapeHtml(task.id) + '">取消</button>' : '') + '</td></tr>').join('');
+      const rows = state.tasks.map((task) => '<tr><td><code>' + escapeHtml(task.id) + '</code></td><td>' + escapeHtml(task.model) + '</td><td><span class="badge ' + escapeHtml(task.status) + '">' + escapeHtml(task.status) + '</span></td><td>' + formatDate(task.created_at) + '</td><td>' + (task.cancelable ? '<button class="compact danger" data-cancel-task="' + escapeHtml(task.id) + '">取消</button>' : '') + '</td></tr>').join('');
       $('#taskTable').innerHTML = rows ? '<table><thead><tr><th>任务</th><th>模型</th><th>状态</th><th>创建</th><th></th></tr></thead><tbody>' + rows + '</tbody></table>' : '<div class="notice">暂无任务。</div>';
+    }
+
+    function renderUsageDetail() {
+      const rows = state.usage.by_model.map((row) => '<tr><td>' + escapeHtml(row.model) + '</td><td>' + fmt.format(row.requests) + '</td><td>' + fmt.format(row.prompt_tokens) + '</td><td>' + fmt.format(row.completion_tokens) + '</td><td>' + fmt.format(row.total_tokens) + '</td><td>' + fmt.format(row.media_count) + '</td></tr>').join('');
+      const summary = '<div class="stat-grid"><div class="stat"><span>总请求</span><strong>' + fmt.format(state.usage.total_requests) + '</strong></div><div class="stat"><span>总 Token</span><strong>' + fmt.format(state.usage.total_tokens) + '</strong></div><div class="stat"><span>Prompt</span><strong>' + fmt.format(state.usage.prompt_tokens) + '</strong></div><div class="stat"><span>Completion</span><strong>' + fmt.format(state.usage.completion_tokens) + '</strong></div></div>';
+      $('#usageDetail').innerHTML = summary + (rows ? '<table><thead><tr><th>模型</th><th>请求</th><th>Prompt</th><th>Completion</th><th>总计</th><th>媒体</th></tr></thead><tbody>' + rows + '</tbody></table>' : '<div class="notice">暂无用量记录。</div>');
+    }
+
+    function renderTaskDetail() {
+      const rows = state.tasks.map((task) => '<tr><td><code>' + escapeHtml(task.id) + '</code></td><td>' + escapeHtml(task.type) + '</td><td>' + escapeHtml(task.model) + '</td><td><span class="badge ' + escapeHtml(task.status) + '">' + escapeHtml(task.status) + '</span></td><td>' + formatDate(task.created_at) + '</td><td>' + (task.completed_at ? formatDate(task.completed_at) : '-') + '</td><td>' + (task.cancelable ? '<button class="compact danger" data-cancel-task="' + escapeHtml(task.id) + '">取消</button>' : '') + '</td></tr>').join('');
+      $('#taskDetail').innerHTML = rows ? '<table><thead><tr><th>任务</th><th>类型</th><th>模型</th><th>状态</th><th>创建</th><th>完成</th><th></th></tr></thead><tbody>' + rows + '</tbody></table>' : '<div class="notice">暂无任务。</div>';
+    }
+
+    function formatDate(dateString) {
+      if (!dateString) return '-';
+      const date = new Date(dateString);
+      return date.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+    }
+
+    function activateSection(sectionId) {
+      document.querySelectorAll('.section').forEach((el) => el.style.display = 'none');
+      document.querySelectorAll('.nav a').forEach((el) => el.classList.remove('active'));
+      const section = $('#' + sectionId);
+      const navLink = document.querySelector('.nav a[data-section="' + sectionId + '"]');
+      if (section) section.style.display = 'block';
+      if (navLink) navLink.classList.add('active');
+      $('#page-title').textContent = pageTitles[sectionId] || '仪表盘';
+      window.history.pushState({ section: sectionId }, '', '#' + sectionId);
     }
 
     $('#profileForm').addEventListener('submit', async (event) => {
@@ -852,6 +1079,27 @@ const ACCOUNT_APP_HTML = `<!doctype html>
       $('#modelsBadge').textContent = allModels ? '模型：全部' : '模型：已限定';
     });
 
+    $('#theme-toggle').addEventListener('click', () => {
+      const currentTheme = document.documentElement.getAttribute('data-theme');
+      const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', newTheme);
+      $('#theme-toggle').textContent = newTheme === 'dark' ? '切换浅色' : '切换深色';
+      localStorage.setItem('theme', newTheme);
+    });
+
+    $('#refresh').addEventListener('click', () => {
+      $('#status').textContent = '正在刷新...';
+      load().then(() => { $('#status').textContent = '已刷新'; });
+    });
+
+    document.querySelectorAll('.nav a').forEach((link) => {
+      link.addEventListener('click', (event) => {
+        event.preventDefault();
+        const sectionId = link.getAttribute('data-section');
+        activateSection(sectionId);
+      });
+    });
+
     document.addEventListener('click', async (event) => {
       const disableKey = event.target.closest('[data-disable-key]');
       if (disableKey && confirm('确定禁用这个 API Key？')) {
@@ -869,8 +1117,15 @@ const ACCOUNT_APP_HTML = `<!doctype html>
       return String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' }[char]));
     }
 
+    const savedTheme = localStorage.getItem('theme') || 'dark';
+    document.documentElement.setAttribute('data-theme', savedTheme);
+    $('#theme-toggle').textContent = savedTheme === 'dark' ? '切换浅色' : '切换深色';
+
+    const initialSection = window.location.hash.slice(1) || 'dashboard';
+    activateSection(initialSection);
+
     load().catch((error) => {
-      document.body.innerHTML = '<main class="layout"><section class="card"><h1>载入失败</h1><p class="subtitle">' + escapeHtml(error.message) + '</p><p><a href="/account/login" style="color: var(--accent)">重新登录</a></p></section></main>';
+      document.body.innerHTML = '<div class="layout"><main class="content"><div class="card"><h1>载入失败</h1><p class="subtitle">' + escapeHtml(error.message) + '</p><p><a href="/account/login" style="color: var(--accent)">重新登录</a></p></div></main></div>';
     });
   </script>
 </body>
