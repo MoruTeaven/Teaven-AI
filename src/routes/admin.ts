@@ -1886,6 +1886,11 @@ const ADMIN_APP_HTML = `<!doctype html>
             <textarea id="model-json" spellcheck="false"></textarea>
             <div class="actions" style="margin-top: 12px;"><button id="save-model-json" type="button">保存 JSON 模型</button><button id="reset-models" class="danger" type="button">重置模型配置</button></div>
           </div>
+          <div class="card span-12">
+            <h3>模型详情</h3>
+            <div id="model-detail-content" class="stack"><div class="empty">点击模型列表中的“查看”显示模型信息。</div></div>
+            <pre id="model-detail-json" class="json-view" style="margin-top: 14px; display: none;"></pre>
+          </div>
         </div>
       </section>
 
@@ -2035,7 +2040,7 @@ const ADMIN_APP_HTML = `<!doctype html>
   </div>
   <script>
     (function () {
-      var state = { overview: null, config: null, models: [], users: [], apiKeys: [], usage: null, tasks: [] };
+      var state = { overview: null, config: null, models: [], selectedModelAlias: null, users: [], apiKeys: [], usage: null, tasks: [] };
       var titles = { dashboard: '仪表盘', upstreams: '上游管理', models: '模型管理', users: '用户管理', usage: '模型用量', tasks: '任务管理', config: '配置工具' };
       var statusEl = document.getElementById('status');
       var theme = localStorage.getItem('teaven_admin_theme') || 'dark';
@@ -2188,10 +2193,51 @@ const ADMIN_APP_HTML = `<!doctype html>
               '<div class="entity-row"><span>流式</span><strong>' + (model.supports_stream !== false ? '支持' : '不支持') + '</strong></div>' +
               '<div class="entity-row"><span>路由</span><div>' + routes + '</div></div>' +
             '</div>' +
-            '<div class="actions entity-actions"><button type="button" class="secondary compact" data-model-edit="' + esc(model.alias) + '">编辑</button><button type="button" class="danger compact" data-model-delete="' + esc(model.alias) + '">删除</button></div>' +
+            '<div class="actions entity-actions"><button type="button" class="secondary compact" data-model-view="' + esc(model.alias) + '">查看</button><button type="button" class="secondary compact" data-model-edit="' + esc(model.alias) + '">编辑</button><button type="button" class="danger compact" data-model-delete="' + esc(model.alias) + '">删除</button></div>' +
           '</article>';
         }).join('') : '<div class="empty">暂无模型。</div>';
         if (state.models[0] && !document.getElementById('model-json').value.trim()) fillModelEditor(state.models[0].alias);
+        renderModelDetail();
+      }
+
+      function renderModelDetail() {
+        var detail = document.getElementById('model-detail-content');
+        var json = document.getElementById('model-detail-json');
+        if (!state.selectedModelAlias) {
+          detail.innerHTML = '<div class="empty">点击模型列表中的“查看”显示模型信息。</div>';
+          json.style.display = 'none';
+          json.textContent = '';
+          return;
+        }
+
+        var model = state.models.find(function (item) { return item.alias === state.selectedModelAlias; });
+        if (!model) {
+          detail.innerHTML = '<div class="empty">未找到模型：<code>' + esc(state.selectedModelAlias) + '</code></div>';
+          json.style.display = 'none';
+          json.textContent = '';
+          return;
+        }
+
+        detail.innerHTML = renderModelDetailContent(model);
+        json.style.display = 'block';
+        json.textContent = JSON.stringify(model, null, 2);
+      }
+
+      function renderModelDetailContent(model) {
+        var providers = (state.overview && state.overview.providers) || [];
+        var routeRows = (model.routes || []).length ? (model.routes || []).map(function (route) {
+          var plugin = findProvider(providers, route.plugin_id);
+          return '<tr><td><code>' + esc(route.upstream_name || route.upstream_id || '未配置') + '</code></td><td><code>' + esc(route.provider_model || '') + '</code></td><td>' + esc(plugin ? plugin.name : route.plugin_id) + '</td><td><span class="pill ' + (route.credential_configured ? 'ok' : 'danger') + '">' + (route.credential_configured ? '已配置' : '缺少') + '</span></td><td><span class="pill ' + statusClass(route.status) + '">' + esc(statusText(route.status)) + '</span></td><td>' + esc(route.priority == null ? '未设置' : route.priority) + '</td><td>' + esc(route.weight == null ? '未设置' : route.weight) + '</td></tr>';
+        }).join('') : '<tr><td colspan="7" class="empty">暂无路由。</td></tr>';
+        return '<div class="entity-meta">' +
+          '<div class="entity-row"><span>别名</span><code>' + esc(model.alias) + '</code></div>' +
+          '<div class="entity-row"><span>模态</span><strong>' + esc(modalityText(model.modality)) + '</strong></div>' +
+          '<div class="entity-row"><span>状态</span><span class="pill ' + statusClass(model.status) + '">' + esc(statusText(model.status)) + '</span></div>' +
+          '<div class="entity-row"><span>流式</span><strong>' + (model.supports_stream !== false ? '支持' : '不支持') + '</strong></div>' +
+          '<div class="entity-row"><span>路由数</span><strong>' + esc((model.routes || []).length) + '</strong></div>' +
+        '</div>' +
+        '<div><h3>路由明细</h3><div class="table-wrap"><table><thead><tr><th>上游</th><th>上游模型</th><th>插件</th><th>API Key</th><th>状态</th><th>优先级</th><th>权重</th></tr></thead><tbody>' + routeRows + '</tbody></table></div></div>' +
+        '<div class="status">下方 JSON 为当前模型完整信息。</div>';
       }
 
       function renderUpstreams(upstreams) {
@@ -2333,7 +2379,8 @@ const ADMIN_APP_HTML = `<!doctype html>
       function fillCurrentConfig() { document.getElementById('config-json').value = state.config ? state.config.config_json : ''; }
 
       async function handleModelAction(event) {
-        var edit = event.target.closest('[data-model-edit]'); var del = event.target.closest('[data-model-delete]');
+        var view = event.target.closest('[data-model-view]'); var edit = event.target.closest('[data-model-edit]'); var del = event.target.closest('[data-model-delete]');
+        if (view) { viewModel(view.getAttribute('data-model-view')); return; }
         if (edit) { fillModelEditor(edit.getAttribute('data-model-edit')); openModal('model-modal', 'model-modal-title', '编辑模型'); }
         if (del && confirm('确定删除模型 ' + del.getAttribute('data-model-delete') + '？')) { await api('/admin/api/models/' + encodeURIComponent(del.getAttribute('data-model-delete')), { method: 'DELETE' }); await loadAll(); }
       }
@@ -2349,6 +2396,7 @@ const ADMIN_APP_HTML = `<!doctype html>
       async function handleTaskAction(event) { var view = event.target.closest('[data-task-view]'); var cancel = event.target.closest('[data-task-cancel]'); if (view) { var detail = await api('/admin/api/tasks/' + encodeURIComponent(view.getAttribute('data-task-view'))); document.getElementById('task-detail').textContent = JSON.stringify(detail.task, null, 2); } if (cancel && confirm('确定取消任务？')) { await api('/admin/api/tasks/' + encodeURIComponent(cancel.getAttribute('data-task-cancel')) + '/cancel', { method: 'POST' }); await loadTasks(); } }
 
       function fillModelEditor(alias) { var model = state.models.find(function (item) { return item.alias === alias; }); if (!model) return; var route = model.routes && model.routes[0] ? model.routes[0] : {}; document.getElementById('model-json').value = JSON.stringify(toModelInput(model), null, 2); document.getElementById('model-alias').value = model.alias; document.getElementById('model-modality').value = model.modality; document.getElementById('model-status').value = model.status; document.getElementById('model-stream').value = String(model.supports_stream !== false); var select = document.getElementById('model-upstream-select'); if (select.options.length > 1) { select.value = route.upstream_id || ''; } document.getElementById('route-provider-model').value = route.provider_model || ''; document.getElementById('route-priority').value = route.priority || 1; }
+      function viewModel(alias) { state.selectedModelAlias = alias; renderModelDetail(); setStatus('正在查看模型：' + alias, 'ok'); }
       function toModelInput(model) { var route = model.routes && model.routes[0] ? model.routes[0] : {}; return { upstream_id: route.upstream_id, alias: model.alias, provider_model: route.provider_model, modality: model.modality, supports_stream: model.supports_stream, status: model.status, priority: route.priority, weight: route.weight }; }
       function fillUpstreamEditor(id) { var upstreams = (state.overview && state.overview.upstreams) || []; var upstream = upstreams.find(function (item) { return item.id === id; }); if (!upstream) return; document.getElementById('upstream-admin-id').value = upstream.id || ''; document.getElementById('upstream-admin-name').value = upstream.name || ''; document.getElementById('upstream-admin-plugin').value = upstream.plugin_id || ''; document.getElementById('upstream-admin-base-url').value = upstream.base_url || ''; document.getElementById('upstream-admin-credential').value = upstream.credential_id || ''; document.getElementById('upstream-admin-status').value = upstream.status || 'active'; }
       function viewUpstream(id) { var upstream = findOverviewUpstream(id); if (!upstream) { setStatus('未找到上游：' + id, 'error'); return; } var raw = findConfigUpstream(id) || upstream; var name = upstream.name || upstream.id; document.getElementById('upstream-view-title').textContent = '查看上游：' + name; document.getElementById('upstream-view-content').innerHTML = renderUpstreamDetail(upstream, raw); document.getElementById('upstream-view-json').textContent = JSON.stringify(toUpstreamDetailJson(upstream, raw), null, 2); openModal('upstream-view-modal', 'upstream-view-title', '查看上游：' + name); }
