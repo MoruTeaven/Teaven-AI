@@ -1869,7 +1869,7 @@ const ADMIN_APP_HTML = `<!doctype html>
       <section id="usage" class="section">
         <div class="grid">
           <div class="card span-12"><h3>用量汇总</h3><div id="usage-stats" class="stat-grid"></div></div>
-          <div class="card span-7"><h3>按模型统计</h3><div class="table-wrap"><table><thead><tr><th>模型</th><th>总请求数</th><th>总令牌</th><th>输入令牌</th><th>输出令牌</th><th>媒体单位</th></tr></thead><tbody id="usage-models"></tbody></table></div></div>
+          <div class="card span-7"><h3>按模型统计</h3><div class="table-wrap"><table><thead><tr><th>模型</th><th>总请求数</th><th>Total Token</th><th>Input Token</th><th>Output Token</th><th>媒体单位</th></tr></thead><tbody id="usage-models"></tbody></table></div></div>
           <div class="card span-5"><h3>最近用量记录</h3><div id="usage-recent" class="stack"></div></div>
         </div>
       </section>
@@ -2065,7 +2065,7 @@ const ADMIN_APP_HTML = `<!doctype html>
 
       function renderDashboard() {
         var data = state.overview || { stats: {}, warnings: [], feature_matrix: [], providers: [], upstreams: [], gateway: {} };
-        document.getElementById('stats').innerHTML = stat('模型', data.stats.models_total) + stat('上游', data.stats.upstreams_total) + stat('用户', data.stats.users_total) + stat('活跃密钥', data.stats.api_keys_active) + stat('请求数', data.stats.usage_requests) + stat('令牌', data.stats.usage_tokens) + stat('任务', data.stats.recent_tasks) + stat('供应商', data.stats.providers_total) + stat('失败任务', data.stats.tasks_failed);
+        document.getElementById('stats').innerHTML = stat('模型', data.stats.models_total) + stat('上游', data.stats.upstreams_total) + stat('用户', data.stats.users_total) + stat('活跃密钥', data.stats.api_keys_active) + stat('请求数', data.stats.usage_requests) + stat('Token', data.stats.usage_tokens) + stat('任务', data.stats.recent_tasks) + stat('供应商', data.stats.providers_total) + stat('失败任务', data.stats.tasks_failed);
         document.getElementById('warnings').innerHTML = data.warnings.length ? data.warnings.map(function (item) { return '<div class="warning">' + esc(item) + '</div>'; }).join('') : '<span class="pill ok">暂无活跃告警</span>';
         document.getElementById('features').innerHTML = data.feature_matrix.map(function (item) { return '<div><span class="pill ' + featureClass(item.status) + '">' + esc(featureText(item.status)) + '</span><strong>' + esc(item.name) + '</strong><div class="status">' + esc(item.detail) + '</div></div>'; }).join('');
         document.getElementById('gateway-meta').innerHTML = meta('认证模式', data.gateway.auth_mode) + meta('配置来源', data.gateway.config_source) + meta('任务存储', taskStoreText(data.gateway.task_store)) + meta('绑定资源', '数据库 ' + yesNo(data.gateway.db_bound) + ', KV ' + yesNo(data.gateway.kv_bound) + ', 队列 ' + yesNo(data.gateway.queue_bound) + ', R2 ' + yesNo(data.gateway.r2_bound));
@@ -2113,7 +2113,8 @@ const ADMIN_APP_HTML = `<!doctype html>
       function renderModels() {
         var list = document.getElementById('models-list');
         var providers = (state.overview && state.overview.providers) || [];
-        document.getElementById('model-upstreams').innerHTML = renderUpstreams((state.overview && state.overview.upstreams) || []);
+        var modelUpstreams = document.getElementById('model-upstreams');
+        if (modelUpstreams) modelUpstreams.innerHTML = renderUpstreams((state.overview && state.overview.upstreams) || []);
         populateUpstreamSelect();
         populatePluginSelect();
         list.innerHTML = state.models.length ? state.models.map(function (model) {
@@ -2177,9 +2178,9 @@ const ADMIN_APP_HTML = `<!doctype html>
 
       function renderUsage() {
         var usage = state.usage || { total_requests: 0, total_tokens: 0, prompt_tokens: 0, completion_tokens: 0, media_count: 0, by_model: [], recent: [] };
-        document.getElementById('usage-stats').innerHTML = stat('请求数', usage.total_requests) + stat('总令牌', usage.total_tokens) + stat('输入令牌', usage.prompt_tokens) + stat('输出令牌', usage.completion_tokens) + stat('媒体单位', usage.media_count) + stat('成本', usage.cost || 0);
+        document.getElementById('usage-stats').innerHTML = stat('请求数', usage.total_requests) + stat('Total Token', usage.total_tokens) + stat('Input Token', usage.prompt_tokens) + stat('Output Token', usage.completion_tokens) + stat('媒体单位', usage.media_count) + stat('成本', usage.cost || 0);
         document.getElementById('usage-models').innerHTML = usage.by_model.length ? usage.by_model.map(function (item) { return '<tr><td><code>' + esc(item.model) + '</code></td><td>' + esc(item.requests) + '</td><td>' + esc(item.total_tokens) + '</td><td>' + esc(item.prompt_tokens) + '</td><td>' + esc(item.completion_tokens) + '</td><td>' + esc(item.media_count) + '</td></tr>'; }).join('') : '<tr><td colspan="6" class="empty">暂无用量。</td></tr>';
-        document.getElementById('usage-recent').innerHTML = usage.recent.length ? usage.recent.slice(0, 12).map(function (item) { return '<div><span class="pill">' + esc(item.endpoint) + '</span><strong>' + esc(item.model) + '</strong><div class="status">' + esc(item.total_tokens) + ' 令牌 · ' + esc(item.created_at) + '</div></div>'; }).join('') : '<div class="empty">暂无用量记录。</div>';
+        document.getElementById('usage-recent').innerHTML = usage.recent.length ? usage.recent.slice(0, 12).map(function (item) { return '<div><span class="pill">' + esc(item.endpoint) + '</span><strong>' + esc(item.model) + '</strong><div class="status">' + esc(item.total_tokens) + ' Token · ' + esc(item.created_at) + '</div></div>'; }).join('') : '<div class="empty">暂无用量记录。</div>';
       }
 
       function renderTasks(tasks) {
