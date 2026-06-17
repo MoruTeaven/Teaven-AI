@@ -6,6 +6,10 @@ compatibility_date = "2026-06-12"
 binding = "AI_GATEWAY_KV"
 id = "9b3b75b6e5784d62a6a48bdc3bfde967"
 
+[[queues.producers]]
+queue = "teaven-ai"
+binding = "TASK_QUEUE"
+
 [[d1_databases]]
 binding = "DB"
 database_name = "teaven-ai-db"
@@ -14,8 +18,3 @@ database_id = "3ecc5cdc-ac1a-410a-9c3e-a3d7ac9638bd"
 [[migrations]]
 tag = "v1"
 
-[vars]
-ADMIN_TOKEN = "admin-dev-only-change-me"
-USER_CENTER_TOKEN = "user-center-dev-only-change-me"
-OPENAI_COMPATIBLE_BASE_URL = "https://api.openai.com/v1"
-OPENAI_COMPATIBLE_DEFAULT_MODEL = "gpt-4o-mini"
