@@ -10,19 +10,6 @@ export async function loadGatewayConfig(env: Env): Promise<GatewayConfig> {
     return managedConfig;
   }
 
-  if (env.MODEL_CONFIG_JSON) {
-    try {
-      const config = JSON.parse(env.MODEL_CONFIG_JSON) as GatewayConfig;
-      validateGatewayConfig(config);
-      return config;
-    } catch (error) {
-      if (error instanceof Error) {
-        throw invalidRequest(`MODEL_CONFIG_JSON 无效：${error.message}`);
-      }
-      throw invalidRequest("MODEL_CONFIG_JSON 无效");
-    }
-  }
-
   const model = env.OPENAI_COMPATIBLE_DEFAULT_MODEL || "gpt-4o-mini";
   return {
     upstreams: [
