@@ -7,7 +7,7 @@ import { handleChatCompletions } from "./routes/chat-completions";
 import { handleImageGenerations } from "./routes/image-generations";
 import { handleAsyncImageGenerations } from "./routes/async-image-generations";
 import { handleListModels } from "./routes/models";
-import { handleCancelTask, handleCreateTask, handleGetTask } from "./routes/tasks";
+import { handleCancelTask, handleCreateTask, handleGetTask, handleListTasks } from "./routes/tasks";
 import type { Env } from "./types";
 import { createId } from "./utils/ids";
 
@@ -78,6 +78,10 @@ async function routeRequest(request: Request, env: Env, requestId: string): Prom
 
   if (request.method === "POST" && pathname === "/v1/tasks") {
     return handleCreateTask(request, env, auth, requestId);
+  }
+
+  if (request.method === "GET" && pathname === "/v1/tasks") {
+    return handleListTasks(request, env, auth, requestId);
   }
 
   const taskMatch = pathname.match(/^\/v1\/tasks\/([^/]+)(?:\/(cancel))?$/);

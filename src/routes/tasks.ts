@@ -1,7 +1,7 @@
 import { conflict, invalidRequest, notFound } from "../http/errors";
 import { jsonResponse } from "../http/response";
 import { recordTaskUsage } from "../admin/store";
-import { getTask, saveTask } from "../tasks/store";
+import { getTask, listTasks, saveTask } from "../tasks/store";
 import type { AsyncTaskRecord, AuthContext, Env } from "../types";
 import { createId } from "../utils/ids";
 import { optionalString, readJsonObject, requireObject, requireString } from "../utils/request";
@@ -57,6 +57,40 @@ export async function handleCreateTask(request: Request, env: Env, auth: AuthCon
       "X-Request-Id": requestId
     }
   });
+}
+
+export async function handleListTasks(request: Request, env: Env, auth: AuthContext, requestId: string): Promise<Response> {
+  const url = new URL(request.url);
+  const limit = Math.min(Math.max(parseInt(url.searchParams.get("limit") || "25", 10) || 25, 1), 100);
+  const after = url.searchParams.get("after") || undefined;
+
+  const allTasks = await listTasks(env, limit + 1);
+  const myTasks = allTasks.filter((t) => t.organization_id === auth.organization_id);
+
+  let hasMore = false;
+  if (after) {
+    const afterIndex = myTasks.findIndex((t) => t.id === after);
+    const slice = afterIndex >= 0 ? myTasks.slice(afterIndex + 1) : myTasks;
+    hasMore = slice.length > limit;
+    const result = slice.slice(0, limit);
+    return jsonResponse({
+      object: "list",
+      data: result.map(publicTask),
+      has_more: hasMore,
+      first_id: result[0]?.id || null,
+      last_id: result[result.length - 1]?.id || null
+    }, { headers: { "X-Request-Id": requestId } });
+  }
+
+  hasMore = myTasks.length > limit;
+  const result = myTasks.slice(0, limit);
+  return jsonResponse({
+    object: "list",
+    data: result.map(publicTask),
+    has_more: hasMore,
+    first_id: result[0]?.id || null,
+    last_id: result[result.length - 1]?.id || null
+  }, { headers: { "X-Request-Id": requestId } });
 }
 
 export async function handleGetTask(taskId: string, env: Env, auth: AuthContext, requestId: string): Promise<Response> {
