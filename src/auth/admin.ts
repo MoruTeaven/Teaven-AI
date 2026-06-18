@@ -93,10 +93,21 @@ function readCookie(request: Request, name: string): string | undefined {
 }
 
 function base64UrlEncode(value: ArrayBuffer): string {
-  let binary = "";
-  for (const byte of new Uint8Array(value)) {
-    binary += String.fromCharCode(byte);
+  const bytes = new Uint8Array(value);
+  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+  let result = "";
+  for (let i = 0; i < bytes.length; i += 3) {
+    const a = bytes[i];
+    const b = bytes[i + 1];
+    const c = bytes[i + 2];
+    result += chars[a >> 2];
+    result += chars[((a & 3) << 4) | (b >> 4)];
+    if (i + 1 < bytes.length) {
+      result += chars[((b & 15) << 2) | (c >> 6)];
+    }
+    if (i + 2 < bytes.length) {
+      result += chars[c & 63];
+    }
   }
-
-  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+  return result;
 }

@@ -98,13 +98,19 @@ export function selectRoute(model: ModelConfig, stream = false): ProviderRouteCo
 }
 
 export function validateGatewayConfig(config: GatewayConfig): void {
-  if (!config || typeof config !== "object" || !Array.isArray(config.upstreams)) {
+  if (!config || typeof config !== "object") {
+    throw new Error("配置必须是对象");
+  }
+
+  if (!Array.isArray(config.upstreams)) {
     throw new Error("upstreams 必须是数组");
   }
 
   if (config.upstreams.length === 0) {
     throw new Error("至少需要配置一个 upstream");
   }
+
+  validateObservabilityConfig(config.observability);
 
   const upstreamIds = new Set<string>();
   const aliases = new Map<string, { modality: string; supports_stream: boolean }>();
@@ -144,6 +150,51 @@ export function validateGatewayConfig(config: GatewayConfig): void {
       if (!existing) {
         aliases.set(model.alias, { modality: model.modality, supports_stream: supportsStream });
       }
+    }
+  }
+}
+
+function validateObservabilityConfig(observability?: unknown): void {
+  if (!observability || typeof observability !== "object") {
+    return;
+  }
+
+  const config = observability as Record<string, unknown>;
+
+  if (config.enabled !== undefined && typeof config.enabled !== "boolean") {
+    throw new Error("observability.enabled 必须是布尔值");
+  }
+
+  if (config.head_sampling_rate !== undefined && (typeof config.head_sampling_rate !== "number" || config.head_sampling_rate < 0 || config.head_sampling_rate > 1)) {
+    throw new Error("observability.head_sampling_rate 必须是 0 到 1 之间的数字");
+  }
+
+  if (config.logs && typeof config.logs === "object") {
+    const logs = config.logs as Record<string, unknown>;
+    if (logs.enabled !== undefined && typeof logs.enabled !== "boolean") {
+      throw new Error("observability.logs.enabled 必须是布尔值");
+    }
+    if (logs.head_sampling_rate !== undefined && (typeof logs.head_sampling_rate !== "number" || logs.head_sampling_rate < 0 || logs.head_sampling_rate > 1)) {
+      throw new Error("observability.logs.head_sampling_rate 必须是 0 到 1 之间的数字");
+    }
+    if (logs.persist !== undefined && typeof logs.persist !== "boolean") {
+      throw new Error("observability.logs.persist 必须是布尔值");
+    }
+    if (logs.invocation_logs !== undefined && typeof logs.invocation_logs !== "boolean") {
+      throw new Error("observability.logs.invocation_logs 必须是布尔值");
+    }
+  }
+
+  if (config.traces && typeof config.traces === "object") {
+    const traces = config.traces as Record<string, unknown>;
+    if (traces.enabled !== undefined && typeof traces.enabled !== "boolean") {
+      throw new Error("observability.traces.enabled 必须是布尔值");
+    }
+    if (traces.persist !== undefined && typeof traces.persist !== "boolean") {
+      throw new Error("observability.traces.persist 必须是布尔值");
+    }
+    if (traces.head_sampling_rate !== undefined && (typeof traces.head_sampling_rate !== "number" || traces.head_sampling_rate < 0 || traces.head_sampling_rate > 1)) {
+      throw new Error("observability.traces.head_sampling_rate 必须是 0 到 1 之间的数字");
     }
   }
 }

@@ -232,6 +232,7 @@ async function handleAdminLogin(request: Request, env: Env, requestId: string): 
       }
     });
   } catch (error) {
+    console.error(`[admin] login failed:`, error);
     return renderLoginError(error instanceof Error ? error.message : "登录失败。", requestId, 500);
   }
 }
