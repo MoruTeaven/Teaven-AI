@@ -86,7 +86,10 @@ export async function handleAsyncImageGenerations(
       provider_task_id: String(upstreamData.id || upstreamData.provider_task_id),
       provider_context: {
         upstream_model: route.provider_model,
-        request_id: requestId
+        request_id: requestId,
+        base_url: route.base_url,
+        credential_id: route.credential_id,
+        config: route.config
       },
       status: "queued",
       input: body as Record<string, unknown>,

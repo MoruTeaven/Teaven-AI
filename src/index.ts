@@ -8,10 +8,13 @@ import { handleImageGenerations } from "./routes/image-generations";
 import { handleAsyncImageGenerations } from "./routes/async-image-generations";
 import { handleListModels } from "./routes/models";
 import { handleCancelTask, handleCreateTask, handleGetTask, handleListTasks } from "./routes/tasks";
+import { processTask } from "./tasks/processor";
 import type { Env } from "./types";
+import type { AsyncTaskQueueMessage } from "./types";
 import { createId } from "./utils/ids";
 
 export default {
+  // ── HTTP 请求入口 ──
   async fetch(request: Request, env: Env): Promise<Response> {
     const requestId = createId("req");
 
@@ -24,6 +27,20 @@ export default {
       return withCors(response, request);
     } catch (error) {
       return errorResponse(error, requestId, request);
+    }
+  },
+
+  // ── Queue Consumer 入口 ──
+  async queue(batch: MessageBatch<AsyncTaskQueueMessage>, env: Env): Promise<void> {
+    for (const message of batch.messages) {
+      try {
+        await processTask(env, message.body.task_id);
+        message.ack();
+      } catch (err) {
+        console.error(`[consumer] unhandled error for task ${message.body.task_id}:`, err);
+        // 不 ack 的消息会被重试，但最大重试次数由队列配置控制
+        message.ack();
+      }
     }
   }
 };

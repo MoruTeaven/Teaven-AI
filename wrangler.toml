@@ -10,6 +10,13 @@ id = "9b3b75b6e5784d62a6a48bdc3bfde967"
 queue = "teaven-ai"
 binding = "TASK_QUEUE"
 
+[[queues.consumers]]
+queue = "teaven-ai"
+max_batch_size = 10
+max_batch_timeout = 5
+max_retries = 3
+dead_letter_queue = "teaven-ai-dlq"
+
 [[d1_databases]]
 binding = "DB"
 database_name = "teaven-ai-db"
@@ -20,5 +27,5 @@ tag = "v1"
 
 [[r2_buckets]]
 binding = "FILES"
-bucket_name = "teaven-ai-files"
+bucket_name = "teaven-ai"
 

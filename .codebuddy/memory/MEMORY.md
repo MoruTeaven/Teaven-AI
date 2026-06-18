@@ -10,6 +10,15 @@
 - 表格中 `plugin_id` 展示已改为显示插件名称（从 providers 数据匹配），dashboard 和模型路由同理。
 - 所有文档已同步更新。
 
+### 异步任务生命周期追踪（2026-06-18）
+- Queue Consumer 已实现：`src/index.ts` 导出 `queue()` handler，核心逻辑在 `src/tasks/processor.ts`
+- Provider Adapter 新增 `pollTask` 方法，Moark 已实现
+- 任务创建时存储完整 `provider_context`（base_url, credential_id, config），Consumer 据此重建凭据
+- 状态变迁：queued → running → (轮询) → succeeded/failed/expired
+- 最多轮询 300 次，超限标记 expired；上游 4xx → 永久失败，5xx → 继续重试
+- store_output=true 时自动下载上游文件存到 R2
+- callback_url 在任务终态时触发 POST 回调
+
 ## 项目技术栈
 - Cloudflare Workers + D1 + KV + R2 + Queues
 - TypeScript 5.8+, Wrangler 4

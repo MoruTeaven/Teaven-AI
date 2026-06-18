@@ -1,3 +1,4 @@
+import { findModel, loadGatewayConfig, selectRoute } from "../config";
 import { conflict, invalidRequest, notFound } from "../http/errors";
 import { jsonResponse } from "../http/response";
 import { recordTaskUsage } from "../admin/store";
@@ -24,6 +25,32 @@ export async function handleCreateTask(request: Request, env: Env, auth: AuthCon
     throw invalidRequest("store_output must be a boolean", "store_output");
   }
 
+  // 尝试解析模型 → 路由 → 插件，为 Queue Consumer 提供上游上下文
+  let upstreamId: string | undefined;
+  let pluginId: string | undefined;
+  let providerContext: Record<string, unknown> | undefined;
+
+  try {
+    const config = await loadGatewayConfig(env);
+    const modelCfg = findModel(config, model);
+    if (modelCfg) {
+      const route = selectRoute(modelCfg, false);
+      if (route) {
+        upstreamId = route.upstream_id;
+        pluginId = route.plugin_id;
+        providerContext = {
+          upstream_model: route.provider_model,
+          request_id: requestId,
+          base_url: route.base_url,
+          credential_id: route.credential_id,
+          config: route.config
+        };
+      }
+    }
+  } catch {
+    // 配置加载失败不阻塞任务创建，consumer 会跳过无法处理的任务
+  }
+
   const task: AsyncTaskRecord = {
     id: createId("task"),
     object: "task",
@@ -31,6 +58,9 @@ export async function handleCreateTask(request: Request, env: Env, auth: AuthCon
     api_key_id: auth.api_key_id,
     type,
     model,
+    upstream_id: upstreamId,
+    plugin_id: pluginId,
+    provider_context: providerContext,
     status: "queued",
     input,
     store_output: storeOutput,
