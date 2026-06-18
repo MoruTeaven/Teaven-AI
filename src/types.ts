@@ -78,27 +78,6 @@ export interface ModelConfig {
 
 export interface GatewayConfig {
   upstreams: UpstreamConfig[];
-  observability?: ObservabilityConfig;
-}
-
-export interface ObservabilityLogsConfig {
-  enabled?: boolean;
-  head_sampling_rate?: number;
-  persist?: boolean;
-  invocation_logs?: boolean;
-}
-
-export interface ObservabilityTracesConfig {
-  enabled?: boolean;
-  persist?: boolean;
-  head_sampling_rate?: number;
-}
-
-export interface ObservabilityConfig {
-  enabled?: boolean;
-  head_sampling_rate?: number;
-  logs?: ObservabilityLogsConfig;
-  traces?: ObservabilityTracesConfig;
 }
 
 export interface ChatCompletionRequest {
