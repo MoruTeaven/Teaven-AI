@@ -1369,7 +1369,7 @@ Content-Type: application/json</code></pre></div>
     }
 
     function renderTaskDetail() {
-      const rows = state.tasks.map((task) => '<tr id="task-row-' + escapeHtml(task.id) + '"><td><code>' + escapeHtml(task.id) + '</code></td><td>' + escapeHtml(task.type) + '</td><td>' + escapeHtml(task.model) + '</td><td><span class="badge ' + escapeHtml(task.status) + '">' + escapeHtml(task.status) + '</span></td><td>' + formatDate(task.created_at) + '</td><td>' + (task.completed_at ? formatDate(task.completed_at) : '-') + '</td><td class="actions">' + (task.cancelable ? '<button class="compact danger" data-cancel-task="' + escapeHtml(task.id) + '">取消</button>' : '') + '<button class="compact" data-view-task="' + escapeHtml(task.id) + '">查看详情</button></td></tr>').join('');
+      const rows = state.tasks.map((task) => '<tr id="task-detail-row-' + escapeHtml(task.id) + '"><td><code>' + escapeHtml(task.id) + '</code></td><td>' + escapeHtml(task.type) + '</td><td>' + escapeHtml(task.model) + '</td><td><span class="badge ' + escapeHtml(task.status) + '">' + escapeHtml(task.status) + '</span></td><td>' + formatDate(task.created_at) + '</td><td>' + (task.completed_at ? formatDate(task.completed_at) : '-') + '</td><td class="actions">' + (task.cancelable ? '<button class="compact danger" data-cancel-task="' + escapeHtml(task.id) + '">取消</button>' : '') + '<button class="compact" data-view-task="' + escapeHtml(task.id) + '">查看详情</button></td></tr>').join('');
       $('#taskDetail').innerHTML = rows ? '<table><thead><tr><th>任务</th><th>类型</th><th>模型</th><th>状态</th><th>创建</th><th>完成</th><th></th></tr></thead><tbody>' + rows + '</tbody></table>' : '<div class="notice">暂无任务。</div>';
     }
 
@@ -1386,7 +1386,11 @@ Content-Type: application/json</code></pre></div>
         return;
       }
 
-      const row = document.getElementById('task-row-' + taskId);
+      // 优先找任务管理页的行 id（避免与仪表盘 task-row- 冲突）
+      let row = document.getElementById('task-detail-row-' + taskId);
+      if (!row) {
+        row = document.getElementById('task-row-' + taskId);
+      }
       if (!row) return;
 
       const detailRow = document.createElement('tr');
