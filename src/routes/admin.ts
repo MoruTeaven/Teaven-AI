@@ -62,7 +62,8 @@ export async function handleAdminRequest(
       return redirectResponse("/admin", requestId);
     }
 
-    return htmlResponse(renderAdminLoginHtml(), {
+    const adminTokenConfigured = Boolean(env.ADMIN_TOKEN);
+    return htmlResponse(renderAdminLoginHtml("", adminTokenConfigured), {
       headers: {
         "X-Request-Id": requestId
       }
@@ -233,7 +234,13 @@ async function handleAdminLogin(request: Request, env: Env, requestId: string): 
     });
   } catch (error) {
     console.error(`[admin] login failed:`, error);
-    return renderLoginError(error instanceof Error ? error.message : "登录失败。", requestId, 500);
+    const adminTokenConfigured = Boolean(env.ADMIN_TOKEN);
+    return renderLoginError(
+      error instanceof Error ? error.message : "登录失败。",
+      requestId,
+      500,
+      adminTokenConfigured
+    );
   }
 }
 
@@ -246,8 +253,8 @@ async function isAdminAuthenticated(request: Request, env: Env): Promise<boolean
   }
 }
 
-function renderLoginError(message: string, requestId: string, status: number): Response {
-  return htmlResponse(renderAdminLoginHtml(message), {
+function renderLoginError(message: string, requestId: string, status: number, adminTokenConfigured = true): Response {
+  return htmlResponse(renderAdminLoginHtml(message, adminTokenConfigured), {
     status,
     headers: {
       "X-Request-Id": requestId
@@ -1443,8 +1450,11 @@ function htmlResponse(html: string, init: ResponseInit = {}): Response {
   });
 }
 
-function renderAdminLoginHtml(errorMessage = ""): string {
+function renderAdminLoginHtml(errorMessage = "", adminTokenConfigured = true): string {
   const errorHtml = errorMessage ? `<div class="alert">${escapeHtml(errorMessage)}</div>` : "";
+  const noticeHtml = !adminTokenConfigured
+    ? `<div class="notice"><strong>管理员密码尚未配置</strong><br>请通过 <code>wrangler secret put ADMIN_TOKEN</code> 或 Cloudflare Dashboard 设置环境变量 <code>ADMIN_TOKEN</code> 后再登录。</div>`
+    : "";
 
   return `<!doctype html>
 <html lang="zh-CN">
@@ -1579,6 +1589,24 @@ function renderAdminLoginHtml(errorMessage = ""): string {
       padding: 12px 14px;
       font-size: 13px;
     }
+
+    .notice {
+      margin-top: 16px;
+      border: 1px solid rgba(125, 211, 252, 0.3);
+      border-radius: 16px;
+      background: rgba(125, 211, 252, 0.08);
+      color: #bae6fd;
+      padding: 12px 14px;
+      font-size: 13px;
+      line-height: 1.7;
+    }
+
+    .notice code {
+      background: rgba(125, 211, 252, 0.15);
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 12px;
+    }
   </style>
 </head>
 <body>
@@ -1588,6 +1616,7 @@ function renderAdminLoginHtml(errorMessage = ""): string {
       <h1>管理员登录</h1>
       <p>登录成功后将自动进入管理后台。</p>
       ${errorHtml}
+      ${noticeHtml}
       <form action="/admin/login" method="post">
         <label for="password">管理员密码</label>
         <input id="password" name="password" type="password" autocomplete="current-password" autofocus required>
