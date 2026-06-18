@@ -18,7 +18,7 @@ database_id = "3ecc5cdc-ac1a-410a-9c3e-a3d7ac9638bd"
 [[migrations]]
 tag = "v1"
 
+[[r2_buckets]]
+binding = "FILES"
+bucket_name = "teaven-ai-files"
 
-[vars]
-ADMIN_TOKEN = ""
-USER_CENTER_TOKEN = ""
