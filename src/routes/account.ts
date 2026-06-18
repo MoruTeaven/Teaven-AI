@@ -116,6 +116,11 @@ export async function handleAccountRequest(request: Request, env: Env, requestId
     return handleRevealAccountApiKey(user, decodeURIComponent(apiKeyRevealMatch[1]), request, env, requestId);
   }
 
+  const taskDetailMatch = pathname.match(/^\/account\/api\/tasks\/([^/]+)$/);
+  if (request.method === "GET" && taskDetailMatch) {
+    return handleGetAccountTask(user, decodeURIComponent(taskDetailMatch[1]), env, requestId);
+  }
+
   const taskCancelMatch = pathname.match(/^\/account\/api\/tasks\/([^/]+)\/cancel$/);
   if (request.method === "POST" && taskCancelMatch) {
     return handleCancelAccountTask(user, decodeURIComponent(taskCancelMatch[1]), env, requestId);
@@ -368,6 +373,20 @@ async function handleRevealAccountApiKey(
   );
 }
 
+async function handleGetAccountTask(user: AdminUser, taskId: string, env: Env, requestId: string): Promise<Response> {
+  const task = await getTask(env, taskId);
+  if (!task || task.organization_id !== user.organization_id) {
+    throw notFound("任务不存在");
+  }
+
+  return jsonResponse(
+    { task: publicTaskFull(task) },
+    {
+      headers: { "X-Request-Id": requestId }
+    }
+  );
+}
+
 async function handleCancelAccountTask(user: AdminUser, taskId: string, env: Env, requestId: string): Promise<Response> {
   const task = await getTask(env, taskId);
   if (!task || task.organization_id !== user.organization_id) {
@@ -560,6 +579,30 @@ function publicTaskSummary(task: AsyncTaskRecord): Record<string, unknown> {
     updated_at: task.updated_at,
     completed_at: task.completed_at || null,
     error: task.error || null
+  };
+}
+
+function publicTaskFull(task: AsyncTaskRecord): Record<string, unknown> {
+  return {
+    id: task.id,
+    object: task.object,
+    type: task.type,
+    model: task.model,
+    status: task.status,
+    upstream_id: task.upstream_id || null,
+    plugin_id: task.plugin_id || null,
+    provider_task_id: task.provider_task_id || null,
+    input: task.input,
+    output: task.output || null,
+    store_output: task.store_output,
+    storage_ttl_seconds: task.storage_ttl_seconds,
+    output_expires_at: task.output_expires_at || null,
+    callback_url: task.callback_url || null,
+    metadata: task.metadata || null,
+    error: task.error || null,
+    created_at: task.created_at,
+    updated_at: task.updated_at,
+    completed_at: task.completed_at || null
   };
 }
 
@@ -1295,7 +1338,7 @@ Content-Type: application/json</code></pre></div>
     }
 
     function renderTasks() {
-      const rows = state.tasks.map((task) => '<tr><td><code>' + escapeHtml(task.id) + '</code></td><td>' + escapeHtml(task.model) + '</td><td><span class="badge ' + escapeHtml(task.status) + '">' + escapeHtml(task.status) + '</span></td><td>' + formatDate(task.created_at) + '</td><td>' + (task.cancelable ? '<button class="compact danger" data-cancel-task="' + escapeHtml(task.id) + '">取消</button>' : '') + '</td></tr>').join('');
+      const rows = state.tasks.map((task) => '<tr id="task-row-' + escapeHtml(task.id) + '"><td><code>' + escapeHtml(task.id) + '</code></td><td>' + escapeHtml(task.model) + '</td><td><span class="badge ' + escapeHtml(task.status) + '">' + escapeHtml(task.status) + '</span></td><td>' + formatDate(task.created_at) + '</td><td class="actions">' + (task.cancelable ? '<button class="compact danger" data-cancel-task="' + escapeHtml(task.id) + '">取消</button>' : '') + '<button class="compact" data-view-task="' + escapeHtml(task.id) + '">查看详情</button></td></tr>').join('');
       $('#taskTable').innerHTML = rows ? '<table><thead><tr><th>任务</th><th>模型</th><th>状态</th><th>创建</th><th></th></tr></thead><tbody>' + rows + '</tbody></table>' : '<div class="notice">暂无任务。</div>';
     }
 
@@ -1326,7 +1369,7 @@ Content-Type: application/json</code></pre></div>
     }
 
     function renderTaskDetail() {
-      const rows = state.tasks.map((task) => '<tr><td><code>' + escapeHtml(task.id) + '</code></td><td>' + escapeHtml(task.type) + '</td><td>' + escapeHtml(task.model) + '</td><td><span class="badge ' + escapeHtml(task.status) + '">' + escapeHtml(task.status) + '</span></td><td>' + formatDate(task.created_at) + '</td><td>' + (task.completed_at ? formatDate(task.completed_at) : '-') + '</td><td>' + (task.cancelable ? '<button class="compact danger" data-cancel-task="' + escapeHtml(task.id) + '">取消</button>' : '') + '</td></tr>').join('');
+      const rows = state.tasks.map((task) => '<tr id="task-row-' + escapeHtml(task.id) + '"><td><code>' + escapeHtml(task.id) + '</code></td><td>' + escapeHtml(task.type) + '</td><td>' + escapeHtml(task.model) + '</td><td><span class="badge ' + escapeHtml(task.status) + '">' + escapeHtml(task.status) + '</span></td><td>' + formatDate(task.created_at) + '</td><td>' + (task.completed_at ? formatDate(task.completed_at) : '-') + '</td><td class="actions">' + (task.cancelable ? '<button class="compact danger" data-cancel-task="' + escapeHtml(task.id) + '">取消</button>' : '') + '<button class="compact" data-view-task="' + escapeHtml(task.id) + '">查看详情</button></td></tr>').join('');
       $('#taskDetail').innerHTML = rows ? '<table><thead><tr><th>任务</th><th>类型</th><th>模型</th><th>状态</th><th>创建</th><th>完成</th><th></th></tr></thead><tbody>' + rows + '</tbody></table>' : '<div class="notice">暂无任务。</div>';
     }
 
@@ -1334,6 +1377,52 @@ Content-Type: application/json</code></pre></div>
       if (!dateString) return '-';
       const date = new Date(dateString);
       return date.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+    }
+
+    async function toggleTaskDetail(taskId) {
+      const existing = document.getElementById('task-detail-' + taskId);
+      if (existing) {
+        existing.remove();
+        return;
+      }
+
+      const row = document.getElementById('task-row-' + taskId);
+      if (!row) return;
+
+      const detailRow = document.createElement('tr');
+      detailRow.id = 'task-detail-' + taskId;
+      detailRow.innerHTML = '<td colspan="100"><div class="notice" style="padding:12px;text-align:center;">正在加载...</div></td>';
+      row.after(detailRow);
+
+      try {
+        const data = await api('/account/api/tasks/' + encodeURIComponent(taskId));
+        const task = data.task;
+        detailRow.innerHTML = '<td colspan="100"><div class="item" style="margin:4px 0;">' +
+          '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px;">' +
+          '<div><span class="muted" style="font-size:11px;font-weight:900;">任务 ID</span><div><code>' + escapeHtml(task.id) + '</code></div></div>' +
+          '<div><span class="muted" style="font-size:11px;font-weight:900;">类型</span><div>' + escapeHtml(task.type) + '</div></div>' +
+          '<div><span class="muted" style="font-size:11px;font-weight:900;">模型</span><div>' + escapeHtml(task.model) + '</div></div>' +
+          '<div><span class="muted" style="font-size:11px;font-weight:900;">状态</span><div><span class="badge ' + escapeHtml(task.status) + '">' + escapeHtml(task.status) + '</span></div></div>' +
+          '<div><span class="muted" style="font-size:11px;font-weight:900;">上游</span><div>' + escapeHtml(task.upstream_id || '-') + '</div></div>' +
+          '<div><span class="muted" style="font-size:11px;font-weight:900;">Provider</span><div>' + escapeHtml(task.plugin_id || '-') + '</div></div>' +
+          '<div><span class="muted" style="font-size:11px;font-weight:900;">Provider 任务 ID</span><div><code>' + escapeHtml(task.provider_task_id || '-') + '</code></div></div>' +
+          '<div><span class="muted" style="font-size:11px;font-weight:900;">存储输出</span><div>' + (task.store_output ? '是' : '否') + '</div></div>' +
+          '<div><span class="muted" style="font-size:11px;font-weight:900;">存储 TTL</span><div>' + task.storage_ttl_seconds + ' 秒</div></div>' +
+          '<div><span class="muted" style="font-size:11px;font-weight:900;">输出过期</span><div>' + escapeHtml(task.output_expires_at ? formatDate(task.output_expires_at) : '-') + '</div></div>' +
+          '<div><span class="muted" style="font-size:11px;font-weight:900;">回调 URL</span><div>' + escapeHtml(task.callback_url || '未设置') + '</div></div>' +
+          '<div><span class="muted" style="font-size:11px;font-weight:900;">创建时间</span><div>' + formatDate(task.created_at) + '</div></div>' +
+          '<div><span class="muted" style="font-size:11px;font-weight:900;">更新时间</span><div>' + formatDate(task.updated_at) + '</div></div>' +
+          '<div><span class="muted" style="font-size:11px;font-weight:900;">完成时间</span><div>' + (task.completed_at ? formatDate(task.completed_at) : '-') + '</div></div>' +
+          '</div>' +
+          (task.input ? '<div style="margin-top:12px;"><span class="muted" style="font-size:11px;font-weight:900;">输入参数</span><pre style="margin-top:4px;padding:10px;border:1px solid var(--line);border-radius:12px;background:var(--panel-strong);font-size:12px;max-height:150px;overflow:auto;">' + escapeHtml(JSON.stringify(task.input, null, 2)) + '</pre></div>' : '') +
+          (task.output ? '<div style="margin-top:12px;"><span class="muted" style="font-size:11px;font-weight:900;">输出结果</span><pre style="margin-top:4px;padding:10px;border:1px solid var(--line);border-radius:12px;background:var(--panel-strong);font-size:12px;max-height:150px;overflow:auto;">' + escapeHtml(JSON.stringify(task.output, null, 2)) + '</pre></div>' : '') +
+          (task.error ? '<div style="margin-top:12px;"><span class="muted" style="font-size:11px;font-weight:900;color:var(--danger);">错误信息</span><pre style="margin-top:4px;padding:10px;border:1px solid var(--danger);border-radius:12px;background:rgba(251,113,133,0.05);color:var(--danger);font-size:12px;max-height:150px;overflow:auto;">' + escapeHtml(typeof task.error === 'object' ? JSON.stringify(task.error, null, 2) : String(task.error)) + '</pre></div>' : '') +
+          (task.metadata ? '<div style="margin-top:12px;"><span class="muted" style="font-size:11px;font-weight:900;">元数据</span><pre style="margin-top:4px;padding:10px;border:1px solid var(--line);border-radius:12px;background:var(--panel-strong);font-size:12px;max-height:150px;overflow:auto;">' + escapeHtml(JSON.stringify(task.metadata, null, 2)) + '</pre></div>' : '') +
+          '<div style="margin-top:12px;text-align:right;"><button class="compact secondary" onclick="this.closest(\'tr\').remove()">收起</button></div>' +
+          '</div></td>';
+      } catch (error) {
+        detailRow.innerHTML = '<td colspan="100"><div class="notice" style="padding:12px;color:var(--danger);">加载失败: ' + escapeHtml(error.message) + '</div></td>';
+      }
     }
 
     function activateSection(sectionId) {
@@ -1483,6 +1572,11 @@ Content-Type: application/json</code></pre></div>
       if (cancelTask && confirm('确定取消这个任务？')) {
         await api('/account/api/tasks/' + encodeURIComponent(cancelTask.dataset.cancelTask) + '/cancel', { method: 'POST' });
         await load();
+      }
+      const viewTask = event.target.closest('[data-view-task]');
+      if (viewTask) {
+        const taskId = viewTask.dataset.viewTask;
+        toggleTaskDetail(taskId);
       }
     });
 

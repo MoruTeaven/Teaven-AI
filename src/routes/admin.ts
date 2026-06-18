@@ -474,12 +474,19 @@ async function handleDeleteAdminUpstream(upstreamId: string, env: Env, requestId
 async function handleUpsertAdminModel(request: Request, env: Env, requestId: string, expectedAlias?: string): Promise<Response> {
   const body = await readJsonObject(request);
   const input = normalizeModelInput(body.model ?? body);
-  if (expectedAlias && input.model.alias !== expectedAlias) {
-    throw invalidRequest("模型别名不能与路径不一致", "alias");
-  }
 
   const config = await loadGatewayConfig(env);
-  const nextUpstreams = upsertUpstreamModel(config, input);
+  if (expectedAlias) {
+    const existingModel = listModels(config).find((model) => model.alias === expectedAlias);
+    if (!existingModel) {
+      throw notFound("模型不存在");
+    }
+    if (input.model.alias !== expectedAlias && listModels(config).some((model) => model.alias === input.model.alias)) {
+      throw conflict("模型别名已存在");
+    }
+  }
+
+  const nextUpstreams = upsertUpstreamModel(config, input, expectedAlias);
   const nextConfig = { upstreams: nextUpstreams };
   await saveGatewayConfig(env, nextConfig);
   const savedModel = listModels(nextConfig).find((model) => model.alias === input.model.alias) || {
@@ -1036,7 +1043,7 @@ function readUpstreamInput(input: Record<string, unknown>): Omit<UpstreamConfig,
   };
 }
 
-function upsertUpstreamModel(config: GatewayConfig, input: AdminModelMutation): UpstreamConfig[] {
+function upsertUpstreamModel(config: GatewayConfig, input: AdminModelMutation, replaceAlias?: string): UpstreamConfig[] {
   const upstreams = config.upstreams.map((upstream) => ({ ...upstream, models: [...upstream.models] }));
   const target = upstreams.find((upstream) => upstream.id === input.upstream_id);
 
@@ -1044,7 +1051,14 @@ function upsertUpstreamModel(config: GatewayConfig, input: AdminModelMutation): 
     throw invalidRequest(`上游 ${input.upstream_id} 不存在，请先在上游管理中创建`, "upstream_id");
   }
 
-  target.models = target.models.filter((model) => model.alias !== input.model.alias);
+  if (replaceAlias) {
+    const aliasesToReplace = new Set([input.model.alias, replaceAlias]);
+    for (const upstream of upstreams) {
+      upstream.models = upstream.models.filter((model) => !aliasesToReplace.has(model.alias));
+    }
+  } else {
+    target.models = target.models.filter((model) => model.alias !== input.model.alias);
+  }
   target.models.push(input.model);
   target.models.sort((left, right) => left.alias.localeCompare(right.alias));
   upstreams.sort((left, right) => left.id.localeCompare(right.id));
@@ -2040,7 +2054,7 @@ const ADMIN_APP_HTML = `<!doctype html>
   </div>
   <script>
     (function () {
-      var state = { overview: null, config: null, models: [], selectedModelAlias: null, users: [], apiKeys: [], usage: null, tasks: [] };
+      var state = { overview: null, config: null, models: [], selectedModelAlias: null, editingModelAlias: null, users: [], apiKeys: [], usage: null, tasks: [] };
       var titles = { dashboard: '仪表盘', upstreams: '上游管理', models: '模型管理', users: '用户管理', usage: '模型用量', tasks: '任务管理', config: '配置工具' };
       var statusEl = document.getElementById('status');
       var theme = localStorage.getItem('teaven_admin_theme') || 'dark';
@@ -2196,7 +2210,7 @@ const ADMIN_APP_HTML = `<!doctype html>
             '<div class="actions entity-actions"><button type="button" class="secondary compact" data-model-view="' + esc(model.alias) + '">查看</button><button type="button" class="secondary compact" data-model-edit="' + esc(model.alias) + '">编辑</button><button type="button" class="danger compact" data-model-delete="' + esc(model.alias) + '">删除</button></div>' +
           '</article>';
         }).join('') : '<div class="empty">暂无模型。</div>';
-        if (state.models[0] && !document.getElementById('model-json').value.trim()) fillModelEditor(state.models[0].alias);
+        if (state.models[0] && !document.getElementById('model-json').value.trim()) fillModelEditor(state.models[0].alias, false);
         renderModelDetail();
       }
 
@@ -2307,11 +2321,11 @@ const ADMIN_APP_HTML = `<!doctype html>
         var upstream_id = document.getElementById('model-upstream-select').value;
         if (!upstream_id) { setStatus('请先选择所属上游', 'error'); return; }
         var model = { upstream_id: upstream_id, alias: value('model-alias'), provider_model: value('route-provider-model'), modality: value('model-modality'), supports_stream: value('model-stream') === 'true', status: value('model-status'), priority: Number(value('route-priority') || 1), weight: 100 };
-        await saveModel(model);
+        await saveModel(model, state.editingModelAlias);
         closeModal('model-modal');
       }
-      async function saveModelFromJson() { await saveModel(JSON.parse(document.getElementById('model-json').value)); }
-      async function saveModel(model) { await api('/admin/api/models', { method: 'POST', body: JSON.stringify({ model: model }) }); await loadAll(); setStatus('模型已保存：' + model.alias, 'ok'); }
+      async function saveModelFromJson() { var model = JSON.parse(document.getElementById('model-json').value); await saveModel(model, model.original_alias || state.editingModelAlias || null); }
+      async function saveModel(model, originalAlias) { var path = originalAlias ? '/admin/api/models/' + encodeURIComponent(originalAlias) : '/admin/api/models'; var method = originalAlias ? 'PUT' : 'POST'; await api(path, { method: method, body: JSON.stringify({ model: model }) }); state.editingModelAlias = null; await loadAll(); setStatus('模型已保存：' + model.alias, 'ok'); }
       async function resetModels() { if (!confirm('确定重置模型配置？')) return; await api('/admin/api/models/reset', { method: 'POST' }); document.getElementById('model-json').value = ''; await loadAll(); setStatus('模型配置已重置。', 'ok'); }
 
       async function saveUpstreamFromForm() {
@@ -2334,6 +2348,7 @@ const ADMIN_APP_HTML = `<!doctype html>
       }
 
       function resetModelForm() {
+        state.editingModelAlias = null;
         document.getElementById('model-alias').value = '';
         document.getElementById('route-provider-model').value = '';
         document.getElementById('model-modality').value = 'text';
@@ -2381,7 +2396,7 @@ const ADMIN_APP_HTML = `<!doctype html>
       async function handleModelAction(event) {
         var view = event.target.closest('[data-model-view]'); var edit = event.target.closest('[data-model-edit]'); var del = event.target.closest('[data-model-delete]');
         if (view) { viewModel(view.getAttribute('data-model-view')); return; }
-        if (edit) { fillModelEditor(edit.getAttribute('data-model-edit')); openModal('model-modal', 'model-modal-title', '编辑模型'); }
+        if (edit) { fillModelEditor(edit.getAttribute('data-model-edit'), true); openModal('model-modal', 'model-modal-title', '编辑模型'); }
         if (del && confirm('确定删除模型 ' + del.getAttribute('data-model-delete') + '？')) { await api('/admin/api/models/' + encodeURIComponent(del.getAttribute('data-model-delete')), { method: 'DELETE' }); await loadAll(); }
       }
 
@@ -2395,9 +2410,9 @@ const ADMIN_APP_HTML = `<!doctype html>
       async function handleKeyAction(event) { var viewBtn = event.target.closest('[data-key-view]'); var toggleBtn = event.target.closest('[data-key-toggle]'); if (viewBtn) { var keyId = viewBtn.getAttribute('data-key-view'); var key = state.apiKeys.find(function (item) { return item.id === keyId; }); if (!key) return; document.getElementById('key-reveal-title').textContent = '查看密钥：' + esc(key.name); document.getElementById('reveal-password').value = ''; document.getElementById('reveal-error').style.display = 'none'; document.getElementById('reveal-result').style.display = 'none'; document.getElementById('reveal-key-confirm').setAttribute('data-reveal-key-id', keyId); openModal('key-reveal-modal', 'key-reveal-title', '查看密钥：' + esc(key.name)); return; } if (!toggleBtn) return; var key = state.apiKeys.find(function (item) { return item.id === toggleBtn.getAttribute('data-key-toggle'); }); if (!key) return; await api('/admin/api/api-keys/' + encodeURIComponent(key.id), { method: 'PATCH', body: JSON.stringify({ status: key.status === 'active' ? 'disabled' : 'active' }) }); await loadAll(); }
       async function handleTaskAction(event) { var view = event.target.closest('[data-task-view]'); var cancel = event.target.closest('[data-task-cancel]'); if (view) { var detail = await api('/admin/api/tasks/' + encodeURIComponent(view.getAttribute('data-task-view'))); document.getElementById('task-detail').textContent = JSON.stringify(detail.task, null, 2); } if (cancel && confirm('确定取消任务？')) { await api('/admin/api/tasks/' + encodeURIComponent(cancel.getAttribute('data-task-cancel')) + '/cancel', { method: 'POST' }); await loadTasks(); } }
 
-      function fillModelEditor(alias) { var model = state.models.find(function (item) { return item.alias === alias; }); if (!model) return; var route = model.routes && model.routes[0] ? model.routes[0] : {}; document.getElementById('model-json').value = JSON.stringify(toModelInput(model), null, 2); document.getElementById('model-alias').value = model.alias; document.getElementById('model-modality').value = model.modality; document.getElementById('model-status').value = model.status; document.getElementById('model-stream').value = String(model.supports_stream !== false); var select = document.getElementById('model-upstream-select'); if (select.options.length > 1) { select.value = route.upstream_id || ''; } document.getElementById('route-provider-model').value = route.provider_model || ''; document.getElementById('route-priority').value = route.priority || 1; }
+      function fillModelEditor(alias, editing) { var model = state.models.find(function (item) { return item.alias === alias; }); if (!model) return; state.editingModelAlias = editing ? alias : null; var route = model.routes && model.routes[0] ? model.routes[0] : {}; document.getElementById('model-json').value = JSON.stringify(toModelInput(model), null, 2); document.getElementById('model-alias').value = model.alias; document.getElementById('model-modality').value = model.modality; document.getElementById('model-status').value = model.status; document.getElementById('model-stream').value = String(model.supports_stream !== false); var select = document.getElementById('model-upstream-select'); if (select.options.length > 1) { select.value = route.upstream_id || ''; } document.getElementById('route-provider-model').value = route.provider_model || ''; document.getElementById('route-priority').value = route.priority || 1; }
       function viewModel(alias) { state.selectedModelAlias = alias; renderModelDetail(); setStatus('正在查看模型：' + alias, 'ok'); }
-      function toModelInput(model) { var route = model.routes && model.routes[0] ? model.routes[0] : {}; return { upstream_id: route.upstream_id, alias: model.alias, provider_model: route.provider_model, modality: model.modality, supports_stream: model.supports_stream, status: model.status, priority: route.priority, weight: route.weight }; }
+      function toModelInput(model) { var route = model.routes && model.routes[0] ? model.routes[0] : {}; return { original_alias: model.alias, upstream_id: route.upstream_id, alias: model.alias, provider_model: route.provider_model, modality: model.modality, supports_stream: model.supports_stream, status: model.status, priority: route.priority, weight: route.weight }; }
       function fillUpstreamEditor(id) { var upstreams = (state.overview && state.overview.upstreams) || []; var upstream = upstreams.find(function (item) { return item.id === id; }); if (!upstream) return; document.getElementById('upstream-admin-id').value = upstream.id || ''; document.getElementById('upstream-admin-name').value = upstream.name || ''; document.getElementById('upstream-admin-plugin').value = upstream.plugin_id || ''; document.getElementById('upstream-admin-base-url').value = upstream.base_url || ''; document.getElementById('upstream-admin-credential').value = upstream.credential_id || ''; document.getElementById('upstream-admin-status').value = upstream.status || 'active'; }
       function viewUpstream(id) { var upstream = findOverviewUpstream(id); if (!upstream) { setStatus('未找到上游：' + id, 'error'); return; } var raw = findConfigUpstream(id) || upstream; var name = upstream.name || upstream.id; document.getElementById('upstream-view-title').textContent = '查看上游：' + name; document.getElementById('upstream-view-content').innerHTML = renderUpstreamDetail(upstream, raw); document.getElementById('upstream-view-json').textContent = JSON.stringify(toUpstreamDetailJson(upstream, raw), null, 2); openModal('upstream-view-modal', 'upstream-view-title', '查看上游：' + name); }
       function renderUpstreamDetail(upstream, raw) { var providers = (state.overview && state.overview.providers) || []; var plugin = findProvider(providers, upstream.plugin_id); var models = (raw && raw.models) || upstream.models || []; var modelRows = models.length ? models.map(function (model) { return '<tr><td><code>' + esc(model.alias) + '</code></td><td><code>' + esc(model.provider_model) + '</code></td><td>' + esc(modalityText(model.modality)) + '</td><td><span class="pill ' + statusClass(model.status || 'active') + '">' + esc(statusText(model.status || 'active')) + '</span></td><td>' + (model.supports_stream !== false ? '支持' : '不支持') + '</td><td>' + esc(model.priority == null ? '未设置' : model.priority) + '</td><td>' + esc(model.weight == null ? '未设置' : model.weight) + '</td></tr>'; }).join('') : '<tr><td colspan="7" class="empty">暂无模型。</td></tr>'; return '<div class="entity-meta">' +
