@@ -1686,7 +1686,34 @@ Content-Type: application/json</code></pre></div>
         if (status === 'failed') return '失败';
         if (status === 'canceled') return '已取消';
         if (status === 'expired') return '已过期';
+        if (status === 'active') return '启用';
+        if (status === 'disabled') return '停用';
+        if (status === 'hidden') return '隐藏';
+        if (status === 'degraded') return '降级';
         return status;
+      }
+
+      function providerStatusText(status) {
+        if (!status) return '-';
+        const text = statusText(status);
+        if (text !== status) return text;
+        const normalized = String(status).toLowerCase();
+        const map = {
+          pending: '等待中',
+          processing: '处理中',
+          process: '处理中',
+          completed: '已完成',
+          complete: '已完成',
+          success: '成功',
+          successful: '成功',
+          failure: '失败',
+          error: '错误',
+          cancelled: '已取消',
+          cancel: '已取消',
+          timeout: '超时',
+          timeouted: '已超时'
+        };
+        return map[normalized] || status;
       }
 
       function stageText(stage) {
@@ -1701,7 +1728,8 @@ Content-Type: application/json</code></pre></div>
           'upstream.create.completed_sync': '上游同步完成',
           'queue.reenqueued': '重新入队',
           'queue.unavailable': '队列不可用',
-          'queue.reenqueue_failed': '入队失败',
+          'queue.enqueue_failed': '入队失败',
+          'queue.reenqueue_failed': '重新入队失败',
           'poll.started': '轮询开始',
           'poll.result': '轮询结果',
           'poll.error': '轮询错误',
@@ -1801,7 +1829,7 @@ Content-Type: application/json</code></pre></div>
       const items = [
         ['轮询次数', diagnostics.poll_count ?? 0],
         ['创建尝试', diagnostics.create_attempt_count ?? 0],
-        ['上游状态', diagnostics.provider_status || '-'],
+        ['上游状态', providerStatusText(diagnostics.provider_status)],
         ['上游业务码', diagnostics.provider_response_code || '-'],
         ['上游 HTTP', diagnostics.provider_http_status || '-'],
         ['最后轮询', diagnostics.last_poll_at ? formatDate(diagnostics.last_poll_at) : '-'],
@@ -1813,27 +1841,127 @@ Content-Type: application/json</code></pre></div>
 
     function renderTaskEvents(events) {
       if (!events.length) return '<div style="margin-top:12px;"><span class="muted" style="font-size:11px;font-weight:900;">状态链</span><div class="notice" style="margin-top:4px;">暂无状态事件。</div></div>';
-      const rows = events.map((event) => '<tr><td>' + formatDate(event.at) + '</td><td>' + escapeHtml(stageText(event.stage) || '-') + '</td><td>' + escapeHtml(statusText(event.status) || '-') + '</td><td>' + escapeHtml(event.provider_status || '-') + '</td><td>' + escapeHtml(formatTaskEventSummary(event)) + '</td></tr>').join('');
+      const rows = events.map((event) => '<tr><td>' + formatDate(event.at) + '</td><td>' + escapeHtml(stageText(event.stage) || '-') + '</td><td>' + escapeHtml(statusText(event.status) || '-') + '</td><td>' + escapeHtml(providerStatusText(event.provider_status)) + '</td><td>' + escapeHtml(formatTaskEventSummary(event)) + '</td></tr>').join('');
       return '<div style="margin-top:12px;"><span class="muted" style="font-size:11px;font-weight:900;">状态链</span><div style="margin-top:4px;max-height:240px;overflow:auto;border:1px solid var(--line);border-radius:12px;"><table style="margin:0;"><thead><tr><th>时间</th><th>阶段</th><th>平台状态</th><th>上游状态</th><th>摘要</th></tr></thead><tbody>' + rows + '</tbody></table></div></div>';
     }
 
     function formatTaskEventSummary(event) {
       const parts = [];
-      if (event.message) parts.push(event.message);
-      if (event.provider_task_id) parts.push('provider_task_id=' + event.provider_task_id);
-      if (event.provider_response_code) parts.push('code=' + event.provider_response_code);
-      if (event.http_status) parts.push('http=' + event.http_status);
-      if (event.attempt) parts.push('attempt=' + event.attempt);
-      if (event.delay_seconds !== undefined) parts.push('delay=' + event.delay_seconds + 's');
-      if (event.error) parts.push('error=' + formatDiagnosticValue(event.error));
-      if (event.details) parts.push('details=' + formatDiagnosticValue(event.details));
+      if (event.message) parts.push(translateDiagnosticText(event.message));
+      if (event.provider_task_id) parts.push('上游任务 ID=' + event.provider_task_id);
+      if (event.poll_url) parts.push('轮询 URL=' + event.poll_url);
+      if (event.provider_response_code) parts.push('上游业务码=' + translateDiagnosticText(event.provider_response_code));
+      if (event.http_status) parts.push('HTTP=' + event.http_status);
+      if (event.attempt) parts.push('尝试次数=' + event.attempt);
+      if (event.delay_seconds !== undefined) parts.push('延迟=' + event.delay_seconds + ' 秒');
+      if (event.request_id) parts.push('请求 ID=' + event.request_id);
+      if (event.process_id) parts.push('处理进程=' + event.process_id);
+      if (event.error) parts.push('错误=' + formatDiagnosticValue(event.error));
+      if (event.details) parts.push('详情=' + formatDiagnosticValue(event.details));
       return parts.length ? parts.join(' · ') : '-';
     }
 
     function formatDiagnosticValue(value) {
       if (value === null || value === undefined) return '-';
-      if (typeof value === 'object') return JSON.stringify(value);
+      if (typeof value === 'string') return translateDiagnosticText(value);
+      if (typeof value === 'object') return JSON.stringify(localizeDiagnosticValue(value));
       return String(value);
+    }
+
+    function localizeDiagnosticValue(value) {
+      if (Array.isArray(value)) return value.map(localizeDiagnosticValue);
+      if (value && typeof value === 'object') {
+        return Object.keys(value).reduce((result, key) => {
+          result[diagnosticKeyText(key)] = localizeDiagnosticValue(value[key]);
+          return result;
+        }, {});
+      }
+      if (typeof value === 'string') return translateDiagnosticText(value);
+      return value;
+    }
+
+    function diagnosticKeyText(key) {
+      const map = {
+        message: '消息',
+        cause: '原因',
+        error: '错误',
+        errors: '错误列表',
+        response: '响应',
+        data: '数据',
+        code: '业务码',
+        status: '状态',
+        type: '类型',
+        id: 'ID',
+        task_id: '任务 ID',
+        provider_task_id: '上游任务 ID',
+        provider_status: '上游状态',
+        provider_response_code: '上游业务码',
+        provider_http_status: '上游 HTTP',
+        http_status: 'HTTP 状态',
+        output_count: '输出数量',
+        stored_count: '已存储数量',
+        output_expires_at: '输出过期时间',
+        poll_count: '轮询次数',
+        poll_url: '轮询 URL',
+        upstream_raw_body: '上游原始响应',
+        raw_body: '原始响应',
+        attempt: '尝试次数',
+        delay_seconds: '延迟秒数',
+        process_id: '处理进程',
+        request_id: '请求 ID'
+      };
+      return map[key] || key;
+    }
+
+    function translateDiagnosticText(text) {
+      if (text === null || text === undefined) return '-';
+      const value = String(text);
+      const map = {
+        'Queue consumer picked up the task': '队列消费者已接收任务',
+        'Task has no plugin_id or provider_context, cannot be processed by consumer': '任务缺少 plugin_id 或 provider_context，队列消费者无法处理',
+        'Missing provider routing context': '缺少上游路由上下文',
+        'Upstream task creation failed with a non-retryable error': '上游任务创建失败，错误不可重试',
+        'Upstream creation returned a non-retryable error': '上游创建返回不可重试错误',
+        'Exceeded max upstream creation attempts': '已超过上游创建最大尝试次数',
+        'Cannot build provider request context from task record': '无法根据任务记录构建上游请求上下文',
+        'Polling upstream task status': '正在轮询上游任务状态',
+        'Provider does not implement pollTask': 'Provider 未实现 pollTask',
+        'Upstream task failed': '上游任务失败',
+        'TASK_QUEUE binding is not configured': '未配置 TASK_QUEUE 绑定',
+        'Task scheduled for the next processor run': '任务已安排到下一次处理',
+        'Task scheduled without delayed delivery': '任务已安排处理，但未使用延迟投递',
+        'Cannot build request context for upstream task creation': '无法为上游任务创建构建请求上下文',
+        'Cannot build provider request context': '无法构建上游请求上下文',
+        'Creating upstream async task': '正在创建上游异步任务',
+        'Provider does not support image generation': 'Provider 不支持图片生成',
+        'Upstream creation returned 202 without provider_task_id': '上游创建返回 202，但缺少 provider_task_id',
+        'Missing provider_task_id in upstream creation response': '上游创建响应缺少 provider_task_id',
+        'Upstream creation returned a non-success response': '上游创建返回非成功响应',
+        'Unsupported task type for upstream creation': '上游创建不支持该任务类型',
+        'Delivering terminal task webhook': '正在投递任务终态回调',
+        'Callback endpoint returned non-2xx status': '回调地址返回非 2xx 状态',
+        'Task created via /v1/tasks': '任务通过 /v1/tasks 创建',
+        'Task created via /v1/async/images/generations': '任务通过 /v1/async/images/generations 创建',
+        'Task created via account center test': '任务通过账户中心测试创建',
+        'Task submitted to TASK_QUEUE': '任务已提交到 TASK_QUEUE',
+        'Task canceled by API request': '任务已由 API 请求取消',
+        'Task canceled from account center': '任务已在账户中心取消',
+        'Task canceled by admin': '任务已由管理员取消'
+      };
+      if (map[value]) return map[value];
+      let matched = value.match(/^Exceeded max poll attempts \((\d+)\)$/);
+      if (matched) return '已超过最大轮询次数（' + matched[1] + '）';
+      matched = value.match(/^Upstream task creation failed after (\d+) attempts$/);
+      if (matched) return '上游任务创建失败，已尝试 ' + matched[1] + ' 次';
+      matched = value.match(/^Provider "(.+)" does not implement pollTask$/);
+      if (matched) return 'Provider "' + matched[1] + '" 未实现 pollTask';
+      matched = value.match(/^Provider "(.+)" does not support image generation$/);
+      if (matched) return 'Provider "' + matched[1] + '" 不支持图片生成';
+      matched = value.match(/^Unsupported task type for auto-creation: (.+)$/);
+      if (matched) return '不支持自动创建的任务类型：' + matched[1];
+      matched = value.match(/^Upstream creation failed: (.+)$/);
+      if (matched) return '上游创建失败：' + matched[1];
+      return value;
     }
 
     function formatDate(dateString) {
