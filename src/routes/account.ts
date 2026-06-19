@@ -27,11 +27,13 @@ import {
 import { appendTaskEvent, lastTaskEvent, taskDiagnostics } from "../tasks/events";
 import { getTask, listTasks, saveTask } from "../tasks/store";
 import { createProviderRegistry, resolveProviderCredential } from "../providers/registry";
-import type { AsyncTaskRecord, Env } from "../types";
+import type { AsyncTaskRecord, Env, ModelConfig } from "../types";
+import { createId } from "../utils/ids";
 import { readJsonObject, requireString } from "../utils/request";
 
 const DEFAULT_TASK_LIMIT = 50;
 const MAX_TASK_LIMIT = 100;
+const DEFAULT_STORAGE_TTL_SECONDS = 24 * 60 * 60;
 
 export async function handleAccountRequest(request: Request, env: Env, requestId: string, pathname: string): Promise<Response> {
   if (request.method === "GET" && pathname === "/account/login") {
@@ -182,6 +184,7 @@ async function handleAccountProfile(user: AdminUser, env: Env, requestId: string
       id: model.alias,
       modality: model.modality,
       supports_stream: model.supports_stream !== false,
+      supports_async: model.supports_async !== false,
       status: model.status || "active"
     }));
 
@@ -426,10 +429,6 @@ async function handleCancelAccountTask(user: AdminUser, taskId: string, env: Env
 async function handleAccountTest(user: AdminUser, request: Request, env: Env, requestId: string): Promise<Response> {
   const body = await readJsonObject(request);
   const modelName = requireString(body.model, "model");
-  const mode = body.mode || "sync";
-  const prompt = requireString(body.prompt, "prompt");
-  const temperature = body.temperature || 0.7;
-  const maxTokens = body.max_tokens || 1000;
 
   const config = await loadGatewayConfig(env);
   const model = findModel(config, modelName);
@@ -438,8 +437,16 @@ async function handleAccountTest(user: AdminUser, request: Request, env: Env, re
   }
 
   if (model.modality !== "text") {
-    throw invalidRequest(`Only text models are supported for testing. Model modality is "${model.modality}"`, "model");
+    return handleAccountAsyncTest(user, body, modelName, model, env, requestId);
   }
+
+  const mode = typeof body.mode === "string" ? body.mode : "sync";
+  if (mode !== "sync" && mode !== "stream") {
+    throw invalidRequest("mode must be sync or stream", "mode");
+  }
+  const prompt = requireString(body.prompt, "prompt");
+  const temperature = body.temperature || 0.7;
+  const maxTokens = body.max_tokens || 1000;
 
   if (mode === "stream" && model.supports_stream === false) {
     throw invalidRequest(`Model does not support stream: ${modelName}`, "mode");
@@ -521,6 +528,160 @@ async function handleAccountTest(user: AdminUser, request: Request, env: Env, re
         }
       }
     );
+  }
+}
+
+async function handleAccountAsyncTest(
+  user: AdminUser,
+  body: Record<string, unknown>,
+  modelName: string,
+  model: ModelConfig,
+  env: Env,
+  requestId: string
+): Promise<Response> {
+  const route = selectRoute(model, false);
+  if (!route) {
+    throw invalidRequest(`No active provider route for model: ${modelName}`);
+  }
+
+  const input = normalizeTestTaskInput(body.input);
+  const prompt = requireString(body.prompt ?? input.prompt, "prompt");
+  const taskInput: Record<string, unknown> = {
+    ...input,
+    prompt
+  };
+  const now = new Date().toISOString();
+  const task: AsyncTaskRecord = {
+    id: createId("task"),
+    object: "task",
+    organization_id: user.organization_id,
+    api_key_id: `account:${user.id}`,
+    type: taskTypeForModality(model.modality),
+    model: modelName,
+    upstream_id: route.upstream_id,
+    plugin_id: route.plugin_id,
+    provider_context: {
+      upstream_model: route.provider_model,
+      request_id: requestId,
+      base_url: route.base_url,
+      credential_id: route.credential_id,
+      config: route.config,
+      source: "account_test"
+    },
+    status: "queued",
+    input: taskInput,
+    store_output: body.store_output === true,
+    storage_ttl_seconds: normalizeTestStorageTtl(body.storage_ttl_seconds),
+    output_expires_at: null,
+    metadata: {
+      source: "account_test",
+      user_id: user.id
+    },
+    created_at: now,
+    updated_at: now
+  };
+
+  appendTaskEvent(task, {
+    stage: "task.created",
+    status: task.status,
+    request_id: requestId,
+    message: "Task created via account center test"
+  });
+
+  await saveTask(env, task);
+  await enqueueAccountTestTask(env, task);
+
+  return jsonResponse(
+    {
+      mode: "async_task",
+      model: modelName,
+      modality: model.modality,
+      task: publicTaskSummary(task),
+      input: taskInput
+    },
+    {
+      status: 202,
+      headers: {
+        "X-Request-Id": requestId
+      }
+    }
+  );
+}
+
+async function enqueueAccountTestTask(env: Env, task: AsyncTaskRecord): Promise<void> {
+  if (!env.TASK_QUEUE) {
+    appendTaskEvent(task, {
+      stage: "queue.unavailable",
+      status: task.status,
+      message: "TASK_QUEUE binding is not configured"
+    });
+    task.updated_at = new Date().toISOString();
+    await saveTask(env, task);
+    return;
+  }
+
+  try {
+    await env.TASK_QUEUE.send({ task_id: task.id });
+    appendTaskEvent(task, {
+      stage: "queue.enqueued",
+      status: task.status,
+      message: "Task submitted to TASK_QUEUE"
+    });
+    task.updated_at = new Date().toISOString();
+    await saveTask(env, task);
+  } catch (err) {
+    appendTaskEvent(task, {
+      stage: "queue.enqueue_failed",
+      status: task.status,
+      error: accountErrorMessage(err)
+    });
+    task.updated_at = new Date().toISOString();
+    await saveTask(env, task);
+    throw err;
+  }
+}
+
+function normalizeTestTaskInput(value: unknown): Record<string, unknown> {
+  if (value === undefined || value === null) {
+    return {};
+  }
+  if (typeof value !== "object" || Array.isArray(value)) {
+    throw invalidRequest("input 必须是 JSON 对象", "input");
+  }
+  return { ...(value as Record<string, unknown>) };
+}
+
+function normalizeTestStorageTtl(value: unknown): number {
+  if (value === undefined || value === null || value === "") {
+    return DEFAULT_STORAGE_TTL_SECONDS;
+  }
+  if (typeof value !== "number" || !Number.isInteger(value)) {
+    throw invalidRequest("storage_ttl_seconds must be an integer", "storage_ttl_seconds");
+  }
+  if (value < 1 || value > DEFAULT_STORAGE_TTL_SECONDS) {
+    throw invalidRequest("storage_ttl_seconds must be between 1 and 86400", "storage_ttl_seconds");
+  }
+  return value;
+}
+
+function taskTypeForModality(modality: ModelConfig["modality"]): string {
+  if (modality === "image") return "image.generation";
+  if (modality === "video") return "video.generation";
+  if (modality === "file") return "file.processing";
+  return "chat.completions";
+}
+
+function accountErrorMessage(err: unknown): string {
+  if (err instanceof Error) {
+    return err.message;
+  }
+  if (typeof err === "string") {
+    return err;
+  }
+  try {
+    return JSON.stringify(err);
+  } catch {
+    return String(err);
   }
 }
 
@@ -1197,19 +1358,26 @@ const ACCOUNT_APP_HTML = String.raw`<!doctype html>
        <section id="test" class="section">
          <div class="grid">
            <div class="card span-12">
-             <div class="card-head"><h3>模型测试</h3><p class="subtitle">直接调用模型进行测试</p></div>
-             <form id="testForm" class="form-grid">
-               <label class="full">模型<select id="testModel" name="model" required></select></label>
-               <label class="full" id="testModeLabel">请求模式<select id="testMode" name="mode">
-                 <option value="sync">同步</option>
-                 <option value="stream">流式 (仅文本)</option>
-               </select></label>
-               
-               <label class="full" id="testPromptLabel">提示词<textarea id="testPrompt" name="prompt" rows="4" placeholder="输入你的提示词或问题..." required></textarea></label>
-               
-               <label class="full checkbox-label"><input id="testAdvanced" type="checkbox"><span>高级参数</span></label>
-               
-               <div class="full" id="advancedParams" style="display:none;grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;align-items:end;">
+              <div class="card-head"><h3>模型测试</h3><p class="subtitle">文本直接返回，图片、视频、文件会创建异步任务，执行需对应 Provider 支持</p></div>
+              <form id="testForm" class="form-grid">
+                <label class="full">模型<select id="testModel" name="model" required></select></label>
+                <div class="full row" id="testModelMeta"></div>
+                <label class="full" id="testModeLabel">请求模式<select id="testMode" name="mode">
+                  <option value="sync">同步</option>
+                  <option value="stream">流式 (仅文本)</option>
+                  <option value="task">异步任务</option>
+                </select></label>
+                
+                <label class="full" id="testPromptLabel"><span id="testPromptTitle">提示词</span><textarea id="testPrompt" name="prompt" rows="4" placeholder="输入你的提示词或问题..." required></textarea></label>
+                <label class="full" id="testInputJsonLabel" style="display:none;">输入参数 JSON<textarea id="testInputJson" rows="6" spellcheck="false" placeholder="{}"></textarea></label>
+                <div class="full" id="testTaskOptions" style="display:none;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;align-items:end;">
+                  <label class="checkbox-label"><input id="testStoreOutput" type="checkbox" checked><span>转存输出文件</span></label>
+                  <label>存储 TTL 秒<input id="testStorageTtl" type="number" min="1" max="86400" step="1" value="86400"></label>
+                </div>
+                
+                <label class="full checkbox-label" id="testAdvancedLabel"><input id="testAdvanced" type="checkbox"><span>高级参数</span></label>
+                
+                <div class="full" id="advancedParams" style="display:none;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;align-items:end;">
                  <label>温度 (Temperature)<input id="testTemperature" type="number" min="0" max="2" step="0.1" value="0.7" placeholder="0-2"></label>
                  <label>最大 Token<input id="testMaxTokens" type="number" min="1" step="1" value="1000" placeholder="最大生成 token 数"></label>
                </div>
@@ -1237,8 +1405,8 @@ const ACCOUNT_APP_HTML = String.raw`<!doctype html>
       <section id="api-docs" class="section">
         <div class="grid">
           <div class="card span-12 doc-block">
-            <div class="card-head"><h3>异步生图、视频接口</h3></div>
-            <p>图片、视频等媒体能力统一使用异步任务接口。创建任务会立即返回 <code>queued</code> 状态，后续通过任务查询接口轮询结果；如传入 <code>callback_url</code>，后台完成后可向该地址投递任务结果。</p>
+            <div class="card-head"><h3>异步媒体、文件接口</h3></div>
+            <p>图片、视频、文件等非文本能力统一使用异步任务接口。创建任务会立即返回 <code>queued</code> 状态，后续通过任务查询接口轮询结果；如传入 <code>callback_url</code>，后台完成后可向该地址投递任务结果。</p>
             <div id="mediaModelDocs"></div>
           </div>
 
@@ -1379,31 +1547,102 @@ Content-Type: application/json</code></pre></div>
        renderTaskDetail();
      }
 
-    function renderModels() {
-       $('#keyModels').innerHTML = state.models.map((model) => '<option value="' + escapeHtml(model.id) + '">' + escapeHtml(model.id) + ' · ' + escapeHtml(model.modality) + '</option>').join('');
-       $('#modelList').innerHTML = state.models.length ? state.models.map((model) => '<div class="item"><header><strong>' + escapeHtml(model.id) + '</strong><span class="badge ok">' + escapeHtml(model.modality) + '</span></header><span class="muted">流式：' + (model.supports_stream ? '支持' : '不支持') + '</span></div>').join('') : '<div class="notice">暂无可用模型。</div>';
-     }
+     function renderModels() {
+        $('#keyModels').innerHTML = state.models.map((model) => '<option value="' + escapeHtml(model.id) + '">' + escapeHtml(model.id) + ' · ' + escapeHtml(modalityText(model.modality)) + '</option>').join('');
+        $('#modelList').innerHTML = state.models.length ? state.models.map((model) => '<div class="item"><header><strong>' + escapeHtml(model.id) + '</strong><span class="badge ok">' + escapeHtml(modalityText(model.modality)) + '</span></header><span class="muted">流式：' + (model.supports_stream ? '支持' : '不支持') + ' · 异步：' + (model.supports_async ? '支持' : '不支持') + '</span></div>').join('') : '<div class="notice">暂无可用模型。</div>';
+      }
 
-     function renderTestModels() {
-       const textModels = state.models.filter((model) => model.modality === 'text');
-       if (textModels.length === 0) {
-         $('#testForm').style.display = 'none';
-         $('#testModel').innerHTML = '';
-         return;
-       }
-       $('#testForm').style.display = 'block';
-       $('#testModel').innerHTML = textModels.map((model) => '<option value="' + escapeHtml(model.id) + '">' + escapeHtml(model.id) + '</option>').join('');
-       
-       const firstModel = textModels[0];
-       const supportsStream = firstModel.supports_stream;
-       
-       if (supportsStream) {
-         $('#testModeLabel').style.display = 'block';
-       } else {
-         $('#testModeLabel').style.display = 'none';
-         $('#testMode').value = 'sync';
-       }
-     }
+      function renderTestModels() {
+        const models = state.models;
+        const currentModel = $('#testModel').value;
+        if (models.length === 0) {
+          $('#testForm').style.display = 'none';
+          $('#testModel').innerHTML = '';
+          $('#testEmpty').textContent = '暂无可测试模型。';
+          return;
+        }
+        $('#testForm').style.display = 'block';
+        $('#testModel').innerHTML = models.map((model) => '<option value="' + escapeHtml(model.id) + '">' + escapeHtml(model.id) + ' · ' + escapeHtml(modalityText(model.modality)) + '</option>').join('');
+        if (currentModel && models.some((model) => model.id === currentModel)) {
+          $('#testModel').value = currentModel;
+        }
+        $('#testEmpty').textContent = '执行测试后将显示结果';
+        updateTestFormForModel();
+      }
+
+      function updateTestFormForModel() {
+        const model = selectedTestModel();
+        if (!model) return;
+        const isText = model.modality === 'text';
+        const streamOption = $('#testMode').querySelector('option[value="stream"]');
+        const taskOption = $('#testMode').querySelector('option[value="task"]');
+        if (streamOption) streamOption.disabled = !model.supports_stream;
+        if (taskOption) taskOption.disabled = isText;
+        $('#testModelMeta').innerHTML = '<span class="badge ok">' + escapeHtml(modalityText(model.modality)) + '</span><span class="badge ' + (isText && model.supports_stream ? 'ok' : '') + '">流式：' + (isText && model.supports_stream ? '支持' : '不适用') + '</span><span class="badge ' + (!isText && model.supports_async ? 'ok' : '') + '">异步：' + (!isText && model.supports_async ? '支持' : (isText ? '不适用' : '未声明')) + '</span>';
+        $('#testModeLabel').style.display = isText ? 'block' : 'none';
+        $('#testInputJsonLabel').style.display = isText ? 'none' : 'block';
+        $('#testTaskOptions').style.display = isText ? 'none' : 'grid';
+        $('#testAdvancedLabel').style.display = isText ? 'flex' : 'none';
+        $('#advancedParams').style.display = isText && $('#testAdvanced').checked ? 'grid' : 'none';
+        $('#testPromptTitle').textContent = isText ? '提示词' : '提示词/任务说明';
+        $('#testPrompt').placeholder = isText ? '输入你的提示词或问题...' : testPromptPlaceholder(model.modality);
+        if (isText) {
+          if ($('#testMode').value === 'task' || ($('#testMode').value === 'stream' && !model.supports_stream)) $('#testMode').value = 'sync';
+          return;
+        }
+        $('#testMode').value = 'task';
+        $('#testInputJson').placeholder = testInputPlaceholder(model.modality);
+        if (!$('#testInputJson').value.trim()) {
+          $('#testInputJson').value = JSON.stringify(defaultTestInput(model.modality), null, 2);
+        }
+      }
+
+      function selectedTestModel() {
+        if (!state) return null;
+        const selected = $('#testModel').value;
+        return state.models.find((model) => model.id === selected) || state.models[0] || null;
+      }
+
+      function modalityText(value) {
+        if (value === 'text') return '文本';
+        if (value === 'image') return '图片';
+        if (value === 'video') return '视频';
+        if (value === 'file') return '文件';
+        return value || '未知';
+      }
+
+      function testPromptPlaceholder(modality) {
+        if (modality === 'image') return '描述你想生成的图片，例如：一只猫坐在云端...';
+        if (modality === 'video') return '描述你想生成的视频，例如：海面日出，电影感镜头推进...';
+        if (modality === 'file') return '描述文件处理目标，例如：提取要点并生成摘要...';
+        return '输入任务说明...';
+      }
+
+      function defaultTestInput(modality) {
+        if (modality === 'image') return { size: '1024x1024', n: 1, response_format: 'url' };
+        if (modality === 'video') return { duration: 5, size: '1280x720', fps: 24 };
+        if (modality === 'file') return { file_url: 'https://example.com/input.pdf' };
+        return {};
+      }
+
+      function testInputPlaceholder(modality) {
+        return JSON.stringify(defaultTestInput(modality), null, 2);
+      }
+
+      function parseTestInputJson() {
+        const raw = $('#testInputJson').value.trim();
+        if (!raw) return {};
+        let parsed;
+        try {
+          parsed = JSON.parse(raw);
+        } catch (error) {
+          throw new Error('输入参数 JSON 格式不正确');
+        }
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+          throw new Error('输入参数 JSON 必须是对象');
+        }
+        return parsed;
+      }
 
     function renderKeys() {
       $('#keyList').innerHTML = state.api_keys.length ? state.api_keys.map((key) => '<article class="item"><header><div><strong>' + escapeHtml(key.name) + '</strong><div class="muted"><code>' + escapeHtml(key.key_prefix) + '...</code></div></div><span class="badge ' + escapeHtml(key.status) + '">' + escapeHtml(key.status) + '</span></header><div class="entity-meta"><div class="entity-row"><span>模型</span><span>' + escapeHtml(key.allowed_models.length ? key.allowed_models.join(', ') : '全部模型') + '</span></div><div class="entity-row"><span>过期</span><span>' + escapeHtml(key.expires_at ? formatDate(key.expires_at) : '永不过期') + '</span></div><div class="entity-row"><span>最后使用</span><span>' + escapeHtml(key.last_used_at ? formatDate(key.last_used_at) : '尚未使用') + '</span></div></div><div class="actions"><button class="compact" data-reveal-key="' + escapeHtml(key.id) + '">查看密钥</button><button class="compact danger" data-disable-key="' + escapeHtml(key.id) + '" ' + (key.status === 'disabled' ? 'disabled' : '') + '>禁用</button></div><div id="reveal-' + escapeHtml(key.id) + '" class="secret" style="display:none;"></div></article>').join('') : '<div class="notice">还没有 API Key。创建第一个密钥后即可调用 /v1 接口。</div>';
@@ -1423,11 +1662,11 @@ Content-Type: application/json</code></pre></div>
       const origin = window.location.origin;
       const imageModel = findModelByModality('image') || 'image-basic';
       const videoModel = findModelByModality('video') || 'video-basic';
-      const mediaModels = state.models.filter((model) => model.modality === 'image' || model.modality === 'video');
+      const mediaModels = state.models.filter((model) => model.modality === 'image' || model.modality === 'video' || model.modality === 'file');
       const imageBody = JSON.stringify({ type: 'image.generation', model: imageModel, input: { prompt: '一只猫坐在云端', size: '1024x1024', n: 1 }, store_output: true, storage_ttl_seconds: 86400, callback_url: 'https://example.com/webhooks/ai-task', metadata: { biz_id: 'order_123' } }, null, 2);
       const videoBody = JSON.stringify({ type: 'video.generation', model: videoModel, input: { prompt: '海面日出，电影感镜头推进', duration: 5, size: '1280x720', fps: 24 }, store_output: true, storage_ttl_seconds: 86400, metadata: { scene: 'landing-page' } }, null, 2);
 
-      $('#mediaModelDocs').innerHTML = mediaModels.length ? '<table><thead><tr><th>模型</th><th>类型</th><th>流式</th></tr></thead><tbody>' + mediaModels.map((model) => '<tr><td><code>' + escapeHtml(model.id) + '</code></td><td>' + escapeHtml(model.modality) + '</td><td>' + (model.supports_stream ? '支持' : '不支持') + '</td></tr>').join('') + '</tbody></table>' : '<div class="notice">当前没有配置 image/video 模型。可先在后台添加媒体模型，再按下方异步任务接口调用。</div>';
+      $('#mediaModelDocs').innerHTML = mediaModels.length ? '<table><thead><tr><th>模型</th><th>类型</th><th>异步</th></tr></thead><tbody>' + mediaModels.map((model) => '<tr><td><code>' + escapeHtml(model.id) + '</code></td><td>' + escapeHtml(modalityText(model.modality)) + '</td><td>' + (model.supports_async ? '支持' : '未声明') + '</td></tr>').join('') + '</tbody></table>' : '<div class="notice">当前没有配置图片、视频或文件模型。可先在后台添加非文本模型，再按下方异步任务接口调用。</div>';
       $('#imageTaskExample').textContent = ['POST ' + origin + '/v1/tasks', 'Authorization: Bearer YOUR_API_KEY', 'Content-Type: application/json', 'Idempotency-Key: image-demo-001', '', imageBody].join('\n');
       $('#videoTaskExample').textContent = ['POST ' + origin + '/v1/tasks', 'Authorization: Bearer YOUR_API_KEY', 'Content-Type: application/json', '', videoBody].join('\n');
       $('#getTaskExample').textContent = ['GET ' + origin + '/v1/tasks/task_xxx', 'Authorization: Bearer YOUR_API_KEY'].join('\n');
@@ -1566,36 +1805,40 @@ Content-Type: application/json</code></pre></div>
 
      $('#testForm').addEventListener('submit', async (event) => {
        event.preventDefault();
-       const model = $('#testModel').value;
-       const mode = $('#testMode').value;
+       const selectedModel = selectedTestModel();
+       if (!selectedModel) return;
+       const model = selectedModel.id;
+       const isText = selectedModel.modality === 'text';
        const prompt = $('#testPrompt').value;
-       const temperature = parseFloat($('#testTemperature').value) || 0.7;
-       const maxTokens = parseInt($('#testMaxTokens').value) || 1000;
-       
+        
        $('#testResult').style.display = 'none';
        $('#testEmpty').style.display = 'block';
        $('#testSubmit').disabled = true;
        
        const startTime = Date.now();
-       
+        
        try {
+         const body = { model, mode: isText ? $('#testMode').value : 'task', prompt };
+         if (isText) {
+           body.temperature = parseFloat($('#testTemperature').value) || 0.7;
+           body.max_tokens = parseInt($('#testMaxTokens').value) || 1000;
+         } else {
+           body.input = parseTestInputJson();
+           body.store_output = $('#testStoreOutput').checked;
+           body.storage_ttl_seconds = parseInt($('#testStorageTtl').value, 10) || 86400;
+         }
          const result = await api('/account/api/test', {
            method: 'POST',
-           body: JSON.stringify({
-             model,
-             mode,
-             prompt,
-             temperature,
-             max_tokens: maxTokens
-           })
+           body: JSON.stringify(body)
          });
-         
+          
          const duration = Date.now() - startTime;
-         $('#testStatus').textContent = '成功';
+         $('#testStatus').textContent = result.mode === 'async_task' ? '已创建任务' : '成功';
          $('#testDuration').textContent = duration;
          $('#testOutput').textContent = JSON.stringify(result, null, 2);
          $('#testEmpty').style.display = 'none';
          $('#testResult').style.display = 'block';
+         if (result.mode === 'async_task') await load();
        } catch (error) {
          const duration = Date.now() - startTime;
          $('#testStatus').textContent = '失败';
@@ -1610,7 +1853,13 @@ Content-Type: application/json</code></pre></div>
 
      $('#testAdvanced').addEventListener('change', () => {
        const checked = $('#testAdvanced').checked;
-       $('#advancedParams').style.display = checked ? 'grid' : 'none';
+       const model = selectedTestModel();
+       $('#advancedParams').style.display = checked && model && model.modality === 'text' ? 'grid' : 'none';
+     });
+
+     $('#testModel').addEventListener('change', () => {
+       $('#testInputJson').value = '';
+       updateTestFormForModel();
      });
 
     $('#keyForm').addEventListener('submit', async (event) => {
