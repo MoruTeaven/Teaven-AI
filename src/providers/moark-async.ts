@@ -23,7 +23,7 @@ const LEGACY_BASE_URLS = new Set([
   "https://api.gitee.com/v1",
 ]);
 const DEFAULT_CREATE_PATH = "/async/images/generations";
-const DEFAULT_POLL_PATH = "/async/images/generations/{task_id}";
+const DEFAULT_POLL_PATH = "/task/{task_id}";
 
 export function createMoarkAsyncPlugin(_env: Env): ProviderPlugin {
   return {

@@ -6,7 +6,7 @@
 
 ### 1. 新增 Provider Plugin：`moark-async`
 - 文件: `src/providers/moark-async.ts`
-- 功能: 适配模力方舟异步图像生成接口 `POST /image_generation`
+- 功能: 适配模力方舟异步图像生成接口 `POST /v1/async/images/generations`
 - 执行模式: `async_polling` - 异步轮询模式
 - 特点:
   - 接收异步请求并返回 `task_id`

@@ -285,7 +285,7 @@ wrangler secret put OPENAI_COMPATIBLE_API_KEY
 
 1. 用户请求 `POST /v1/async/images/generations`，请求体中指定 `model` 为平台模型别名。
 2. 网关根据配置找到对应的上游实例和提供者插件。
-3. 网关将请求转发到模力方舟的异步接口 `POST /image_generation`。
+3. 网关将请求转发到模力方舟的异步接口 `POST /v1/async/images/generations`。
 4. 模力方舟返回 `task_id` 和异步任务状态。
 5. 网关创建本地异步任务记录并返回 `202 Accepted` 和 `task_id` 给用户。
 6. 用户可通过 `GET /v1/tasks/{task_id}` 查询任务状态。
@@ -373,4 +373,4 @@ curl -X POST http://localhost:8787/v1/async/images/generations \
 | `base_url` | 模力方舟 API Base URL | `"https://ai.gitee.com/api/v1"` |
 | `credential_id` | API 凭证配置引用 | `"env:MOARK_API_KEY"` |
 
-如果上游路径发生变化，可在 upstream 的 `config` 中覆盖：`create_url`、`poll_url`，或 `create_path`、`poll_path`。`poll_url` / `poll_path` 中可使用 `{task_id}` 占位符。
+默认创建路径为 `/async/images/generations`，默认轮询路径为 `/task/{task_id}`。如果上游路径发生变化，可在 upstream 的 `config` 中覆盖：`create_url`、`poll_url`，或 `create_path`、`poll_path`。`poll_url` / `poll_path` 中可使用 `{task_id}` 占位符。
