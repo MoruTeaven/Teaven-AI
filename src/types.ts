@@ -115,6 +115,24 @@ export interface AsyncTaskOutputItem {
   [key: string]: unknown;
 }
 
+export interface AsyncTaskEvent {
+  at: string;
+  stage: string;
+  status?: AsyncTaskStatus;
+  previous_status?: AsyncTaskStatus;
+  provider_status?: string | null;
+  provider_task_id?: string | null;
+  provider_response_code?: string | null;
+  http_status?: number;
+  attempt?: number;
+  delay_seconds?: number;
+  process_id?: string;
+  request_id?: string;
+  message?: string;
+  error?: unknown;
+  details?: Record<string, unknown>;
+}
+
 export interface AsyncTaskRecord {
   id: string;
   object: "task";
@@ -136,6 +154,7 @@ export interface AsyncTaskRecord {
   callback_url?: string;
   metadata?: Record<string, unknown>;
   error?: unknown;
+  events?: AsyncTaskEvent[];
   idempotency_key?: string;
   next_poll_at?: string;
   created_at: string;

@@ -29,6 +29,7 @@ import {
 } from "../admin/store";
 import { createProviderRegistry, resolveProviderCredential } from "../providers/registry";
 import type { ProviderPluginManifest } from "../providers/types";
+import { appendTaskEvent, lastTaskEvent, taskDiagnostics } from "../tasks/events";
 import { getTask, listTasks, saveTask } from "../tasks/store";
 import type {
   AsyncTaskRecord,
@@ -813,9 +814,17 @@ async function handleCancelAdminTask(taskId: string, env: Env, requestId: string
   }
 
   const now = new Date().toISOString();
+  const previousStatus = task.status;
   task.status = "canceled";
   task.updated_at = now;
   task.completed_at = now;
+  appendTaskEvent(task, {
+    stage: "task.canceled",
+    previous_status: previousStatus,
+    status: task.status,
+    request_id: requestId,
+    message: "Task canceled by admin"
+  });
   await saveTask(env, task);
 
   return jsonResponse(
@@ -972,9 +981,14 @@ function publicTaskSummary(task: AsyncTaskRecord): Record<string, unknown> {
     type: task.type,
     model: task.model,
     status: task.status,
+    upstream_id: task.upstream_id || null,
+    plugin_id: task.plugin_id || null,
+    provider_task_id: task.provider_task_id || null,
     cancelable: isCancelableTask(task),
     store_output: task.store_output,
     callback_url: task.callback_url || null,
+    diagnostics: taskDiagnostics(task),
+    last_event: lastTaskEvent(task),
     created_at: task.created_at,
     updated_at: task.updated_at,
     completed_at: task.completed_at,

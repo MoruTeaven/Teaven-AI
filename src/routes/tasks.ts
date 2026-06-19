@@ -2,6 +2,7 @@ import { findModel, loadGatewayConfig, selectRoute } from "../config";
 import { conflict, invalidRequest, notFound } from "../http/errors";
 import { jsonResponse } from "../http/response";
 import { recordTaskUsage } from "../admin/store";
+import { appendTaskEvent, taskDiagnostics } from "../tasks/events";
 import { getTask, listTasks, saveTask } from "../tasks/store";
 import type { AsyncTaskRecord, AuthContext, Env } from "../types";
 import { createId } from "../utils/ids";
@@ -73,11 +74,16 @@ export async function handleCreateTask(request: Request, env: Env, auth: AuthCon
     updated_at: now
   };
 
+  appendTaskEvent(task, {
+    stage: "task.created",
+    status: task.status,
+    request_id: requestId,
+    message: "Task created via /v1/tasks"
+  });
+
   await saveTask(env, task);
 
-  if (env.TASK_QUEUE) {
-    await env.TASK_QUEUE.send({ task_id: task.id });
-  }
+  await enqueueCreatedTask(env, task);
 
   await recordTaskUsage(env, task, 202, Date.now() - startedAt);
 
@@ -105,7 +111,7 @@ export async function handleListTasks(request: Request, env: Env, auth: AuthCont
     const result = slice.slice(0, limit);
     return jsonResponse({
       object: "list",
-      data: result.map(publicTask),
+      data: result.map((task) => publicTask(task, false)),
       has_more: hasMore,
       first_id: result[0]?.id || null,
       last_id: result[result.length - 1]?.id || null
@@ -116,7 +122,7 @@ export async function handleListTasks(request: Request, env: Env, auth: AuthCont
   const result = myTasks.slice(0, limit);
   return jsonResponse({
     object: "list",
-    data: result.map(publicTask),
+    data: result.map((task) => publicTask(task, false)),
     has_more: hasMore,
     first_id: result[0]?.id || null,
     last_id: result[result.length - 1]?.id || null
@@ -147,9 +153,17 @@ export async function handleCancelTask(taskId: string, env: Env, auth: AuthConte
   }
 
   const now = new Date().toISOString();
+  const previousStatus = task.status;
   task.status = "canceled";
   task.updated_at = now;
   task.completed_at = now;
+  appendTaskEvent(task, {
+    stage: "task.canceled",
+    previous_status: previousStatus,
+    status: task.status,
+    request_id: requestId,
+    message: "Task canceled by API request"
+  });
   await saveTask(env, task);
 
   return jsonResponse(publicTask(task), {
@@ -175,13 +189,50 @@ function normalizeStorageTtl(value: unknown): number {
   return value;
 }
 
-function publicTask(task: AsyncTaskRecord): Record<string, unknown> {
-  return {
+async function enqueueCreatedTask(env: Env, task: AsyncTaskRecord): Promise<void> {
+  if (!env.TASK_QUEUE) {
+    appendTaskEvent(task, {
+      stage: "queue.unavailable",
+      status: task.status,
+      message: "TASK_QUEUE binding is not configured"
+    });
+    task.updated_at = new Date().toISOString();
+    await saveTask(env, task);
+    return;
+  }
+
+  try {
+    await env.TASK_QUEUE.send({ task_id: task.id });
+    appendTaskEvent(task, {
+      stage: "queue.enqueued",
+      status: task.status,
+      message: "Task submitted to TASK_QUEUE"
+    });
+    task.updated_at = new Date().toISOString();
+    await saveTask(env, task);
+  } catch (err) {
+    appendTaskEvent(task, {
+      stage: "queue.enqueue_failed",
+      status: task.status,
+      error: errorMessage(err)
+    });
+    task.updated_at = new Date().toISOString();
+    await saveTask(env, task);
+    throw err;
+  }
+}
+
+function publicTask(task: AsyncTaskRecord, includeEvents = true): Record<string, unknown> {
+  const payload: Record<string, unknown> = {
     id: task.id,
     object: task.object,
     type: task.type,
     status: task.status,
     model: task.model,
+    upstream_id: task.upstream_id || null,
+    plugin_id: task.plugin_id || null,
+    provider_execution_mode: task.provider_execution_mode || null,
+    provider_task_id: task.provider_task_id || null,
     output: task.output,
     usage: undefined,
     store_output: task.store_output,
@@ -190,8 +241,29 @@ function publicTask(task: AsyncTaskRecord): Record<string, unknown> {
     callback_url: task.callback_url,
     metadata: task.metadata,
     error: task.error,
+    diagnostics: taskDiagnostics(task),
     created_at: task.created_at,
     updated_at: task.updated_at,
     completed_at: task.completed_at
   };
+
+  if (includeEvents) {
+    payload.events = task.events || [];
+  }
+
+  return payload;
+}
+
+function errorMessage(err: unknown): string {
+  if (err instanceof Error) {
+    return err.message;
+  }
+  if (typeof err === "string") {
+    return err;
+  }
+  try {
+    return JSON.stringify(err);
+  } catch {
+    return String(err);
+  }
 }

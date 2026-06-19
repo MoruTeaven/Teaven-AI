@@ -2,6 +2,7 @@ import { findModel, loadGatewayConfig, selectRoute } from "../config";
 import { invalidRequest, permissionDenied, providerUnavailable } from "../http/errors";
 import { createProviderRegistry, resolveProviderCredential } from "../providers/registry";
 import { recordChatUsage } from "../admin/store";
+import { appendTaskEvent, taskDiagnostics } from "../tasks/events";
 import { saveTask } from "../tasks/store";
 import type { AuthContext, AsyncTaskRecord, Env, ImageGenerationRequest } from "../types";
 import { createId } from "../utils/ids";
@@ -72,6 +73,11 @@ export async function handleAsyncImageGenerations(
   
   // 如果上游返回202异步响应，创建本地任务记录
   if (upstreamResponse.status === 202) {
+    const providerTaskId = firstString(upstreamData.id, upstreamData.provider_task_id, upstreamData.task_id);
+    if (!providerTaskId) {
+      throw providerUnavailable("Upstream async response did not include provider_task_id");
+    }
+
     const now = new Date().toISOString();
     const task: AsyncTaskRecord = {
       id: createId("task"),
@@ -83,7 +89,7 @@ export async function handleAsyncImageGenerations(
       upstream_id: route.upstream_id,
       plugin_id: route.plugin_id,
       provider_execution_mode: "async_polling",
-      provider_task_id: String(upstreamData.id || upstreamData.provider_task_id),
+      provider_task_id: providerTaskId,
       provider_context: {
         upstream_model: route.provider_model,
         request_id: requestId,
@@ -103,12 +109,18 @@ export async function handleAsyncImageGenerations(
       updated_at: now
     };
 
+    appendTaskEvent(task, {
+      stage: "task.created",
+      status: task.status,
+      request_id: requestId,
+      provider_task_id: task.provider_task_id,
+      message: "Task created via /v1/async/images/generations"
+    });
+
     await saveTask(env, task);
 
     // 将任务加入队列进行轮询
-    if (env.TASK_QUEUE) {
-      await env.TASK_QUEUE.send({ task_id: task.id });
-    }
+    await enqueueCreatedTask(env, task);
 
     await recordChatUsage(env, {
       request_id: requestId,
@@ -130,6 +142,9 @@ export async function handleAsyncImageGenerations(
         object: "task",
         type: "image_generation",
         status: task.status,
+        provider_task_id: task.provider_task_id,
+        diagnostics: taskDiagnostics(task),
+        events: task.events || [],
         created_at: task.created_at,
         updated_at: task.updated_at
       }),
@@ -164,4 +179,63 @@ export async function handleAsyncImageGenerations(
       "X-Request-Id": requestId
     }
   });
+}
+
+async function enqueueCreatedTask(env: Env, task: AsyncTaskRecord): Promise<void> {
+  if (!env.TASK_QUEUE) {
+    appendTaskEvent(task, {
+      stage: "queue.unavailable",
+      status: task.status,
+      message: "TASK_QUEUE binding is not configured"
+    });
+    task.updated_at = new Date().toISOString();
+    await saveTask(env, task);
+    return;
+  }
+
+  try {
+    await env.TASK_QUEUE.send({ task_id: task.id });
+    appendTaskEvent(task, {
+      stage: "queue.enqueued",
+      status: task.status,
+      message: "Task submitted to TASK_QUEUE"
+    });
+    task.updated_at = new Date().toISOString();
+    await saveTask(env, task);
+  } catch (err) {
+    appendTaskEvent(task, {
+      stage: "queue.enqueue_failed",
+      status: task.status,
+      error: errorMessage(err)
+    });
+    task.updated_at = new Date().toISOString();
+    await saveTask(env, task);
+    throw err;
+  }
+}
+
+function errorMessage(err: unknown): string {
+  if (err instanceof Error) {
+    return err.message;
+  }
+  if (typeof err === "string") {
+    return err;
+  }
+  try {
+    return JSON.stringify(err);
+  } catch {
+    return String(err);
+  }
+}
+
+function firstString(...values: unknown[]): string | undefined {
+  for (const value of values) {
+    if (typeof value === "string" && value) {
+      return value;
+    }
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return String(value);
+    }
+  }
+  return undefined;
 }

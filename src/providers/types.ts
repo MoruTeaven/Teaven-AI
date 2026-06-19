@@ -46,6 +46,14 @@ export interface ProviderRequestContext {
 export interface TaskPollResult {
   /** 上游任务当前状态 */
   status: AsyncTaskStatus;
+  /** 上游原始状态，便于排查状态映射问题 */
+  provider_status?: string;
+  /** 上游响应码或业务码 */
+  provider_response_code?: string;
+  /** 轮询请求的 HTTP 状态码 */
+  http_status?: number;
+  /** 上游返回的简短消息 */
+  message?: string;
   /** 任务成功时的输出列表（图片URL、视频URL等） */
   output?: AsyncTaskOutputItem[];
   /** 任务失败时的错误信息 */

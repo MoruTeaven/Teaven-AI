@@ -307,10 +307,35 @@ GET /v1/tasks/{task_id}
     "unit": "image",
     "count": 1
   },
+  "diagnostics": {
+    "plugin_id": "moark-async",
+    "provider_task_id": "upstream_task_xxx",
+    "provider_status": "succeeded",
+    "poll_count": 8,
+    "last_poll_at": "2026-06-12T00:01:10Z",
+    "next_poll_at": null,
+    "last_error": null
+  },
+  "events": [
+    {
+      "at": "2026-06-12T00:00:00Z",
+      "stage": "task.created",
+      "status": "queued"
+    },
+    {
+      "at": "2026-06-12T00:01:10Z",
+      "stage": "poll.result",
+      "status": "succeeded",
+      "provider_status": "succeeded",
+      "attempt": 8
+    }
+  ],
   "created_at": "2026-06-12T00:00:00Z",
   "completed_at": "2026-06-12T00:01:12Z"
 }
 ```
+
+`events` 是任务状态链，最多保留最近 100 条，用于排查任务是否卡在入队、上游创建、轮询、输出转存或 callback 投递阶段。列表接口可只返回 `diagnostics.last_event` 摘要，单任务查询返回完整 `events`。
 
 未转存输出示例：
 
@@ -808,6 +833,7 @@ Remote Plugin 必须遵循同一输入输出协议，并由平台做超时、重
 | output_expires_at | 平台托管文件的过期时间。 |
 | callback_url | 回调地址。 |
 | error | 错误信息。 |
+| events | 任务状态链 JSON，记录创建、入队、上游创建、轮询、输出转存和 callback 投递等事件。 |
 | idempotency_key | 幂等键。 |
 | next_poll_at | 下次轮询时间。 |
 | created_at | 创建时间。 |

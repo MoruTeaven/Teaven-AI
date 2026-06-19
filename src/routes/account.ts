@@ -24,6 +24,7 @@ import {
   type UsageRecord,
   type UsageSummary
 } from "../admin/store";
+import { appendTaskEvent, lastTaskEvent, taskDiagnostics } from "../tasks/events";
 import { getTask, listTasks, saveTask } from "../tasks/store";
 import { createProviderRegistry, resolveProviderCredential } from "../providers/registry";
 import type { AsyncTaskRecord, Env } from "../types";
@@ -397,9 +398,17 @@ async function handleCancelAccountTask(user: AdminUser, taskId: string, env: Env
   }
 
   const now = new Date().toISOString();
+  const previousStatus = task.status;
   task.status = "canceled";
   task.updated_at = now;
   task.completed_at = now;
+  appendTaskEvent(task, {
+    stage: "task.canceled",
+    previous_status: previousStatus,
+    status: task.status,
+    request_id: requestId,
+    message: "Task canceled from account center"
+  });
   await saveTask(env, task);
 
   return jsonResponse(
@@ -573,8 +582,13 @@ function publicTaskSummary(task: AsyncTaskRecord): Record<string, unknown> {
     type: task.type,
     model: task.model,
     status: task.status,
+    upstream_id: task.upstream_id || null,
+    plugin_id: task.plugin_id || null,
+    provider_task_id: task.provider_task_id || null,
     cancelable: isCancelableTask(task),
     store_output: task.store_output,
+    diagnostics: taskDiagnostics(task),
+    last_event: lastTaskEvent(task),
     created_at: task.created_at,
     updated_at: task.updated_at,
     completed_at: task.completed_at || null,
@@ -591,6 +605,7 @@ function publicTaskFull(task: AsyncTaskRecord): Record<string, unknown> {
     status: task.status,
     upstream_id: task.upstream_id || null,
     plugin_id: task.plugin_id || null,
+    provider_execution_mode: task.provider_execution_mode || null,
     provider_task_id: task.provider_task_id || null,
     input: task.input,
     output: task.output || null,
@@ -600,6 +615,8 @@ function publicTaskFull(task: AsyncTaskRecord): Record<string, unknown> {
     callback_url: task.callback_url || null,
     metadata: task.metadata || null,
     error: task.error || null,
+    diagnostics: taskDiagnostics(task),
+    events: task.events || [],
     created_at: task.created_at,
     updated_at: task.updated_at,
     completed_at: task.completed_at || null
@@ -1373,6 +1390,46 @@ Content-Type: application/json</code></pre></div>
       $('#taskDetail').innerHTML = rows ? '<table><thead><tr><th>任务</th><th>类型</th><th>模型</th><th>状态</th><th>创建</th><th>完成</th><th></th></tr></thead><tbody>' + rows + '</tbody></table>' : '<div class="notice">暂无任务。</div>';
     }
 
+    function renderTaskDiagnostics(diagnostics) {
+      if (!diagnostics) return '';
+      const items = [
+        ['轮询次数', diagnostics.poll_count ?? 0],
+        ['创建尝试', diagnostics.create_attempt_count ?? 0],
+        ['上游状态', diagnostics.provider_status || '-'],
+        ['上游业务码', diagnostics.provider_response_code || '-'],
+        ['上游 HTTP', diagnostics.provider_http_status || '-'],
+        ['最后轮询', diagnostics.last_poll_at ? formatDate(diagnostics.last_poll_at) : '-'],
+        ['下次轮询', diagnostics.next_poll_at ? formatDate(diagnostics.next_poll_at) : '-'],
+        ['最近错误', diagnostics.last_error ? formatDiagnosticValue(diagnostics.last_error) : '-']
+      ];
+      return '<div style="margin-top:12px;"><span class="muted" style="font-size:11px;font-weight:900;">诊断摘要</span><div style="margin-top:4px;display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:8px;">' + items.map((item) => '<div style="padding:8px;border:1px solid var(--line);border-radius:10px;background:var(--panel-strong);"><span class="muted" style="font-size:11px;">' + escapeHtml(item[0]) + '</span><div style="font-size:12px;word-break:break-all;">' + escapeHtml(String(item[1])) + '</div></div>').join('') + '</div></div>';
+    }
+
+    function renderTaskEvents(events) {
+      if (!events.length) return '<div style="margin-top:12px;"><span class="muted" style="font-size:11px;font-weight:900;">状态链</span><div class="notice" style="margin-top:4px;">暂无状态事件。</div></div>';
+      const rows = events.map((event) => '<tr><td>' + formatDate(event.at) + '</td><td><code>' + escapeHtml(event.stage || '-') + '</code></td><td>' + escapeHtml(event.status || '-') + '</td><td>' + escapeHtml(event.provider_status || '-') + '</td><td>' + escapeHtml(formatTaskEventSummary(event)) + '</td></tr>').join('');
+      return '<div style="margin-top:12px;"><span class="muted" style="font-size:11px;font-weight:900;">状态链</span><div style="margin-top:4px;max-height:240px;overflow:auto;border:1px solid var(--line);border-radius:12px;"><table style="margin:0;"><thead><tr><th>时间</th><th>阶段</th><th>平台状态</th><th>上游状态</th><th>摘要</th></tr></thead><tbody>' + rows + '</tbody></table></div></div>';
+    }
+
+    function formatTaskEventSummary(event) {
+      const parts = [];
+      if (event.message) parts.push(event.message);
+      if (event.provider_task_id) parts.push('provider_task_id=' + event.provider_task_id);
+      if (event.provider_response_code) parts.push('code=' + event.provider_response_code);
+      if (event.http_status) parts.push('http=' + event.http_status);
+      if (event.attempt) parts.push('attempt=' + event.attempt);
+      if (event.delay_seconds !== undefined) parts.push('delay=' + event.delay_seconds + 's');
+      if (event.error) parts.push('error=' + formatDiagnosticValue(event.error));
+      if (event.details) parts.push('details=' + formatDiagnosticValue(event.details));
+      return parts.length ? parts.join(' · ') : '-';
+    }
+
+    function formatDiagnosticValue(value) {
+      if (value === null || value === undefined) return '-';
+      if (typeof value === 'object') return JSON.stringify(value);
+      return String(value);
+    }
+
     function formatDate(dateString) {
       if (!dateString) return '-';
       const date = new Date(dateString);
@@ -1418,6 +1475,8 @@ Content-Type: application/json</code></pre></div>
           '<div><span class="muted" style="font-size:11px;font-weight:900;">更新时间</span><div>' + formatDate(task.updated_at) + '</div></div>' +
           '<div><span class="muted" style="font-size:11px;font-weight:900;">完成时间</span><div>' + (task.completed_at ? formatDate(task.completed_at) : '-') + '</div></div>' +
           '</div>' +
+          renderTaskDiagnostics(task.diagnostics) +
+          renderTaskEvents(task.events || []) +
           (task.input ? '<div style="margin-top:12px;"><span class="muted" style="font-size:11px;font-weight:900;">输入参数</span><pre style="margin-top:4px;padding:10px;border:1px solid var(--line);border-radius:12px;background:var(--panel-strong);font-size:12px;max-height:150px;overflow:auto;">' + escapeHtml(JSON.stringify(task.input, null, 2)) + '</pre></div>' : '') +
           (task.output ? '<div style="margin-top:12px;"><span class="muted" style="font-size:11px;font-weight:900;">输出结果</span><pre style="margin-top:4px;padding:10px;border:1px solid var(--line);border-radius:12px;background:var(--panel-strong);font-size:12px;max-height:150px;overflow:auto;">' + escapeHtml(JSON.stringify(task.output, null, 2)) + '</pre></div>' : '') +
           (task.error ? '<div style="margin-top:12px;"><span class="muted" style="font-size:11px;font-weight:900;color:var(--danger);">错误信息</span><pre style="margin-top:4px;padding:10px;border:1px solid var(--danger);border-radius:12px;background:rgba(251,113,133,0.05);color:var(--danger);font-size:12px;max-height:150px;overflow:auto;">' + escapeHtml(typeof task.error === 'object' ? JSON.stringify(task.error, null, 2) : String(task.error)) + '</pre></div>' : '') +

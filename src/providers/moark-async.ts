@@ -177,16 +177,27 @@ async function pollMoarkTask(providerTaskId: string, context: ProviderRequestCon
   });
 
   if (!upstream.ok) {
-    const errorMsg = `Upstream poll returned ${upstream.status}`;
+    const errorDetail = await readMoarkErrorSummary(upstream);
+    const errorMsg = errorDetail.message || `Upstream poll returned ${upstream.status}`;
     // 上游返回非 2xx，判断是否为永久性失败
     if (upstream.status >= 400 && upstream.status < 500) {
       return {
         status: "failed",
-        error: { message: errorMsg, http_status: upstream.status }
+        provider_status: "http_error",
+        provider_response_code: errorDetail.code,
+        http_status: upstream.status,
+        message: errorMsg,
+        error: { message: errorMsg, http_status: upstream.status, code: errorDetail.code }
       };
     }
     // 5xx 可能是临时故障，继续轮询
-    return { status: "running" };
+    return {
+      status: "running",
+      provider_status: "http_error",
+      provider_response_code: errorDetail.code,
+      http_status: upstream.status,
+      message: errorMsg
+    };
   }
 
   const data = (await upstream.json()) as MoarkPollResponse;
@@ -214,12 +225,23 @@ async function pollMoarkTask(providerTaskId: string, context: ProviderRequestCon
       index,
       source: "upstream" as const
     }));
-    return { status: "succeeded", output };
+    return {
+      status: "succeeded",
+      provider_status: data.data.status,
+      provider_response_code: data.code,
+      http_status: upstream.status,
+      message: data.message,
+      output
+    };
   }
 
   if (mappedStatus === "failed") {
     return {
       status: "failed",
+      provider_status: data.data?.status,
+      provider_response_code: data.code,
+      http_status: upstream.status,
+      message: data.message,
       error: {
         message: data.data?.error || data.message || "Upstream task failed",
         code: data.code
@@ -227,7 +249,26 @@ async function pollMoarkTask(providerTaskId: string, context: ProviderRequestCon
     };
   }
 
-  return { status: mappedStatus };
+  return {
+    status: mappedStatus,
+    provider_status: data.data?.status,
+    provider_response_code: data.code,
+    http_status: upstream.status,
+    message: data.message
+  };
+}
+
+async function readMoarkErrorSummary(response: Response): Promise<{ code?: string; message?: string }> {
+  try {
+    const body = (await response.clone().json()) as Partial<MoarkAsyncResponse>;
+    return {
+      code: body.code,
+      message: body.error || body.message
+    };
+  } catch {
+    const text = await response.text().catch(() => "");
+    return text ? { message: text.slice(0, 500) } : {};
+  }
 }
 
 function joinUrl(baseUrl: string, path: string): string {
