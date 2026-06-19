@@ -62,6 +62,10 @@ export interface TaskPollResult {
   provider_task_id?: string;
   /** 建议的下次轮询间隔秒数，不填则使用 manifest 中的默认值 */
   poll_after_seconds?: number;
+  /** 实际轮询请求的完整 URL，用于诊断排查 */
+  poll_url?: string;
+  /** 上游原始响应体（截断至 1000 字符），用于诊断非 2xx 响应 */
+  upstream_raw_body?: string;
 }
 
 export interface ProviderAdapter {

@@ -123,6 +123,7 @@ export interface AsyncTaskEvent {
   provider_status?: string | null;
   provider_task_id?: string | null;
   provider_response_code?: string | null;
+  poll_url?: string | null;
   http_status?: number;
   attempt?: number;
   delay_seconds?: number;

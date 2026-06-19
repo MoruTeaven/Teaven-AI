@@ -210,6 +210,7 @@ async function pollMoarkTask(providerTaskId: string, context: ProviderRequestCon
   if (!upstream.ok) {
     const errorDetail = await readMoarkErrorSummary(upstream);
     const errorMsg = errorDetail.message || `Upstream poll returned ${upstream.status}`;
+    const rawBody = errorDetail.raw_body;
     // 上游返回非 2xx，判断是否为永久性失败
     if (upstream.status >= 400 && upstream.status < 500) {
       return {
@@ -218,7 +219,9 @@ async function pollMoarkTask(providerTaskId: string, context: ProviderRequestCon
         provider_response_code: errorDetail.code,
         http_status: upstream.status,
         message: errorMsg,
-        error: { message: errorMsg, http_status: upstream.status, code: errorDetail.code }
+        poll_url: pollUrl,
+        upstream_raw_body: rawBody,
+        error: { message: errorMsg, http_status: upstream.status, code: errorDetail.code, poll_url: pollUrl, upstream_raw_body: rawBody }
       };
     }
     // 5xx 可能是临时故障，继续轮询
@@ -227,7 +230,9 @@ async function pollMoarkTask(providerTaskId: string, context: ProviderRequestCon
       provider_status: "http_error",
       provider_response_code: errorDetail.code,
       http_status: upstream.status,
-      message: errorMsg
+      message: errorMsg,
+      poll_url: pollUrl,
+      upstream_raw_body: rawBody
     };
   }
 
@@ -259,6 +264,7 @@ async function pollMoarkTask(providerTaskId: string, context: ProviderRequestCon
       provider_response_code: data.code,
       http_status: upstream.status,
       message: data.message,
+      poll_url: pollUrl,
       output
     };
   }
@@ -270,6 +276,7 @@ async function pollMoarkTask(providerTaskId: string, context: ProviderRequestCon
       provider_response_code: data.code,
       http_status: upstream.status,
       message: data.message,
+      poll_url: pollUrl,
       error: {
         message: data.data?.error || data.error || data.message || "Upstream task failed",
         code: data.code
@@ -282,7 +289,8 @@ async function pollMoarkTask(providerTaskId: string, context: ProviderRequestCon
     provider_status: providerStatus,
     provider_response_code: data.code,
     http_status: upstream.status,
-    message: data.message
+    message: data.message,
+    poll_url: pollUrl
   };
 }
 
@@ -302,16 +310,18 @@ function normalizeOutput(output: MoarkOutput | undefined): AsyncTaskOutputItem[]
   }));
 }
 
-async function readMoarkErrorSummary(response: Response): Promise<{ code?: string; message?: string }> {
+async function readMoarkErrorSummary(response: Response): Promise<{ code?: string; message?: string; raw_body?: string }> {
   try {
     const body = (await response.clone().json()) as Partial<MoarkAsyncResponse>;
     return {
       code: body.code,
-      message: body.error || body.message
+      message: body.error || body.message,
+      raw_body: truncateString(JSON.stringify(body), 1000)
     };
   } catch {
     const text = await response.text().catch(() => "");
-    return text ? { message: text.slice(0, 500) } : {};
+    const truncated = truncateString(text, 1000);
+    return text ? { message: truncated, raw_body: truncated } : {};
   }
 }
 
@@ -388,4 +398,9 @@ function parseSize(size: unknown): { width: number; height: number } | undefined
     return undefined;
   }
   return { width: Number(match[1]), height: Number(match[2]) };
+}
+
+function truncateString(value: string, maxLength: number): string {
+  if (!value) return "";
+  return value.length <= maxLength ? value : value.slice(0, maxLength) + "...";
 }

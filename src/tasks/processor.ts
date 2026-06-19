@@ -218,12 +218,15 @@ export async function processTask(env: Env, taskId: string): Promise<void> {
     attempt: pollAttempt,
     process_id: processId,
     provider_task_id: task.provider_task_id,
+    poll_url: pollResult.poll_url || null,
     provider_status: pollResult.provider_status || null,
     provider_response_code: pollResult.provider_response_code || null,
     http_status: pollResult.http_status,
     message: pollResult.message,
     details: {
-      output_count: pollResult.output?.length || 0
+      output_count: pollResult.output?.length || 0,
+      poll_url: pollResult.poll_url || null,
+      upstream_raw_body: pollResult.upstream_raw_body || null
     }
   });
 
@@ -276,7 +279,15 @@ export async function processTask(env: Env, taskId: string): Promise<void> {
         stage: "task.failed",
         status: task.status,
         process_id: processId,
-        error: task.error
+        provider_task_id: task.provider_task_id,
+        provider_status: pollResult.provider_status || null,
+        provider_response_code: pollResult.provider_response_code || null,
+        http_status: pollResult.http_status,
+        error: task.error,
+        details: {
+          poll_url: pollResult.poll_url || null,
+          upstream_raw_body: pollResult.upstream_raw_body || null
+        }
       });
       break;
 
