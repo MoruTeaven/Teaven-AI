@@ -1036,6 +1036,43 @@ const ACCOUNT_APP_HTML = String.raw`<!doctype html>
     .key-features .badge { font-size: 11px; }
     .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
     .actions { display: flex; gap: 7px; flex-wrap: wrap; }
+    .modal {
+      position: fixed;
+      inset: 0;
+      z-index: 50;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 22px;
+    }
+    .modal.open { display: flex; }
+    .modal-backdrop {
+      position: absolute;
+      inset: 0;
+      background: rgba(2, 6, 23, 0.72);
+      backdrop-filter: blur(10px);
+    }
+    .modal-card {
+      position: relative;
+      width: min(1120px, 100%);
+      max-height: calc(100vh - 44px);
+      overflow: auto;
+      border: 1px solid var(--line);
+      border-radius: 24px;
+      background: var(--panel);
+      box-shadow: 0 26px 90px rgba(0, 0, 0, 0.42);
+      padding: 18px;
+    }
+    .modal-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      align-items: flex-start;
+      margin-bottom: 14px;
+    }
+    .modal-head h3 { margin: 4px 0 0; font-size: 20px; }
+    .modal-body { display: grid; gap: 12px; }
+    body.modal-open { overflow: hidden; }
 
     @media (max-width: 980px) {
       .layout { grid-template-columns: 1fr; }
@@ -1048,6 +1085,10 @@ const ACCOUNT_APP_HTML = String.raw`<!doctype html>
       .card-head button { width: 100%; }
       .entity-row { grid-template-columns: 1fr; gap: 4px; }
       .span-4, .span-6, .span-8, .span-12 { grid-column: span 12; }
+      .modal { padding: 12px; }
+      .modal-card { max-height: calc(100vh - 24px); padding: 14px; }
+      .modal-head { display: grid; }
+      .modal-head button { width: 100%; }
     }
   </style>
 </head>
@@ -1278,11 +1319,30 @@ Content-Type: application/json</code></pre></div>
     </main>
   </div>
 
+  <div id="task-modal" class="modal" aria-hidden="true">
+    <div class="modal-backdrop" data-task-modal-close></div>
+    <section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="task-modal-title">
+      <div class="modal-head">
+        <div>
+          <div class="eyebrow">Task Detail</div>
+          <h3 id="task-modal-title">任务详情</h3>
+        </div>
+        <button class="secondary compact" type="button" data-task-modal-close>关闭</button>
+      </div>
+      <div id="task-modal-body" class="modal-body">
+        <div class="notice">选择任务后显示详情。</div>
+      </div>
+    </section>
+  </div>
+
   <script>
     let state = null;
     const $ = (selector) => document.querySelector(selector);
     const fmt = new Intl.NumberFormat('zh-CN');
     const pageTitles = { dashboard: '仪表盘', profile: '个人资料', 'api-keys': 'API Key', models: '可用模型', test: '测试体验', 'api-docs': '接口文档', usage: '用量统计', tasks: '任务管理' };
+    const taskModal = $('#task-modal');
+    const taskModalTitle = $('#task-modal-title');
+    const taskModalBody = $('#task-modal-body');
 
     async function api(path, options = {}) {
       const response = await fetch(path, {
@@ -1436,29 +1496,31 @@ Content-Type: application/json</code></pre></div>
       return date.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
     }
 
-    async function toggleTaskDetail(taskId) {
-      const existing = document.getElementById('task-detail-' + taskId);
-      if (existing) {
-        existing.remove();
-        return;
-      }
-
-      // 优先找任务管理页的行 id（避免与仪表盘 task-row- 冲突）
-      let row = document.getElementById('task-detail-row-' + taskId);
-      if (!row) {
-        row = document.getElementById('task-row-' + taskId);
-      }
-      if (!row) return;
-
-      const detailRow = document.createElement('tr');
-      detailRow.id = 'task-detail-' + taskId;
-      detailRow.innerHTML = '<td colspan="100"><div class="notice" style="padding:12px;text-align:center;">正在加载...</div></td>';
-      row.after(detailRow);
+    async function openTaskDetailModal(taskId) {
+      taskModalTitle.textContent = '任务详情：' + taskId;
+      taskModalBody.innerHTML = '<div class="notice" style="text-align:center;">正在加载任务详情...</div>';
+      taskModal.classList.add('open');
+      taskModal.setAttribute('aria-hidden', 'false');
+      document.body.classList.add('modal-open');
 
       try {
         const data = await api('/account/api/tasks/' + encodeURIComponent(taskId));
         const task = data.task;
-        detailRow.innerHTML = '<td colspan="100"><div class="item" style="margin:4px 0;">' +
+        taskModalTitle.textContent = '任务详情：' + task.id;
+        taskModalBody.innerHTML = renderTaskDetailModalBody(task);
+      } catch (error) {
+        taskModalBody.innerHTML = '<div class="notice" style="color:var(--danger);">加载失败: ' + escapeHtml(error.message) + '</div>';
+      }
+    }
+
+    function closeTaskDetailModal() {
+      taskModal.classList.remove('open');
+      taskModal.setAttribute('aria-hidden', 'true');
+      document.body.classList.remove('modal-open');
+    }
+
+    function renderTaskDetailModalBody(task) {
+      return '<div class="item" style="margin:4px 0;">' +
           '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px;">' +
           '<div><span class="muted" style="font-size:11px;font-weight:900;">任务 ID</span><div><code>' + escapeHtml(task.id) + '</code></div></div>' +
           '<div><span class="muted" style="font-size:11px;font-weight:900;">类型</span><div>' + escapeHtml(task.type) + '</div></div>' +
@@ -1481,11 +1543,8 @@ Content-Type: application/json</code></pre></div>
           (task.output ? '<div style="margin-top:12px;"><span class="muted" style="font-size:11px;font-weight:900;">输出结果</span><pre style="margin-top:4px;padding:10px;border:1px solid var(--line);border-radius:12px;background:var(--panel-strong);font-size:12px;max-height:150px;overflow:auto;">' + escapeHtml(JSON.stringify(task.output, null, 2)) + '</pre></div>' : '') +
           (task.error ? '<div style="margin-top:12px;"><span class="muted" style="font-size:11px;font-weight:900;color:var(--danger);">错误信息</span><pre style="margin-top:4px;padding:10px;border:1px solid var(--danger);border-radius:12px;background:rgba(251,113,133,0.05);color:var(--danger);font-size:12px;max-height:150px;overflow:auto;">' + escapeHtml(typeof task.error === 'object' ? JSON.stringify(task.error, null, 2) : String(task.error)) + '</pre></div>' : '') +
           (task.metadata ? '<div style="margin-top:12px;"><span class="muted" style="font-size:11px;font-weight:900;">元数据</span><pre style="margin-top:4px;padding:10px;border:1px solid var(--line);border-radius:12px;background:var(--panel-strong);font-size:12px;max-height:150px;overflow:auto;">' + escapeHtml(JSON.stringify(task.metadata, null, 2)) + '</pre></div>' : '') +
-          '<div style="margin-top:12px;text-align:right;"><button class="compact secondary" onclick="this.closest(\'tr\').remove()">收起</button></div>' +
-          '</div></td>';
-      } catch (error) {
-        detailRow.innerHTML = '<td colspan="100"><div class="notice" style="padding:12px;color:var(--danger);">加载失败: ' + escapeHtml(error.message) + '</div></td>';
-      }
+          '<div style="margin-top:12px;text-align:right;"><button class="compact secondary" type="button" data-task-modal-close>关闭</button></div>' +
+          '</div>';
     }
 
     function activateSection(sectionId) {
@@ -1604,7 +1663,19 @@ Content-Type: application/json</code></pre></div>
       });
     });
 
+    document.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape' && taskModal.classList.contains('open')) {
+        closeTaskDetailModal();
+      }
+    });
+
     document.addEventListener('click', async (event) => {
+      const closeTaskModal = event.target.closest('[data-task-modal-close]');
+      if (closeTaskModal) {
+        closeTaskDetailModal();
+        return;
+      }
+
       const disableKey = event.target.closest('[data-disable-key]');
       if (disableKey && confirm('确定禁用这个 API Key？')) {
         await api('/account/api/api-keys/' + encodeURIComponent(disableKey.dataset.disableKey), { method: 'DELETE' });
@@ -1639,7 +1710,7 @@ Content-Type: application/json</code></pre></div>
       const viewTask = event.target.closest('[data-view-task]');
       if (viewTask) {
         const taskId = viewTask.dataset.viewTask;
-        toggleTaskDetail(taskId);
+        await openTaskDetailModal(taskId);
       }
     });
 
