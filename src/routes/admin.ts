@@ -2473,7 +2473,7 @@ const ADMIN_APP_HTML = `<!doctype html>
       function taskStoreText(value) { return value === 'kv' ? 'KV' : value === 'memory' ? '内存' : value; }
       function modalityText(value) { if (value === 'text') return '文本'; if (value === 'image') return '图片'; if (value === 'video') return '视频'; if (value === 'file') return '文件'; if (value === 'vision') return '视觉'; if (value === 'audio') return '音频'; return value; }
       function roleText(value) { if (value === 'owner') return '所有者'; if (value === 'admin') return '管理员'; if (value === 'member') return '成员'; return value; }
-      function taskTypeText(value) { if (value === 'chat.completions') return '聊天补全'; if (value === 'image.generations') return '图片生成'; if (value === 'video.generations') return '视频生成'; return value; }
+      function taskTypeText(value) { if (value === 'chat.completions') return '聊天补全'; if (value === 'responses') return '响应生成'; if (value === 'image_generation' || value === 'image.generation' || value === 'image.generations' || value === 'images.generations') return '图片生成'; if (value === 'video_generation' || value === 'video.generation' || value === 'video.generations' || value === 'videos.generations') return '视频生成'; if (value === 'audio.speech') return '语音合成'; if (value === 'audio.transcriptions') return '语音转写'; if (value === 'audio.translations') return '语音翻译'; if (value === 'embeddings') return '向量嵌入'; return value ? '未知类型：' + value : '未知类型'; }
       function statusText(status) { if (status === 'active') return '启用'; if (status === 'degraded') return '降级'; if (status === 'hidden') return '隐藏'; if (status === 'disabled') return '停用'; if (status === 'queued') return '排队中'; if (status === 'running') return '运行中'; if (status === 'succeeded') return '成功'; if (status === 'failed') return '失败'; if (status === 'canceled') return '已取消'; if (status === 'expired') return '已过期'; if (status === 'ok') return '正常'; if (status === 'warning') return '警告'; if (status === 'error') return '异常'; return status; }
       function statusClass(status) { if (status === 'active' || status === 'succeeded' || status === 'running' || status === 'ok') return 'ok'; if (status === 'queued' || status === 'hidden' || status === 'degraded' || status === 'warning') return 'warn'; if (status === 'disabled' || status === 'failed' || status === 'canceled' || status === 'expired' || status === 'error') return 'danger'; return ''; }
       function providerClass(status) { return statusClass(status); }
@@ -3423,7 +3423,28 @@ const ADMIN_HTML = `<!doctype html>
         if (value === 'chat.completions') {
           return '聊天补全';
         }
-        return value;
+        if (value === 'responses') {
+          return '响应生成';
+        }
+        if (value === 'image_generation' || value === 'image.generation' || value === 'image.generations' || value === 'images.generations') {
+          return '图片生成';
+        }
+        if (value === 'video_generation' || value === 'video.generation' || value === 'video.generations' || value === 'videos.generations') {
+          return '视频生成';
+        }
+        if (value === 'audio.speech') {
+          return '语音合成';
+        }
+        if (value === 'audio.transcriptions') {
+          return '语音转写';
+        }
+        if (value === 'audio.translations') {
+          return '语音翻译';
+        }
+        if (value === 'embeddings') {
+          return '向量嵌入';
+        }
+        return value ? '未知类型：' + value : '未知类型';
       }
 
       function statusText(status) {
