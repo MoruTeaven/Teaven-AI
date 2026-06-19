@@ -1233,6 +1233,7 @@ const ACCOUNT_APP_HTML = String.raw`<!doctype html>
     }
     .modal-head h3 { margin: 4px 0 0; font-size: 20px; }
     .modal-body { display: grid; gap: 12px; }
+    .key-modal-card { width: min(680px, 100%); }
     body.modal-open { overflow: hidden; }
 
     @media (max-width: 980px) {
@@ -1325,22 +1326,14 @@ const ACCOUNT_APP_HTML = String.raw`<!doctype html>
 
       <section id="api-keys" class="section">
         <div class="grid">
-          <div class="card span-8">
-            <div class="card-head"><h3>创建 API Key</h3></div>
-            <form id="keyForm" class="form-grid">
-              <label class="full">名称<input id="keyName" name="name" value="默认密钥" required></label>
-              <label class="full" id="expiresLabel">过期时间<input id="keyExpires" name="expires_at" type="datetime-local"></label>
-              <div class="full row"><label class="checkbox-label"><input id="keyPermanent" type="checkbox" checked><span>永不过期</span></label></div>
-              <div class="full row"><label class="checkbox-label"><input id="keyAllModels" type="checkbox" checked><span>不限模型</span></label></div>
-              <label class="full" id="modelsLabel">指定模型<select id="keyModels" name="allowed_models" multiple size="4" disabled></select></label>
-              <div class="full row key-features"><span class="badge ok">用量：不限</span><span class="badge ok" id="expiresBadge">过期：永不</span><span class="badge ok" id="modelsBadge">模型：全部</span></div>
-              <button type="submit">创建密钥</button>
-            </form>
-            <div id="secretBox" class="secret"></div>
-          </div>
-
-          <div class="card span-4">
-            <div class="card-head"><h3>我的 API Key</h3></div>
+          <div class="card span-12">
+            <div class="card-head">
+              <div>
+                <h3>我的 API Key</h3>
+                <p class="subtitle">创建、查看和禁用用于调用 /v1 接口的密钥。</p>
+              </div>
+              <button id="openKeyModal" type="button">新建 API Key</button>
+            </div>
             <div id="keyList" class="list"></div>
           </div>
         </div>
@@ -1406,7 +1399,7 @@ const ACCOUNT_APP_HTML = String.raw`<!doctype html>
         <div class="grid">
           <div class="card span-12 doc-block">
             <div class="card-head"><h3>异步媒体、文件接口</h3></div>
-            <p>图片、视频、文件等非文本能力统一使用异步任务接口。创建任务会立即返回 <code>queued</code> 状态，后续通过任务查询接口轮询结果；如传入 <code>callback_url</code>，后台完成后可向该地址投递任务结果。</p>
+            <p>图片、视频、文件等非文本能力统一使用异步任务接口。创建任务会立即返回 <code>queued</code> 状态，后续通过任务查询接口轮询结果；如传入 <code>callback_url</code>，后台完成后可向该地址投递任务结果。图片模型建议优先使用平台标准参数，平台会按当前模型绑定的 Provider 自动转换为上游参数。</p>
             <div id="mediaModelDocs"></div>
           </div>
 
@@ -1456,13 +1449,64 @@ Content-Type: application/json</code></pre></div>
               <tbody>
                 <tr><td><code>type</code></td><td>string</td><td>任务类型，例如 <code>image.generation</code>、<code>video.generation</code>。</td></tr>
                 <tr><td><code>model</code></td><td>string</td><td>模型别名，建议从“可用模型”或本页媒体模型列表选择。</td></tr>
-                <tr><td><code>input</code></td><td>object</td><td>模型输入。常见字段包括 <code>prompt</code>、<code>size</code>、<code>duration</code>、<code>fps</code> 等，具体以模型配置为准。</td></tr>
+                <tr><td><code>input</code></td><td>object</td><td>模型输入。图片模型推荐使用下方平台标准参数；视频、文件参数仍以具体模型和 Provider 支持为准。</td></tr>
                 <tr><td><code>store_output</code></td><td>boolean</td><td>是否把结果文件转存到平台存储，默认 <code>false</code>。</td></tr>
                 <tr><td><code>storage_ttl_seconds</code></td><td>integer</td><td>平台文件保留时间，默认且最大 <code>86400</code> 秒。</td></tr>
                 <tr><td><code>callback_url</code></td><td>string</td><td>可选，任务完成后回调地址。</td></tr>
                 <tr><td><code>metadata</code></td><td>object</td><td>可选，自定义业务元数据，会随任务记录返回。</td></tr>
               </tbody>
             </table>
+          </div>
+
+          <div class="card span-12 doc-block">
+            <h3>图片 input 平台标准参数</h3>
+            <p>推荐调用方使用 <code>image_count</code>、<code>steps</code>、<code>guidance_scale</code> 这类平台标准字段。旧字段 <code>n</code>、<code>num_inference_steps</code>、<code>cfg_scale</code> 继续兼容，但新接入建议使用标准字段。</p>
+            <table>
+              <thead><tr><th>字段</th><th>类型</th><th>默认值</th><th>说明</th></tr></thead>
+              <tbody>
+                <tr><td><code>prompt</code></td><td>string</td><td>必填</td><td>生图提示词。可放在任务顶层 <code>prompt</code>，也可放在 <code>input.prompt</code>。</td></tr>
+                <tr><td><code>size</code></td><td>string</td><td><code>1024x1024</code></td><td>图片尺寸，例如 <code>1024x1024</code>。支持该字段的 Provider 会自动拆成上游需要的尺寸参数。</td></tr>
+                <tr><td><code>width</code></td><td>integer</td><td>从 <code>size</code> 推导</td><td>图片宽度。传了 <code>width</code> / <code>height</code> 时优先级高于 <code>size</code>。</td></tr>
+                <tr><td><code>height</code></td><td>integer</td><td>从 <code>size</code> 推导</td><td>图片高度。传了 <code>width</code> / <code>height</code> 时优先级高于 <code>size</code>。</td></tr>
+                <tr><td><code>image_count</code></td><td>integer</td><td><code>1</code></td><td>生成图片数量。兼容旧字段 <code>n</code>。</td></tr>
+                <tr><td><code>steps</code></td><td>integer</td><td><code>30</code></td><td>迭代 / 采样步数。兼容旧字段 <code>num_inference_steps</code>。只有支持该能力的 Provider 才会生效。</td></tr>
+                <tr><td><code>guidance_scale</code></td><td>number</td><td><code>1.0</code></td><td>提示词引导强度。兼容旧字段 <code>cfg_scale</code>。只有支持该能力的 Provider 才会生效。</td></tr>
+                <tr><td><code>negative_prompt</code></td><td>string</td><td><code>""</code></td><td>反向提示词。只有支持该能力的 Provider 才会生效。</td></tr>
+                <tr><td><code>seed</code></td><td>integer</td><td>无</td><td>随机种子，用于尽量复现结果，具体范围由上游决定。</td></tr>
+                <tr><td><code>response_format</code></td><td>string</td><td><code>url</code></td><td>图片返回格式，常见值为 <code>url</code> 或 <code>b64_json</code>，具体支持由 Provider 决定。</td></tr>
+                <tr><td><code>quality</code></td><td>string</td><td>无</td><td>图片质量，主要用于 OpenAI 兼容类生图模型，取值由上游决定。</td></tr>
+                <tr><td><code>style</code></td><td>string</td><td>无</td><td>图片风格，主要用于 OpenAI 兼容类生图模型，取值由上游决定。</td></tr>
+                <tr><td><code>provider_params</code></td><td>object</td><td>无</td><td>Provider 原生参数透传区。只有当标准字段不足以表达某个上游私有参数时使用。</td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div class="card span-12 doc-block">
+            <h3>Provider 参数映射</h3>
+            <p>不同上游的原生参数名不一致。平台会优先读取标准字段，再兼容旧字段，最后读取 <code>provider_params</code> 中的原生字段。</p>
+            <table>
+              <thead><tr><th>平台字段</th><th><code>moark-async</code> 上游字段</th><th><code>openai-compatible</code> 上游字段</th></tr></thead>
+              <tbody>
+                <tr><td><code>prompt</code></td><td><code>prompt</code></td><td><code>prompt</code></td></tr>
+                <tr><td><code>size</code></td><td><code>width</code> + <code>height</code></td><td><code>size</code></td></tr>
+                <tr><td><code>width</code> / <code>height</code></td><td><code>width</code> / <code>height</code></td><td><code>size</code>，格式为 <code>{width}x{height}</code></td></tr>
+                <tr><td><code>image_count</code> / <code>n</code></td><td><code>num_images_per_prompt</code></td><td><code>n</code></td></tr>
+                <tr><td><code>steps</code> / <code>num_inference_steps</code></td><td><code>num_inference_steps</code></td><td>非 OpenAI 标准字段；如上游兼容实现支持，可放入 <code>provider_params</code></td></tr>
+                <tr><td><code>guidance_scale</code> / <code>cfg_scale</code></td><td><code>cfg_scale</code></td><td>非 OpenAI 标准字段；如上游兼容实现支持，可放入 <code>provider_params</code></td></tr>
+                <tr><td><code>negative_prompt</code></td><td><code>negative_prompt</code></td><td>非 OpenAI 标准字段；如上游兼容实现支持，可放入 <code>provider_params</code></td></tr>
+                <tr><td><code>seed</code></td><td><code>seed</code></td><td>非 OpenAI 标准字段；如上游兼容实现支持，可放入 <code>provider_params</code></td></tr>
+                <tr><td><code>response_format</code></td><td>当前不映射</td><td><code>response_format</code></td></tr>
+                <tr><td><code>quality</code></td><td>当前不映射</td><td><code>quality</code></td></tr>
+                <tr><td><code>style</code></td><td>当前不映射</td><td><code>style</code></td></tr>
+              </tbody>
+            </table>
+            <p><code>provider_params</code> 示例：</p>
+            <div class="code-card"><pre><code>{
+  "provider_params": {
+    "lora_weights": ["style_xxx"],
+    "custom_option": true
+  }
+}</code></pre></div>
           </div>
         </div>
       </section>
@@ -1487,6 +1531,29 @@ Content-Type: application/json</code></pre></div>
     </main>
   </div>
 
+  <div id="key-modal" class="modal" aria-hidden="true">
+    <div class="modal-backdrop" data-key-modal-close></div>
+    <section class="modal-card key-modal-card" role="dialog" aria-modal="true" aria-labelledby="key-modal-title">
+      <div class="modal-head">
+        <div>
+          <div class="eyebrow">API Key</div>
+          <h3 id="key-modal-title">新建 API Key</h3>
+        </div>
+        <button class="secondary compact" type="button" data-key-modal-close>关闭</button>
+      </div>
+      <form id="keyForm" class="form-grid">
+        <label class="full">名称<input id="keyName" name="name" value="默认密钥" required></label>
+        <label class="full" id="expiresLabel" style="opacity:0.45;">过期时间<input id="keyExpires" name="expires_at" type="datetime-local" disabled></label>
+        <div class="full row"><label class="checkbox-label"><input id="keyPermanent" type="checkbox" checked><span>永不过期</span></label></div>
+        <div class="full row"><label class="checkbox-label"><input id="keyAllModels" type="checkbox" checked><span>不限模型</span></label></div>
+        <label class="full" id="modelsLabel" style="opacity:0.45;">指定模型<select id="keyModels" name="allowed_models" multiple size="4" disabled></select></label>
+        <div class="full row key-features"><span class="badge ok">用量：不限</span><span class="badge ok" id="expiresBadge">过期：永不</span><span class="badge ok" id="modelsBadge">模型：全部</span></div>
+        <button type="submit">创建密钥</button>
+      </form>
+      <div id="secretBox" class="secret"></div>
+    </section>
+  </div>
+
   <div id="task-modal" class="modal" aria-hidden="true">
     <div class="modal-backdrop" data-task-modal-close></div>
     <section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="task-modal-title">
@@ -1508,6 +1575,7 @@ Content-Type: application/json</code></pre></div>
     const $ = (selector) => document.querySelector(selector);
     const fmt = new Intl.NumberFormat('zh-CN');
     const pageTitles = { dashboard: '仪表盘', profile: '个人资料', 'api-keys': 'API Key', models: '可用模型', test: '测试体验', 'api-docs': '接口文档', usage: '用量统计', tasks: '任务管理' };
+    const keyModal = $('#key-modal');
     const taskModal = $('#task-modal');
     const taskModalTitle = $('#task-modal-title');
     const taskModalBody = $('#task-modal-body');
@@ -1658,7 +1726,7 @@ Content-Type: application/json</code></pre></div>
       }
 
       function defaultTestInput(modality) {
-        if (modality === 'image') return { size: '1024x1024', n: 1, response_format: 'url' };
+        if (modality === 'image') return { size: '1024x1024', image_count: 1, steps: 30, guidance_scale: 1, negative_prompt: '', response_format: 'url' };
         if (modality === 'video') return { duration: 5, size: '1280x720', fps: 24 };
         if (modality === 'file') return { file_url: 'https://example.com/input.pdf' };
         return {};
@@ -1702,7 +1770,7 @@ Content-Type: application/json</code></pre></div>
       const imageModel = findModelByModality('image') || 'image-basic';
       const videoModel = findModelByModality('video') || 'video-basic';
       const mediaModels = state.models.filter((model) => model.modality === 'image' || model.modality === 'video' || model.modality === 'file');
-      const imageBody = JSON.stringify({ type: 'image.generation', model: imageModel, input: { prompt: '一只猫坐在云端', size: '1024x1024', n: 1 }, store_output: true, storage_ttl_seconds: 86400, callback_url: 'https://example.com/webhooks/ai-task', metadata: { biz_id: 'order_123' } }, null, 2);
+      const imageBody = JSON.stringify({ type: 'image.generation', model: imageModel, input: { prompt: '一只猫坐在云端', size: '1024x1024', image_count: 1, steps: 30, guidance_scale: 1, negative_prompt: '低清晰度、畸形', seed: 123456, response_format: 'url' }, store_output: true, storage_ttl_seconds: 86400, callback_url: 'https://example.com/webhooks/ai-task', metadata: { biz_id: 'order_123' } }, null, 2);
       const videoBody = JSON.stringify({ type: 'video.generation', model: videoModel, input: { prompt: '海面日出，电影感镜头推进', duration: 5, size: '1280x720', fps: 24 }, store_output: true, storage_ttl_seconds: 86400, metadata: { scene: 'landing-page' } }, null, 2);
 
       $('#mediaModelDocs').innerHTML = mediaModels.length ? '<table><thead><tr><th>模型</th><th>类型</th><th>异步</th></tr></thead><tbody>' + mediaModels.map((model) => '<tr><td><code>' + escapeHtml(model.id) + '</code></td><td>' + escapeHtml(modalityText(model.modality)) + '</td><td>' + (model.supports_async ? '支持' : '未声明') + '</td></tr>').join('') + '</tbody></table>' : '<div class="notice">当前没有配置图片、视频或文件模型。可先在后台添加非文本模型，再按下方异步任务接口调用。</div>';
@@ -1772,6 +1840,36 @@ Content-Type: application/json</code></pre></div>
       if (!dateString) return '-';
       const date = new Date(dateString);
       return date.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+    }
+
+    function resetKeyForm() {
+      $('#keyName').value = '默认密钥';
+      $('#keyPermanent').checked = true;
+      $('#keyExpires').disabled = true;
+      $('#keyExpires').value = '';
+      $('#expiresLabel').style.opacity = '0.45';
+      $('#expiresBadge').textContent = '过期：永不';
+      $('#keyAllModels').checked = true;
+      $('#keyModels').disabled = true;
+      Array.from($('#keyModels').options).forEach((option) => { option.selected = false; });
+      $('#modelsLabel').style.opacity = '0.45';
+      $('#modelsBadge').textContent = '模型：全部';
+      $('#secretBox').style.display = 'none';
+      $('#secretBox').innerHTML = '';
+    }
+
+    function openKeyModal() {
+      resetKeyForm();
+      keyModal.classList.add('open');
+      keyModal.setAttribute('aria-hidden', 'false');
+      document.body.classList.add('modal-open');
+      $('#keyName').focus();
+    }
+
+    function closeKeyModal() {
+      keyModal.classList.remove('open');
+      keyModal.setAttribute('aria-hidden', 'true');
+      document.body.classList.remove('modal-open');
     }
 
     async function openTaskDetailModal(taskId) {
@@ -1907,6 +2005,8 @@ Content-Type: application/json</code></pre></div>
       const allModels = $('#keyAllModels').checked;
       const allowedModels = allModels ? [] : Array.from($('#keyModels').selectedOptions).map((option) => option.value);
       const expiresAt = permanent ? null : ($('#keyExpires').value ? new Date($('#keyExpires').value).toISOString() : null);
+      $('#secretBox').style.display = 'none';
+      $('#secretBox').innerHTML = '';
       const created = await api('/account/api/api-keys', { method: 'POST', body: JSON.stringify({ name: $('#keyName').value, allowed_models: allowedModels, expires_at: expiresAt }) });
       $('#secretBox').style.display = 'block';
       $('#secretBox').innerHTML = '<strong>密钥已创建，请立即复制：</strong><p><code>' + escapeHtml(created.secret) + '</code></p><button class="compact" id="copySecret">复制</button><p class="muted">' + escapeHtml(created.warning) + '</p>';
@@ -1930,6 +2030,8 @@ Content-Type: application/json</code></pre></div>
       $('#modelsBadge').textContent = allModels ? '模型：全部' : '模型：已限定';
     });
 
+    $('#openKeyModal').addEventListener('click', openKeyModal);
+
     $('#theme-toggle').addEventListener('click', () => {
       const currentTheme = document.documentElement.getAttribute('data-theme');
       const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
@@ -1952,12 +2054,22 @@ Content-Type: application/json</code></pre></div>
     });
 
     document.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape' && keyModal.classList.contains('open')) {
+        closeKeyModal();
+        return;
+      }
       if (event.key === 'Escape' && taskModal.classList.contains('open')) {
         closeTaskDetailModal();
       }
     });
 
     document.addEventListener('click', async (event) => {
+      const closeKeyModalButton = event.target.closest('[data-key-modal-close]');
+      if (closeKeyModalButton) {
+        closeKeyModal();
+        return;
+      }
+
       const closeTaskModal = event.target.closest('[data-task-modal-close]');
       if (closeTaskModal) {
         closeTaskDetailModal();
