@@ -1621,6 +1621,35 @@ Content-Type: application/json</code></pre></div>
         return status;
       }
 
+      function stageText(stage) {
+        const map = {
+          'task.created': '任务创建',
+          'queue.enqueued': '任务入队',
+          'processor.started': '开始处理',
+          'upstream.create.started': '上游创建开始',
+          'upstream.create.succeeded': '上游创建成功',
+          'upstream.create.failed': '上游创建失败',
+          'upstream.create.error': '上游创建错误',
+          'upstream.create.completed_sync': '上游同步完成',
+          'queue.reenqueued': '重新入队',
+          'queue.unavailable': '队列不可用',
+          'queue.reenqueue_failed': '入队失败',
+          'poll.started': '轮询开始',
+          'poll.result': '轮询结果',
+          'poll.error': '轮询错误',
+          'task.succeeded': '任务成功',
+          'task.failed': '任务失败',
+          'task.canceled': '任务取消',
+          'task.expired': '任务过期',
+          'output.store.started': '输出存储开始',
+          'output.store.completed': '输出存储完成',
+          'callback.deliver_started': '回调投递开始',
+          'callback.delivered': '回调投递成功',
+          'callback.delivery_failed': '回调投递失败',
+        };
+        return map[stage] || stage;
+      }
+
       function testPromptPlaceholder(modality) {
         if (modality === 'image') return '描述你想生成的图片，例如：一只猫坐在云端...';
         if (modality === 'video') return '描述你想生成的视频，例如：海面日出，电影感镜头推进...';
@@ -1716,7 +1745,7 @@ Content-Type: application/json</code></pre></div>
 
     function renderTaskEvents(events) {
       if (!events.length) return '<div style="margin-top:12px;"><span class="muted" style="font-size:11px;font-weight:900;">状态链</span><div class="notice" style="margin-top:4px;">暂无状态事件。</div></div>';
-      const rows = events.map((event) => '<tr><td>' + formatDate(event.at) + '</td><td><code>' + escapeHtml(event.stage || '-') + '</code></td><td>' + escapeHtml(event.status || '-') + '</td><td>' + escapeHtml(event.provider_status || '-') + '</td><td>' + escapeHtml(formatTaskEventSummary(event)) + '</td></tr>').join('');
+      const rows = events.map((event) => '<tr><td>' + formatDate(event.at) + '</td><td>' + escapeHtml(stageText(event.stage) || '-') + '</td><td>' + escapeHtml(statusText(event.status) || '-') + '</td><td>' + escapeHtml(event.provider_status || '-') + '</td><td>' + escapeHtml(formatTaskEventSummary(event)) + '</td></tr>').join('');
       return '<div style="margin-top:12px;"><span class="muted" style="font-size:11px;font-weight:900;">状态链</span><div style="margin-top:4px;max-height:240px;overflow:auto;border:1px solid var(--line);border-radius:12px;"><table style="margin:0;"><thead><tr><th>时间</th><th>阶段</th><th>平台状态</th><th>上游状态</th><th>摘要</th></tr></thead><tbody>' + rows + '</tbody></table></div></div>';
     }
 
