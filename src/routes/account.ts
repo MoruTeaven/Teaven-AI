@@ -1611,6 +1611,16 @@ Content-Type: application/json</code></pre></div>
         return value || '未知';
       }
 
+      function statusText(status) {
+        if (status === 'queued') return '排队中';
+        if (status === 'running') return '运行中';
+        if (status === 'succeeded') return '成功';
+        if (status === 'failed') return '失败';
+        if (status === 'canceled') return '已取消';
+        if (status === 'expired') return '已过期';
+        return status;
+      }
+
       function testPromptPlaceholder(modality) {
         if (modality === 'image') return '描述你想生成的图片，例如：一只猫坐在云端...';
         if (modality === 'video') return '描述你想生成的视频，例如：海面日出，电影感镜头推进...';
@@ -1654,7 +1664,7 @@ Content-Type: application/json</code></pre></div>
     }
 
     function renderTasks() {
-      const rows = state.tasks.map((task) => '<tr id="task-row-' + escapeHtml(task.id) + '"><td><code>' + escapeHtml(task.id) + '</code></td><td>' + escapeHtml(task.model) + '</td><td><span class="badge ' + escapeHtml(task.status) + '">' + escapeHtml(task.status) + '</span></td><td>' + formatDate(task.created_at) + '</td><td class="actions">' + (task.cancelable ? '<button class="compact danger" data-cancel-task="' + escapeHtml(task.id) + '">取消</button>' : '') + '<button class="compact" data-view-task="' + escapeHtml(task.id) + '">查看详情</button></td></tr>').join('');
+      const rows = state.tasks.map((task) => '<tr id="task-row-' + escapeHtml(task.id) + '"><td><code>' + escapeHtml(task.id) + '</code></td><td>' + escapeHtml(task.model) + '</td><td><span class="badge ' + escapeHtml(task.status) + '">' + escapeHtml(statusText(task.status)) + '</span></td><td>' + formatDate(task.created_at) + '</td><td class="actions">' + (task.cancelable ? '<button class="compact danger" data-cancel-task="' + escapeHtml(task.id) + '">取消</button>' : '') + '<button class="compact" data-view-task="' + escapeHtml(task.id) + '">查看详情</button></td></tr>').join('');
       $('#taskTable').innerHTML = rows ? '<table><thead><tr><th>任务</th><th>模型</th><th>状态</th><th>创建</th><th></th></tr></thead><tbody>' + rows + '</tbody></table>' : '<div class="notice">暂无任务。</div>';
     }
 
@@ -1685,7 +1695,7 @@ Content-Type: application/json</code></pre></div>
     }
 
     function renderTaskDetail() {
-      const rows = state.tasks.map((task) => '<tr id="task-detail-row-' + escapeHtml(task.id) + '"><td><code>' + escapeHtml(task.id) + '</code></td><td>' + escapeHtml(task.type) + '</td><td>' + escapeHtml(task.model) + '</td><td><span class="badge ' + escapeHtml(task.status) + '">' + escapeHtml(task.status) + '</span></td><td>' + formatDate(task.created_at) + '</td><td>' + (task.completed_at ? formatDate(task.completed_at) : '-') + '</td><td class="actions">' + (task.cancelable ? '<button class="compact danger" data-cancel-task="' + escapeHtml(task.id) + '">取消</button>' : '') + '<button class="compact" data-view-task="' + escapeHtml(task.id) + '">查看详情</button></td></tr>').join('');
+      const rows = state.tasks.map((task) => '<tr id="task-detail-row-' + escapeHtml(task.id) + '"><td><code>' + escapeHtml(task.id) + '</code></td><td>' + escapeHtml(task.type) + '</td><td>' + escapeHtml(task.model) + '</td><td><span class="badge ' + escapeHtml(task.status) + '">' + escapeHtml(statusText(task.status)) + '</span></td><td>' + formatDate(task.created_at) + '</td><td>' + (task.completed_at ? formatDate(task.completed_at) : '-') + '</td><td class="actions">' + (task.cancelable ? '<button class="compact danger" data-cancel-task="' + escapeHtml(task.id) + '">取消</button>' : '') + '<button class="compact" data-view-task="' + escapeHtml(task.id) + '">查看详情</button></td></tr>').join('');
       $('#taskDetail').innerHTML = rows ? '<table><thead><tr><th>任务</th><th>类型</th><th>模型</th><th>状态</th><th>创建</th><th>完成</th><th></th></tr></thead><tbody>' + rows + '</tbody></table>' : '<div class="notice">暂无任务。</div>';
     }
 
@@ -1764,7 +1774,7 @@ Content-Type: application/json</code></pre></div>
           '<div><span class="muted" style="font-size:11px;font-weight:900;">任务 ID</span><div><code>' + escapeHtml(task.id) + '</code></div></div>' +
           '<div><span class="muted" style="font-size:11px;font-weight:900;">类型</span><div>' + escapeHtml(task.type) + '</div></div>' +
           '<div><span class="muted" style="font-size:11px;font-weight:900;">模型</span><div>' + escapeHtml(task.model) + '</div></div>' +
-          '<div><span class="muted" style="font-size:11px;font-weight:900;">状态</span><div><span class="badge ' + escapeHtml(task.status) + '">' + escapeHtml(task.status) + '</span></div></div>' +
+          '<div><span class="muted" style="font-size:11px;font-weight:900;">状态</span><div><span class="badge ' + escapeHtml(task.status) + '">' + escapeHtml(statusText(task.status)) + '</span></div></div>' +
           '<div><span class="muted" style="font-size:11px;font-weight:900;">上游</span><div>' + escapeHtml(task.upstream_id || '-') + '</div></div>' +
           '<div><span class="muted" style="font-size:11px;font-weight:900;">Provider</span><div>' + escapeHtml(task.plugin_id || '-') + '</div></div>' +
           '<div><span class="muted" style="font-size:11px;font-weight:900;">Provider 任务 ID</span><div><code>' + escapeHtml(task.provider_task_id || '-') + '</code></div></div>' +

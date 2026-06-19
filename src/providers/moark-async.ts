@@ -17,10 +17,13 @@ const MANIFEST: ProviderPluginManifest = {
   }
 };
 
-const DEFAULT_BASE_URL = "https://ai.gitee.com/api/v1";
-const LEGACY_BASE_URL = "https://api.gitee.com/v1";
-const DEFAULT_CREATE_PATH = "/image_generation";
-const DEFAULT_POLL_PATH = "/task/{task_id}";
+const DEFAULT_BASE_URL = "https://ai.gitee.com/v1";
+const LEGACY_BASE_URLS = new Set([
+  "https://ai.gitee.com/api/v1",
+  "https://api.gitee.com/v1",
+]);
+const DEFAULT_CREATE_PATH = "/async/images/generations";
+const DEFAULT_POLL_PATH = "/async/images/generations/{task_id}";
 
 export function createMoarkAsyncPlugin(_env: Env): ProviderPlugin {
   return {
@@ -347,7 +350,12 @@ function getConfigString(context: ProviderRequestContext, key: string): string |
 }
 
 function normalizeBaseUrl(baseUrl: string): string {
-  return baseUrl.replace(/\/+$/, "") === LEGACY_BASE_URL ? DEFAULT_BASE_URL : baseUrl;
+  const trimmed = baseUrl.replace(/\/+$/, "");
+  // 旧版 API 地址或只填了根域名，自动转为当前正确地址
+  if (LEGACY_BASE_URLS.has(trimmed) || trimmed === "https://ai.gitee.com") {
+    return DEFAULT_BASE_URL;
+  }
+  return baseUrl;
 }
 
 function interpolateTaskId(value: string, providerTaskId: string): string {
@@ -355,7 +363,7 @@ function interpolateTaskId(value: string, providerTaskId: string): string {
 }
 
 function isCreateEndpoint(url: string): boolean {
-  return /\/image_generation\/?$/.test(url);
+  return /\/async\/images\/generations\/?$/.test(url);
 }
 
 function parentUrl(url: string): string {
