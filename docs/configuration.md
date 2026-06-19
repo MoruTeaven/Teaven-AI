@@ -285,7 +285,7 @@ wrangler secret put OPENAI_COMPATIBLE_API_KEY
 
 1. 用户请求 `POST /v1/async/images/generations`，请求体中指定 `model` 为平台模型别名。
 2. 网关根据配置找到对应的上游实例和提供者插件。
-3. 网关将请求转发到模力方舟的异步接口 `POST /async/images/generations`。
+3. 网关将请求转发到模力方舟的异步接口 `POST /image_generation`。
 4. 模力方舟返回 `task_id` 和异步任务状态。
 5. 网关创建本地异步任务记录并返回 `202 Accepted` 和 `task_id` 给用户。
 6. 用户可通过 `GET /v1/tasks/{task_id}` 查询任务状态。
@@ -300,25 +300,16 @@ wrangler secret put OPENAI_COMPATIBLE_API_KEY
       "id": "moark-image-gen",
       "name": "Moark Async Image Generation",
       "plugin_id": "moark-async",
-      "base_url": "https://api.gitee.com/v1",
+      "base_url": "https://ai.gitee.com/api/v1",
       "credential_id": "env:MOARK_API_KEY",
       "status": "active",
       "models": [
         {
-          "alias": "imagen-3",
-          "provider_model": "imagen-3",
+          "alias": "Qwen-Image",
+          "provider_model": "Qwen-Image",
           "modality": "image",
           "supports_async": true,
           "priority": 1,
-          "weight": 100,
-          "status": "active"
-        },
-        {
-          "alias": "imagen-2",
-          "provider_model": "imagen-2",
-          "modality": "image",
-          "supports_async": true,
-          "priority": 2,
           "weight": 100,
           "status": "active"
         }
@@ -345,7 +336,7 @@ curl -X POST http://localhost:8787/v1/async/images/generations \
   -H "Authorization: Bearer dev-only-change-me" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "imagen-3",
+    "model": "Qwen-Image",
     "prompt": "A beautiful sunset over mountains",
     "n": 1,
     "size": "1024x1024",
@@ -379,5 +370,7 @@ curl -X POST http://localhost:8787/v1/async/images/generations \
 | `supports_async` | 模型是否支持异步执行 | `true` |
 | `modality` | 模型模式，图像生成应为 `image` | `"image"` |
 | `plugin_id` | 提供者插件 ID | `"moark-async"` |
-| `base_url` | 模力方舟 API Base URL | `"https://api.gitee.com/v1"` |
+| `base_url` | 模力方舟 API Base URL | `"https://ai.gitee.com/api/v1"` |
 | `credential_id` | API 凭证配置引用 | `"env:MOARK_API_KEY"` |
+
+如果上游路径发生变化，可在 upstream 的 `config` 中覆盖：`create_url`、`poll_url`，或 `create_path`、`poll_path`。`poll_url` / `poll_path` 中可使用 `{task_id}` 占位符。

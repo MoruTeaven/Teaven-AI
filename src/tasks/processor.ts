@@ -8,6 +8,8 @@
  * 可通过 GET /v1/tasks/:id 实时查询状态链。
  */
 import type { AsyncTaskOutputItem, AsyncTaskRecord, Env, ProviderRouteConfig } from "../types";
+import type { ImageGenerationRequest } from "../types";
+import { ApiError } from "../http/errors";
 import type { ProviderCredential, ProviderRequestContext, TaskPollResult } from "../providers/types";
 import { createProviderRegistry, resolveProviderCredential } from "../providers/registry";
 import { appendTaskEvent, taskDiagnostics } from "../tasks/events";
@@ -77,6 +79,10 @@ export async function processTask(env: Env, taskId: string): Promise<void> {
     } catch (err) {
       const message = errorMessage(err);
       task.provider_context._last_error = message;
+      if (err instanceof ApiError) {
+        task.provider_context._last_http_status = err.status;
+        task.provider_context._last_provider_code = err.code;
+      }
       appendTaskEvent(task, {
         stage: "upstream.create.error",
         status: task.status,
@@ -85,14 +91,17 @@ export async function processTask(env: Env, taskId: string): Promise<void> {
         error: message
       });
 
-      if (createAttempt >= MAX_CREATE_ATTEMPTS) {
+      const permanentCreateError = isPermanentCreateError(err);
+      if (permanentCreateError || createAttempt >= MAX_CREATE_ATTEMPTS) {
         markFailed(task, {
-          message: `Upstream task creation failed after ${MAX_CREATE_ATTEMPTS} attempts`,
+          message: permanentCreateError
+            ? "Upstream task creation failed with a non-retryable error"
+            : `Upstream task creation failed after ${MAX_CREATE_ATTEMPTS} attempts`,
           cause: message
         }, {
           stage: "task.failed",
           process_id: processId,
-          message: "Exceeded max upstream creation attempts"
+          message: permanentCreateError ? "Upstream creation returned a non-retryable error" : "Exceeded max upstream creation attempts"
         });
       }
     }
@@ -486,14 +495,12 @@ async function createUpstreamTask(env: Env, task: AsyncTaskRecord, processId: st
       return;
     }
 
-    const reqBody = {
+    const reqBody: ImageGenerationRequest = {
+      ...(task.input as Record<string, unknown>),
       model: task.model,
       prompt: (task.input.prompt as string) || "",
-      n: (task.input.n as number) || 1,
-      size: task.input.size as string | undefined,
-      response_format: (task.input.response_format as "url" | "b64_json") || "url",
-      quality: task.input.quality as string | undefined,
-      style: task.input.style as string | undefined
+      n: (task.input.n as number | undefined) || 1,
+      response_format: (task.input.response_format as "url" | "b64_json" | undefined) || "url"
     };
 
     const response = await adapter.imageGenerations(reqBody, ctx);
@@ -619,6 +626,10 @@ function errorMessage(err: unknown): string {
   } catch {
     return String(err);
   }
+}
+
+function isPermanentCreateError(err: unknown): boolean {
+  return err instanceof ApiError && err.status >= 400 && err.status < 500 && err.status !== 408 && err.status !== 429;
 }
 
 /**

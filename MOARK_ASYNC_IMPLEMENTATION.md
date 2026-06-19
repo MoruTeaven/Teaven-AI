@@ -6,7 +6,7 @@
 
 ### 1. 新增 Provider Plugin：`moark-async`
 - 文件: `src/providers/moark-async.ts`
-- 功能: 适配模力方舟异步图像生成接口 `POST /async/images/generations`
+- 功能: 适配模力方舟异步图像生成接口 `POST /image_generation`
 - 执行模式: `async_polling` - 异步轮询模式
 - 特点:
   - 接收异步请求并返回 `task_id`
@@ -55,13 +55,13 @@
       "id": "moark-image-gen",
       "name": "Moark Async Image Generation",
       "plugin_id": "moark-async",
-      "base_url": "https://api.gitee.com/v1",
+      "base_url": "https://ai.gitee.com/api/v1",
       "credential_id": "env:MOARK_API_KEY",
       "status": "active",
       "models": [
         {
-          "alias": "imagen-3",
-          "provider_model": "imagen-3",
+          "alias": "Qwen-Image",
+          "provider_model": "Qwen-Image",
           "modality": "image",
           "supports_async": true,
           "priority": 1,
@@ -83,7 +83,7 @@ Authorization: Bearer {api_key}
 Content-Type: application/json
 
 {
-  "model": "imagen-3",
+  "model": "Qwen-Image",
   "prompt": "A beautiful sunset over mountains",
   "n": 1,
   "size": "1024x1024"

@@ -17,6 +17,11 @@ const MANIFEST: ProviderPluginManifest = {
   }
 };
 
+const DEFAULT_BASE_URL = "https://ai.gitee.com/api/v1";
+const LEGACY_BASE_URL = "https://api.gitee.com/v1";
+const DEFAULT_CREATE_PATH = "/image_generation";
+const DEFAULT_POLL_PATH = "/task/{task_id}";
+
 export function createMoarkAsyncPlugin(_env: Env): ProviderPlugin {
   return {
     manifest: MANIFEST,
@@ -35,11 +40,13 @@ export function createMoarkAsyncPlugin(_env: Env): ProviderPlugin {
 }
 
 interface MoarkAsyncResponse {
-  code: string;
-  message: string;
+  code?: string;
+  message?: string;
+  task_id?: string;
+  status?: string;
   data?: {
-    task_id: string;
-    status: string;
+    task_id?: string;
+    status?: string;
   };
   error?: string;
 }
@@ -53,26 +60,9 @@ async function forwardAsyncImageGeneration(
     throw upstreamError("Provider API key is missing", 503, "provider_unavailable");
   }
 
-  const baseUrl = context.credential.base_url || "https://api.gitee.com/v1";
-  const upstreamUrl = joinUrl(baseUrl, "/async/images/generations");
+  const upstreamUrl = getCreateUrl(context);
 
-  // 构建上游请求，使用提供者的模型名称
-  const upstreamRequest: Record<string, unknown> = {
-    model: context.route.provider_model,
-    prompt: request.prompt,
-    n: request.n || 1,
-    size: request.size,
-    response_format: request.response_format || "url",
-    quality: request.quality,
-    style: request.style
-  };
-
-  // 移除undefined字段
-  Object.keys(upstreamRequest).forEach((key) => {
-    if (upstreamRequest[key] === undefined) {
-      delete upstreamRequest[key];
-    }
-  });
+  const upstreamRequest = buildMoarkImageRequest(request, context.route.provider_model);
 
   const upstream = await fetch(upstreamUrl, {
     method: "POST",
@@ -90,16 +80,19 @@ async function forwardAsyncImageGeneration(
   }
 
   const data = (await upstream.json()) as MoarkAsyncResponse;
+  const providerTaskId = firstString(data.data?.task_id, data.task_id);
+  const providerStatus = firstString(data.data?.status, data.status, "queued");
 
-  // 模力方舟异步接口返回202 Accepted
-  if (data.code === "200000" && data.data?.task_id) {
+  if (providerTaskId) {
     return jsonResponse(
       {
-        id: data.data.task_id,
+        id: providerTaskId,
         object: "task",
-        status: data.data.status,
-        provider_task_id: data.data.task_id,
-        provider_execution_mode: "async_polling"
+        status: providerStatus,
+        provider_task_id: providerTaskId,
+        provider_execution_mode: "async_polling",
+        code: data.code,
+        message: data.message
       },
       {
         status: 202,
@@ -110,12 +103,38 @@ async function forwardAsyncImageGeneration(
     );
   }
 
-  // 处理其他响应
   throw upstreamError(
-    data.message || "Unexpected response from Moark API",
+    data.error || data.message || "Unexpected response from Moark API",
     500,
     data.code || "upstream_error"
   );
+}
+
+function buildMoarkImageRequest(request: ImageGenerationRequest, providerModel: string): Record<string, unknown> {
+  const upstreamRequest: Record<string, unknown> = {
+    model: providerModel,
+    prompt: request.prompt,
+    num_images_per_prompt: request.num_images_per_prompt ?? request.n ?? 1,
+    num_inference_steps: request.num_inference_steps ?? 4,
+    cfg_scale: request.cfg_scale ?? 1.0,
+    negative_prompt: request.negative_prompt ?? "",
+    seed: request.seed,
+    lora_weights: request.lora_weights
+  };
+
+  const width = typeof request.width === "number" ? request.width : undefined;
+  const height = typeof request.height === "number" ? request.height : undefined;
+  const parsedSize = parseSize(request.size);
+  upstreamRequest.width = width ?? parsedSize?.width ?? 1024;
+  upstreamRequest.height = height ?? parsedSize?.height ?? 1024;
+
+  Object.keys(upstreamRequest).forEach((key) => {
+    if (upstreamRequest[key] === undefined) {
+      delete upstreamRequest[key];
+    }
+  });
+
+  return upstreamRequest;
 }
 
 async function mapUpstreamError(response: Response): Promise<Error> {
@@ -123,7 +142,7 @@ async function mapUpstreamError(response: Response): Promise<Error> {
   let code = "upstream_error";
 
   try {
-    const body = (await response.json()) as MoarkAsyncResponse;
+    const body = (await response.clone().json()) as MoarkAsyncResponse;
     if (body.message) {
       message = body.message;
     }
@@ -145,18 +164,28 @@ async function mapUpstreamError(response: Response): Promise<Error> {
 }
 
 interface MoarkPollResponse {
-  code: string;
-  message: string;
+  code?: string;
+  message?: string;
+  task_id?: string;
+  status?: string;
+  output?: MoarkOutput;
   data?: {
-    task_id: string;
-    status: string;
-    output?: Array<{
-      url?: string;
-      b64_json?: string;
-      [key: string]: unknown;
-    }>;
+    task_id?: string;
+    status?: string;
+    output?: MoarkOutput;
     error?: string;
   };
+  error?: string;
+}
+
+type MoarkOutput = MoarkOutputItem | MoarkOutputItem[];
+
+interface MoarkOutputItem {
+  url?: string;
+  file_url?: string;
+  b64_json?: string;
+  text_result?: string;
+  [key: string]: unknown;
 }
 
 async function pollMoarkTask(providerTaskId: string, context: ProviderRequestContext): Promise<TaskPollResult> {
@@ -165,8 +194,7 @@ async function pollMoarkTask(providerTaskId: string, context: ProviderRequestCon
     throw upstreamError("Provider API key is missing", 503, "provider_unavailable");
   }
 
-  const baseUrl = context.credential.base_url || "https://api.gitee.com/v1";
-  const pollUrl = joinUrl(baseUrl, `/async/images/generations/${providerTaskId}`);
+  const pollUrl = getPollUrl(context, providerTaskId);
 
   const upstream = await fetch(pollUrl, {
     method: "GET",
@@ -204,30 +232,27 @@ async function pollMoarkTask(providerTaskId: string, context: ProviderRequestCon
 
   // 根据 Moark 状态码映射
   const statusMap: Record<string, TaskPollResult["status"]> = {
-    "queued": "queued",
-    "running": "running",
-    "processing": "running",
-    "succeeded": "succeeded",
-    "success": "succeeded",
-    "completed": "succeeded",
-    "failed": "failed",
-    "error": "failed",
-    "canceled": "canceled"
+    queued: "queued",
+    pending: "queued",
+    running: "running",
+    processing: "running",
+    succeeded: "succeeded",
+    success: "succeeded",
+    completed: "succeeded",
+    failed: "failed",
+    error: "failed",
+    canceled: "canceled",
+    cancelled: "canceled"
   };
 
-  const mappedStatus = statusMap[data.data?.status?.toLowerCase() || ""] || "running";
+  const providerStatus = firstString(data.data?.status, data.status);
+  const mappedStatus = statusMap[providerStatus?.toLowerCase() || ""] || "running";
 
-  if (mappedStatus === "succeeded" && data.data?.output) {
-    const output: AsyncTaskOutputItem[] = data.data.output.map((item, index) => ({
-      type: "image",
-      url: item.url,
-      b64_json: item.b64_json,
-      index,
-      source: "upstream" as const
-    }));
+  if (mappedStatus === "succeeded") {
+    const output = normalizeOutput(data.data?.output ?? data.output);
     return {
       status: "succeeded",
-      provider_status: data.data.status,
+      provider_status: providerStatus,
       provider_response_code: data.code,
       http_status: upstream.status,
       message: data.message,
@@ -238,12 +263,12 @@ async function pollMoarkTask(providerTaskId: string, context: ProviderRequestCon
   if (mappedStatus === "failed") {
     return {
       status: "failed",
-      provider_status: data.data?.status,
+      provider_status: providerStatus,
       provider_response_code: data.code,
       http_status: upstream.status,
       message: data.message,
       error: {
-        message: data.data?.error || data.message || "Upstream task failed",
+        message: data.data?.error || data.error || data.message || "Upstream task failed",
         code: data.code
       }
     };
@@ -251,11 +276,27 @@ async function pollMoarkTask(providerTaskId: string, context: ProviderRequestCon
 
   return {
     status: mappedStatus,
-    provider_status: data.data?.status,
+    provider_status: providerStatus,
     provider_response_code: data.code,
     http_status: upstream.status,
     message: data.message
   };
+}
+
+function normalizeOutput(output: MoarkOutput | undefined): AsyncTaskOutputItem[] {
+  if (!output) {
+    return [];
+  }
+
+  const items = Array.isArray(output) ? output : [output];
+  return items.map((item, index) => ({
+    type: "image",
+    url: item.url || item.file_url,
+    b64_json: item.b64_json,
+    text_result: item.text_result,
+    index,
+    source: "upstream" as const
+  }));
 }
 
 async function readMoarkErrorSummary(response: Response): Promise<{ code?: string; message?: string }> {
@@ -273,4 +314,70 @@ async function readMoarkErrorSummary(response: Response): Promise<{ code?: strin
 
 function joinUrl(baseUrl: string, path: string): string {
   return `${baseUrl.replace(/\/+$/, "")}/${path.replace(/^\/+/, "")}`;
+}
+
+function getCreateUrl(context: ProviderRequestContext): string {
+  const explicitUrl = getConfigString(context, "create_url") || getConfigString(context, "api_url");
+  if (explicitUrl) {
+    return explicitUrl;
+  }
+
+  const baseUrl = normalizeBaseUrl(context.credential.base_url || DEFAULT_BASE_URL);
+  if (isCreateEndpoint(baseUrl)) {
+    return baseUrl;
+  }
+
+  return joinUrl(baseUrl, getConfigString(context, "create_path") || DEFAULT_CREATE_PATH);
+}
+
+function getPollUrl(context: ProviderRequestContext, providerTaskId: string): string {
+  const explicitUrl = getConfigString(context, "poll_url") || getConfigString(context, "status_url");
+  if (explicitUrl) {
+    return interpolateTaskId(explicitUrl, providerTaskId);
+  }
+
+  const baseUrl = normalizeBaseUrl(context.credential.base_url || DEFAULT_BASE_URL);
+  const pollBaseUrl = isCreateEndpoint(baseUrl) ? parentUrl(baseUrl) : baseUrl;
+  return joinUrl(pollBaseUrl, interpolateTaskId(getConfigString(context, "poll_path") || DEFAULT_POLL_PATH, providerTaskId));
+}
+
+function getConfigString(context: ProviderRequestContext, key: string): string | undefined {
+  const value = context.credential.config?.[key] ?? context.route.config?.[key];
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function normalizeBaseUrl(baseUrl: string): string {
+  return baseUrl.replace(/\/+$/, "") === LEGACY_BASE_URL ? DEFAULT_BASE_URL : baseUrl;
+}
+
+function interpolateTaskId(value: string, providerTaskId: string): string {
+  return value.replace(/\{task_id\}/g, encodeURIComponent(providerTaskId));
+}
+
+function isCreateEndpoint(url: string): boolean {
+  return /\/image_generation\/?$/.test(url);
+}
+
+function parentUrl(url: string): string {
+  return url.replace(/\/[^/]+\/?$/, "");
+}
+
+function firstString(...values: unknown[]): string | undefined {
+  for (const value of values) {
+    if (typeof value === "string" && value.length > 0) {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+function parseSize(size: unknown): { width: number; height: number } | undefined {
+  if (typeof size !== "string") {
+    return undefined;
+  }
+  const match = /^(\d+)x(\d+)$/.exec(size);
+  if (!match) {
+    return undefined;
+  }
+  return { width: Number(match[1]), height: Number(match[2]) };
 }
