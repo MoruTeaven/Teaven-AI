@@ -715,7 +715,12 @@ Cookie: teaven_account_session=<session>
   "model": "image-model",
   "prompt": "一只橘猫",
   "input": {
-    "size": "1024x1024"
+    "size": "1024x1024",
+    "image_count": 1,
+    "steps": 30,
+    "guidance_scale": 1,
+    "negative_prompt": "低清晰度、畸形",
+    "seed": 123456
   },
   "store_output": true,
   "storage_ttl_seconds": 86400
@@ -748,6 +753,11 @@ Cookie: teaven_account_session=<session>
   },
   "input": {
     "size": "1024x1024",
+    "image_count": 1,
+    "steps": 30,
+    "guidance_scale": 1,
+    "negative_prompt": "低清晰度、畸形",
+    "seed": 123456,
     "prompt": "一只橘猫"
   }
 }
@@ -762,6 +772,45 @@ Cookie: teaven_account_session=<session>
 | `input` | `object` | 否 | 传给任务的模型参数，必须是 JSON 对象 |
 | `store_output` | `boolean` | 否 | 是否存储输出文件，只有严格等于 `true` 时启用 |
 | `storage_ttl_seconds` | `number` | 否 | 输出存储 TTL，默认 `86400`，范围 `1` 到 `86400`，必须是整数 |
+
+图片模型 `input` 平台标准参数：
+
+| 字段 | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `prompt` | `string` | 必填 | 生图提示词。可放在顶层 `prompt`，也可放在 `input.prompt`。 |
+| `size` | `string` | `1024x1024` | 图片尺寸，例如 `1024x1024`。支持该字段的 Provider 会自动拆成上游需要的尺寸参数。 |
+| `width` | `number` | 从 `size` 推导 | 图片宽度。传了 `width`/`height` 时优先级高于 `size`。 |
+| `height` | `number` | 从 `size` 推导 | 图片高度。传了 `width`/`height` 时优先级高于 `size`。 |
+| `image_count` | `number` | `1` | 生成图片数量。兼容旧字段 `n`。 |
+| `steps` | `number` | `30` | 迭代/采样步数。兼容旧字段 `num_inference_steps`。只有支持该能力的 Provider 才会生效。 |
+| `guidance_scale` | `number` | `1.0` | 提示词引导强度。兼容旧字段 `cfg_scale`。只有支持该能力的 Provider 才会生效。 |
+| `negative_prompt` | `string` | `""` | 反向提示词。只有支持该能力的 Provider 才会生效。 |
+| `seed` | `number` | 无 | 随机种子，用于尽量复现结果，具体范围由上游决定。 |
+| `response_format` | `string` | `url` | 图片返回格式，常见值为 `url` 或 `b64_json`，具体支持由 Provider 决定。 |
+| `quality` | `string` | 无 | 图片质量，主要用于 OpenAI 兼容类生图模型，取值由上游决定。 |
+| `style` | `string` | 无 | 图片风格，主要用于 OpenAI 兼容类生图模型，取值由上游决定。 |
+| `provider_params` | `object` | 无 | Provider 原生参数透传区。只有当标准字段不足以表达某个上游私有参数时使用。 |
+
+Provider 参数映射：
+
+| 平台标准字段 | `moark-async` 上游字段 | `openai-compatible` 上游字段 |
+| --- | --- | --- |
+| `prompt` | `prompt` | `prompt` |
+| `size` | `width` + `height` | `size` |
+| `width` / `height` | `width` / `height` | `size`，格式为 `{width}x{height}` |
+| `image_count` | `num_images_per_prompt` | `n` |
+| `n` | `num_images_per_prompt` | `n` |
+| `steps` | `num_inference_steps` | 非 OpenAI 标准字段；如上游兼容实现支持，可放入 `provider_params` |
+| `num_inference_steps` | `num_inference_steps` | 非 OpenAI 标准字段；如上游兼容实现支持，可放入 `provider_params` |
+| `guidance_scale` | `cfg_scale` | 非 OpenAI 标准字段；如上游兼容实现支持，可放入 `provider_params` |
+| `cfg_scale` | `cfg_scale` | 非 OpenAI 标准字段；如上游兼容实现支持，可放入 `provider_params` |
+| `negative_prompt` | `negative_prompt` | 非 OpenAI 标准字段；如上游兼容实现支持，可放入 `provider_params` |
+| `seed` | `seed` | 非 OpenAI 标准字段；如上游兼容实现支持，可放入 `provider_params` |
+| `response_format` | 当前不映射 | `response_format` |
+| `quality` | 当前不映射 | `quality` |
+| `style` | 当前不映射 | `style` |
+
+说明：面向用户中心和 `/v1/tasks` 调用方时，推荐优先使用平台标准字段，例如 `image_count`、`steps`、`guidance_scale`。不同上游的原生字段名不一致，平台会在 Provider 适配器中自动转换；没有明确映射的私有参数再放入 `provider_params`。
 
 示例本地环境变量：
 

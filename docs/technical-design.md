@@ -235,7 +235,9 @@ POST /v1/tasks
   "model": "image-basic",
   "input": {
     "prompt": "一只猫坐在云端",
-    "size": "1024x1024"
+    "size": "1024x1024",
+    "image_count": 1,
+    "steps": 30
   },
   "store_output": true,
   "storage_ttl_seconds": 86400,
@@ -257,6 +259,21 @@ POST /v1/tasks
 | `storage_ttl_seconds` | integer | `86400` | 平台文件存储时长，仅在发生 R2 存储时生效，最大 86400 秒。 |
 | `callback_url` | string | 可选 | 任务完成后的用户 webhook。 |
 | `metadata` | object | 可选 | 用户自定义元数据。 |
+
+图片任务 `input` 常用字段：
+
+| 参数 | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `prompt` | string | 必填 | 生图提示词。 |
+| `size` | string | `1024x1024` | 图片尺寸。`moark-async` 会解析为上游的 `width` 和 `height`。 |
+| `image_count` | integer | `1` | 生成图片数量。兼容旧字段 `n`。 |
+| `steps` | integer | `30` | 迭代/采样步数。兼容旧字段 `num_inference_steps`。 |
+| `guidance_scale` | number | `1.0` | 提示词引导强度。兼容旧字段 `cfg_scale`。 |
+| `negative_prompt` | string | `""` | 反向提示词。当前默认值只适用于 `moark-async` Provider。 |
+| `seed` | integer | 可选 | 随机种子，用于结果复现，具体支持范围由上游决定。 |
+| `provider_params` | object | 可选 | Provider 原生参数透传区，用于补充平台标准字段尚未覆盖的上游私有参数。 |
+
+不同上游的原生参数名不保证一致。平台任务接口会把 `input` 作为任务输入保存，并由具体 Provider 插件负责映射到上游参数；例如 `moark-async` 会把 `steps` 转为 `num_inference_steps`，把 `guidance_scale` 转为 `cfg_scale`，而 OpenAI 兼容生图接口会把 `image_count` 转为 `n`。面向外部调用方时，应优先使用平台标准字段；没有明确映射的私有参数再放入 `provider_params`。
 
 文件转存规则：
 

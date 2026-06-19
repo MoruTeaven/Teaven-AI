@@ -7,6 +7,17 @@ export interface ProviderCapability {
   supports_stream?: boolean;
   result_delivery?: "direct" | "polling" | "webhook";
   poll_interval_seconds?: number;
+  parameters?: ProviderParameterSpec[];
+}
+
+export interface ProviderParameterSpec {
+  name: string;
+  type: "string" | "integer" | "number" | "boolean" | "object";
+  required?: boolean;
+  default?: string | number | boolean | null;
+  description: string;
+  maps_to?: string;
+  aliases?: string[];
 }
 
 export interface AsyncTaskResponse {

@@ -12,7 +12,19 @@ const MANIFEST: ProviderPluginManifest = {
     "images.generations": {
       execution_mode: "async_polling",
       result_delivery: "polling",
-      poll_interval_seconds: 2
+      poll_interval_seconds: 2,
+      parameters: [
+        { name: "prompt", type: "string", required: true, description: "生图提示词", maps_to: "prompt" },
+        { name: "size", type: "string", default: "1024x1024", description: "图片尺寸，会解析为 width 和 height", maps_to: "width,height" },
+        { name: "width", type: "integer", default: 1024, description: "图片宽度", maps_to: "width" },
+        { name: "height", type: "integer", default: 1024, description: "图片高度", maps_to: "height" },
+        { name: "image_count", type: "integer", default: 1, description: "生成图片数量", maps_to: "num_images_per_prompt", aliases: ["n"] },
+        { name: "steps", type: "integer", default: 30, description: "迭代/采样步数", maps_to: "num_inference_steps", aliases: ["num_inference_steps"] },
+        { name: "guidance_scale", type: "number", default: 1.0, description: "提示词引导强度", maps_to: "cfg_scale", aliases: ["cfg_scale"] },
+        { name: "negative_prompt", type: "string", default: "", description: "反向提示词", maps_to: "negative_prompt" },
+        { name: "seed", type: "integer", description: "随机种子", maps_to: "seed" },
+        { name: "provider_params", type: "object", description: "Moark 原生参数透传区" }
+      ]
     }
   }
 };
@@ -114,20 +126,22 @@ async function forwardAsyncImageGeneration(
 }
 
 function buildMoarkImageRequest(request: ImageGenerationRequest, providerModel: string): Record<string, unknown> {
+  const providerParams = objectParam(request.provider_params);
+  const parsedSize = parseSize(request.size);
   const upstreamRequest: Record<string, unknown> = {
+    ...providerParams,
     model: providerModel,
     prompt: request.prompt,
-    num_images_per_prompt: request.num_images_per_prompt ?? request.n ?? 1,
-    num_inference_steps: request.num_inference_steps ?? 4,
-    cfg_scale: request.cfg_scale ?? 1.0,
-    negative_prompt: request.negative_prompt ?? "",
-    seed: request.seed,
-    lora_weights: request.lora_weights
+    num_images_per_prompt: numberParam(request.image_count, request.n, request.num_images_per_prompt, providerParams.num_images_per_prompt) ?? 1,
+    num_inference_steps: numberParam(request.steps, request.num_inference_steps, providerParams.num_inference_steps) ?? 30,
+    cfg_scale: numberParam(request.guidance_scale, request.cfg_scale, providerParams.cfg_scale) ?? 1.0,
+    negative_prompt: stringParam(request.negative_prompt, providerParams.negative_prompt) ?? "",
+    seed: numberParam(request.seed, providerParams.seed),
+    lora_weights: request.lora_weights ?? providerParams.lora_weights
   };
 
-  const width = typeof request.width === "number" ? request.width : undefined;
-  const height = typeof request.height === "number" ? request.height : undefined;
-  const parsedSize = parseSize(request.size);
+  const width = numberParam(request.width, providerParams.width);
+  const height = numberParam(request.height, providerParams.height);
   upstreamRequest.width = width ?? parsedSize?.width ?? 1024;
   upstreamRequest.height = height ?? parsedSize?.height ?? 1024;
 
@@ -138,6 +152,28 @@ function buildMoarkImageRequest(request: ImageGenerationRequest, providerModel: 
   });
 
   return upstreamRequest;
+}
+
+function objectParam(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value) ? { ...(value as Record<string, unknown>) } : {};
+}
+
+function numberParam(...values: unknown[]): number | undefined {
+  for (const value of values) {
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+function stringParam(...values: unknown[]): string | undefined {
+  for (const value of values) {
+    if (typeof value === "string") {
+      return value;
+    }
+  }
+  return undefined;
 }
 
 async function mapUpstreamError(response: Response): Promise<Error> {

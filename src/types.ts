@@ -90,11 +90,19 @@ export interface ChatCompletionRequest {
 export interface ImageGenerationRequest {
   model: string;
   prompt: string;
+  image_count?: number;
   n?: number;
   size?: string;
+  width?: number;
+  height?: number;
+  steps?: number;
+  guidance_scale?: number;
+  negative_prompt?: string;
+  seed?: number;
   response_format?: "url" | "b64_json";
   quality?: string;
   style?: string;
+  provider_params?: Record<string, unknown>;
   [key: string]: unknown;
 }
 

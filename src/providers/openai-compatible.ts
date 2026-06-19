@@ -14,7 +14,18 @@ const MANIFEST: ProviderPluginManifest = {
       supports_stream: true
     },
     "images.generations": {
-      execution_mode: "sync"
+      execution_mode: "sync",
+      parameters: [
+        { name: "prompt", type: "string", required: true, description: "生图提示词", maps_to: "prompt" },
+        { name: "size", type: "string", description: "图片尺寸", maps_to: "size" },
+        { name: "width", type: "integer", description: "图片宽度，需和 height 一起传", maps_to: "size" },
+        { name: "height", type: "integer", description: "图片高度，需和 width 一起传", maps_to: "size" },
+        { name: "image_count", type: "integer", default: 1, description: "生成图片数量", maps_to: "n", aliases: ["n"] },
+        { name: "response_format", type: "string", default: "url", description: "图片返回格式", maps_to: "response_format" },
+        { name: "quality", type: "string", description: "图片质量，具体取值由上游模型决定", maps_to: "quality" },
+        { name: "style", type: "string", description: "图片风格，具体取值由上游模型决定", maps_to: "style" },
+        { name: "provider_params", type: "object", description: "OpenAI 兼容上游原生参数透传区" }
+      ]
     }
   }
 };
@@ -116,10 +127,7 @@ async function forwardImageGeneration(request: ImageGenerationRequest, context: 
 
   const baseUrl = context.credential.base_url || "https://api.openai.com/v1";
   const upstreamUrl = joinUrl(baseUrl, "/images/generations");
-  const upstreamRequest = {
-    ...request,
-    model: context.route.provider_model
-  };
+  const upstreamRequest = buildOpenAIImageRequest(request, context.route.provider_model);
 
   const upstream = await fetch(upstreamUrl, {
     method: "POST",
@@ -143,6 +151,48 @@ async function forwardImageGeneration(request: ImageGenerationRequest, context: 
       "X-Request-Id": context.request_id
     }
   });
+}
+
+function buildOpenAIImageRequest(request: ImageGenerationRequest, providerModel: string): Record<string, unknown> {
+  const providerParams = objectParam(request.provider_params);
+  const upstreamRequest: Record<string, unknown> = {
+    ...providerParams,
+    ...request,
+    model: providerModel
+  };
+  const imageCount = numberParam(request.image_count, request.n, providerParams.n);
+  const width = numberParam(request.width);
+  const height = numberParam(request.height);
+
+  if (imageCount !== undefined) {
+    upstreamRequest.n = imageCount;
+  }
+  if (!request.size && width !== undefined && height !== undefined) {
+    upstreamRequest.size = `${width}x${height}`;
+  }
+  delete upstreamRequest.image_count;
+  delete upstreamRequest.provider_params;
+  if (request.width !== undefined) {
+    delete upstreamRequest.width;
+  }
+  if (request.height !== undefined) {
+    delete upstreamRequest.height;
+  }
+
+  return upstreamRequest;
+}
+
+function objectParam(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value) ? { ...(value as Record<string, unknown>) } : {};
+}
+
+function numberParam(...values: unknown[]): number | undefined {
+  for (const value of values) {
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return value;
+    }
+  }
+  return undefined;
 }
 
 function joinUrl(baseUrl: string, path: string): string {
