@@ -66,7 +66,7 @@ export async function handleAccountRequest(request: Request, env: Env, requestId
       return redirectResponse("/account/login", requestId);
     }
 
-    return htmlResponse(ACCOUNT_APP_HTML, {
+    return htmlResponse(renderAccountAppHtml(env), {
       headers: {
         "X-Request-Id": requestId
       }
@@ -1015,7 +1015,9 @@ function escapeHtml(value: unknown): string {
     .replace(/'/g, "&#039;");
 }
 
-const ACCOUNT_APP_HTML = String.raw`<!doctype html>
+function renderAccountAppHtml(env: Env): string {
+  const origin = env.API_ORIGIN || '';
+  return String.raw`<!doctype html>
 <html lang="zh-CN" data-theme="dark">
 <head>
   <meta charset="utf-8">
@@ -1580,6 +1582,7 @@ Content-Type: application/json</code></pre></div>
     </section>
   </div>
 
+  <script>window.__APP_ORIGIN__ = ${JSON.stringify(origin)};</script>
   <script>
     let state = null;
     const $ = (selector) => document.querySelector(selector);
@@ -1804,7 +1807,7 @@ Content-Type: application/json</code></pre></div>
     }
 
     function renderApiDocs() {
-      const origin = window.location.origin;
+      const origin = window.__APP_ORIGIN__ || window.location.origin;
       const imageModel = findModelByModality('image') || 'image-basic';
       const videoModel = findModelByModality('video') || 'video-basic';
       const mediaModels = state.models.filter((model) => model.modality === 'image' || model.modality === 'video' || model.modality === 'file');
@@ -2335,3 +2338,4 @@ Content-Type: application/json</code></pre></div>
   </script>
 </body>
 </html>`;
+}
