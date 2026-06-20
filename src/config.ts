@@ -79,6 +79,7 @@ export function listModels(config: GatewayConfig): ModelConfig[] {
           supports_async: upstreamModel.supports_async !== false,
           status: upstreamModel.status || "active",
           price: upstreamModel.price,
+          price_unit: upstreamModel.price_unit,
           routes: [route]
         });
       }

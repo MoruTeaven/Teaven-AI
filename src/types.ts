@@ -31,6 +31,8 @@ export type UpstreamStatus = "active" | "disabled" | "degraded";
 export type ModelStatus = "active" | "hidden" | "disabled";
 export type UpstreamModelStatus = "active" | "hidden" | "disabled";
 
+export type PriceUnit = "per_1m_tokens" | "per_call";
+
 export interface UpstreamModelConfig {
   alias: string;
   provider_model: string;
@@ -41,6 +43,7 @@ export interface UpstreamModelConfig {
   weight?: number;
   status?: UpstreamModelStatus;
   price?: string;
+  price_unit?: PriceUnit;
 }
 
 export interface UpstreamConfig {
@@ -77,6 +80,7 @@ export interface ModelConfig {
   supports_async?: boolean;
   status?: ModelStatus;
   price?: string;
+  price_unit?: PriceUnit;
   routes: ProviderRouteConfig[];
 }
 
