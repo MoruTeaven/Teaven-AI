@@ -93,9 +93,15 @@ export interface UsageSummary {
 
 export async function loadManagedGatewayConfig(env: Env): Promise<GatewayConfig | undefined> {
   if (env.DB) {
-    const row = await env.DB.prepare("SELECT config_json FROM gateway_configs WHERE key = ?").bind(D1_GATEWAY_CONFIG_KEY).first<D1Row>();
-    if (typeof row?.config_json === "string") {
-      return JSON.parse(row.config_json) as GatewayConfig;
+    try {
+      const row = await env.DB.prepare("SELECT config_json FROM gateway_configs WHERE key = ?").bind(D1_GATEWAY_CONFIG_KEY).first<D1Row>();
+      if (typeof row?.config_json === "string") {
+        return JSON.parse(row.config_json) as GatewayConfig;
+      }
+    } catch (error) {
+      if (!isMissingD1TableError(error, "gateway_configs")) {
+        throw error;
+      }
     }
   }
 
@@ -111,14 +117,20 @@ export async function loadManagedGatewayConfig(env: Env): Promise<GatewayConfig 
 
 export async function saveManagedGatewayConfig(env: Env, config: GatewayConfig): Promise<void> {
   if (env.DB) {
-    await env.DB.prepare(`
-      INSERT INTO gateway_configs (key, config_json, updated_at)
-      VALUES (?, ?, ?)
-      ON CONFLICT(key) DO UPDATE SET
-        config_json = excluded.config_json,
-        updated_at = excluded.updated_at
-    `).bind(D1_GATEWAY_CONFIG_KEY, JSON.stringify(config), new Date().toISOString()).run();
-    return;
+    try {
+      await env.DB.prepare(`
+        INSERT INTO gateway_configs (key, config_json, updated_at)
+        VALUES (?, ?, ?)
+        ON CONFLICT(key) DO UPDATE SET
+          config_json = excluded.config_json,
+          updated_at = excluded.updated_at
+      `).bind(D1_GATEWAY_CONFIG_KEY, JSON.stringify(config), new Date().toISOString()).run();
+      return;
+    } catch (error) {
+      if (!isMissingD1TableError(error, "gateway_configs")) {
+        throw error;
+      }
+    }
   }
 
   MEMORY.gatewayConfig = config;
@@ -130,8 +142,14 @@ export async function saveManagedGatewayConfig(env: Env, config: GatewayConfig):
 
 export async function clearManagedGatewayConfig(env: Env): Promise<void> {
   if (env.DB) {
-    await env.DB.prepare("DELETE FROM gateway_configs WHERE key = ?").bind(D1_GATEWAY_CONFIG_KEY).run();
-    return;
+    try {
+      await env.DB.prepare("DELETE FROM gateway_configs WHERE key = ?").bind(D1_GATEWAY_CONFIG_KEY).run();
+      return;
+    } catch (error) {
+      if (!isMissingD1TableError(error, "gateway_configs")) {
+        throw error;
+      }
+    }
   }
 
   MEMORY.gatewayConfig = undefined;
@@ -143,8 +161,14 @@ export async function clearManagedGatewayConfig(env: Env): Promise<void> {
 
 export async function listAdminUsers(env: Env): Promise<AdminUser[]> {
   if (env.DB) {
-    const result = await env.DB.prepare("SELECT * FROM users ORDER BY created_at DESC LIMIT ?").bind(MAX_LIST_LIMIT).all<D1Row>();
-    return (result.results || []).map(adminUserFromRow);
+    try {
+      const result = await env.DB.prepare("SELECT * FROM users ORDER BY created_at DESC LIMIT ?").bind(MAX_LIST_LIMIT).all<D1Row>();
+      return (result.results || []).map(adminUserFromRow);
+    } catch (error) {
+      if (!isMissingD1TableError(error, "users")) {
+        throw error;
+      }
+    }
   }
 
   return listStoredObjects<AdminUser>(env, USER_PREFIX, MEMORY.users, isAdminUser);
@@ -152,8 +176,14 @@ export async function listAdminUsers(env: Env): Promise<AdminUser[]> {
 
 export async function getAdminUser(env: Env, userId: string): Promise<AdminUser | undefined> {
   if (env.DB) {
-    const row = await env.DB.prepare("SELECT * FROM users WHERE id = ?").bind(userId).first<D1Row>();
-    return row ? adminUserFromRow(row) : undefined;
+    try {
+      const row = await env.DB.prepare("SELECT * FROM users WHERE id = ?").bind(userId).first<D1Row>();
+      return row ? adminUserFromRow(row) : undefined;
+    } catch (error) {
+      if (!isMissingD1TableError(error, "users")) {
+        throw error;
+      }
+    }
   }
 
   return getStoredObject<AdminUser>(env, `${USER_PREFIX}${userId}`, MEMORY.users, userId, isAdminUser);
@@ -162,8 +192,14 @@ export async function getAdminUser(env: Env, userId: string): Promise<AdminUser 
 export async function findAdminUserByEmail(env: Env, email: string): Promise<AdminUser | undefined> {
   const normalizedEmail = email.trim().toLowerCase();
   if (env.DB) {
-    const row = await env.DB.prepare("SELECT * FROM users WHERE lower(email) = ? LIMIT 1").bind(normalizedEmail).first<D1Row>();
-    return row ? adminUserFromRow(row) : undefined;
+    try {
+      const row = await env.DB.prepare("SELECT * FROM users WHERE lower(email) = ? LIMIT 1").bind(normalizedEmail).first<D1Row>();
+      return row ? adminUserFromRow(row) : undefined;
+    } catch (error) {
+      if (!isMissingD1TableError(error, "users")) {
+        throw error;
+      }
+    }
   }
 
   const users = await listAdminUsers(env);
@@ -194,34 +230,40 @@ export async function saveAdminUser(env: Env, user: AdminUser): Promise<void> {
   user.email = user.email.trim().toLowerCase();
 
   if (env.DB) {
-    await env.DB.batch([
-      env.DB.prepare(`
-        INSERT INTO organizations (id, name, status, created_at, updated_at)
-        VALUES (?, ?, 'active', ?, ?)
-        ON CONFLICT(id) DO UPDATE SET updated_at = excluded.updated_at
-      `).bind(user.organization_id, "", user.created_at, user.updated_at),
-      env.DB.prepare(`
-        INSERT INTO users (id, organization_id, email, name, role, status, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(id) DO UPDATE SET
-          organization_id = excluded.organization_id,
-          email = excluded.email,
-          name = excluded.name,
-          role = excluded.role,
-          status = excluded.status,
-          updated_at = excluded.updated_at
-      `).bind(
-        user.id,
-        user.organization_id,
-        user.email,
-        user.name || "",
-        user.role,
-        user.status,
-        user.created_at,
-        user.updated_at
-      )
-    ]);
-    return;
+    try {
+      await env.DB.batch([
+        env.DB.prepare(`
+          INSERT INTO organizations (id, name, status, created_at, updated_at)
+          VALUES (?, ?, 'active', ?, ?)
+          ON CONFLICT(id) DO UPDATE SET updated_at = excluded.updated_at
+        `).bind(user.organization_id, "", user.created_at, user.updated_at),
+        env.DB.prepare(`
+          INSERT INTO users (id, organization_id, email, name, role, status, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(id) DO UPDATE SET
+            organization_id = excluded.organization_id,
+            email = excluded.email,
+            name = excluded.name,
+            role = excluded.role,
+            status = excluded.status,
+            updated_at = excluded.updated_at
+        `).bind(
+          user.id,
+          user.organization_id,
+          user.email,
+          user.name || "",
+          user.role,
+          user.status,
+          user.created_at,
+          user.updated_at
+        )
+      ]);
+      return;
+    } catch (error) {
+      if (!isMissingD1TableError(error, "organizations") && !isMissingD1TableError(error, "users")) {
+        throw error;
+      }
+    }
   }
 
   MEMORY.users.set(user.id, user);
@@ -233,8 +275,14 @@ export async function saveAdminUser(env: Env, user: AdminUser): Promise<void> {
 
 export async function listAdminApiKeys(env: Env): Promise<AdminApiKey[]> {
   if (env.DB) {
-    const result = await env.DB.prepare("SELECT * FROM api_keys ORDER BY created_at DESC LIMIT ?").bind(MAX_LIST_LIMIT).all<D1Row>();
-    return (result.results || []).map(adminApiKeyFromRow);
+    try {
+      const result = await env.DB.prepare("SELECT * FROM api_keys ORDER BY created_at DESC LIMIT ?").bind(MAX_LIST_LIMIT).all<D1Row>();
+      return (result.results || []).map(adminApiKeyFromRow);
+    } catch (error) {
+      if (!isMissingD1TableError(error, "api_keys")) {
+        throw error;
+      }
+    }
   }
 
   return listStoredObjects<AdminApiKey>(env, API_KEY_PREFIX, MEMORY.apiKeys, isAdminApiKey);
@@ -242,8 +290,14 @@ export async function listAdminApiKeys(env: Env): Promise<AdminApiKey[]> {
 
 export async function getAdminApiKey(env: Env, apiKeyId: string): Promise<AdminApiKey | undefined> {
   if (env.DB) {
-    const row = await env.DB.prepare("SELECT * FROM api_keys WHERE id = ?").bind(apiKeyId).first<D1Row>();
-    return row ? adminApiKeyFromRow(row) : undefined;
+    try {
+      const row = await env.DB.prepare("SELECT * FROM api_keys WHERE id = ?").bind(apiKeyId).first<D1Row>();
+      return row ? adminApiKeyFromRow(row) : undefined;
+    } catch (error) {
+      if (!isMissingD1TableError(error, "api_keys")) {
+        throw error;
+      }
+    }
   }
 
   return getStoredObject<AdminApiKey>(env, `${API_KEY_PREFIX}${apiKeyId}`, MEMORY.apiKeys, apiKeyId, isAdminApiKey);
@@ -287,8 +341,14 @@ export async function revealAdminApiKeyToken(env: Env, apiKey: AdminApiKey): Pro
 export async function findAdminApiKeyByToken(env: Env, token: string): Promise<AdminApiKey | undefined> {
   const hash = await sha256Base64Url(token);
   if (env.DB) {
-    const row = await env.DB.prepare("SELECT * FROM api_keys WHERE key_hash = ? LIMIT 1").bind(hash).first<D1Row>();
-    return row ? adminApiKeyFromRow(row) : undefined;
+    try {
+      const row = await env.DB.prepare("SELECT * FROM api_keys WHERE key_hash = ? LIMIT 1").bind(hash).first<D1Row>();
+      return row ? adminApiKeyFromRow(row) : undefined;
+    } catch (error) {
+      if (!isMissingD1TableError(error, "api_keys")) {
+        throw error;
+      }
+    }
   }
 
   let apiKeyId: string | undefined;
@@ -313,53 +373,18 @@ export async function findAdminApiKeyByToken(env: Env, token: string): Promise<A
 
 export async function saveAdminApiKey(env: Env, apiKey: AdminApiKey): Promise<void> {
   if (env.DB) {
-    await env.DB.prepare(`
-      INSERT INTO api_keys (
-        id,
-        organization_id,
-        user_id,
-        name,
-        key_hash,
-        key_prefix,
-        encrypted_key,
-        encrypted_key_iv,
-        allowed_models,
-        status,
-        expires_at,
-        last_used_at,
-        created_at,
-        updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(id) DO UPDATE SET
-        organization_id = excluded.organization_id,
-        user_id = excluded.user_id,
-        name = excluded.name,
-        key_hash = excluded.key_hash,
-        key_prefix = excluded.key_prefix,
-        encrypted_key = excluded.encrypted_key,
-        encrypted_key_iv = excluded.encrypted_key_iv,
-        allowed_models = excluded.allowed_models,
-        status = excluded.status,
-        expires_at = excluded.expires_at,
-        last_used_at = excluded.last_used_at,
-        updated_at = excluded.updated_at
-    `).bind(
-      apiKey.id,
-      apiKey.organization_id,
-      apiKey.user_id,
-      apiKey.name,
-      apiKey.key_hash,
-      apiKey.key_prefix,
-      apiKey.encrypted_key || null,
-      apiKey.encrypted_key_iv || null,
-      apiKey.allowed_models ? JSON.stringify(apiKey.allowed_models) : null,
-      apiKey.status,
-      apiKey.expires_at || null,
-      apiKey.last_used_at || null,
-      apiKey.created_at,
-      apiKey.updated_at
-    ).run();
-    return;
+    try {
+      await insertAdminApiKey(env.DB, apiKey, true);
+      return;
+    } catch (error) {
+      if (isMissingD1ColumnError(error, "encrypted_key") || isMissingD1ColumnError(error, "encrypted_key_iv")) {
+        await insertAdminApiKey(env.DB, apiKey, false);
+        return;
+      }
+      if (!isMissingD1TableError(error, "api_keys")) {
+        throw error;
+      }
+    }
   }
 
   const previous = MEMORY.apiKeys.get(apiKey.id);
@@ -375,6 +400,55 @@ export async function saveAdminApiKey(env: Env, apiKey: AdminApiKey): Promise<vo
       env.AI_GATEWAY_KV.put(`${API_KEY_HASH_PREFIX}${apiKey.key_hash}`, apiKey.id)
     ]);
   }
+}
+
+async function insertAdminApiKey(db: D1Database, apiKey: AdminApiKey, includeEncryptedFields: boolean): Promise<void> {
+  const encryptedColumns = includeEncryptedFields ? ",\n        encrypted_key,\n        encrypted_key_iv" : "";
+  const encryptedPlaceholders = includeEncryptedFields ? ", ?, ?" : "";
+  const encryptedUpdates = includeEncryptedFields ? ",\n        encrypted_key = excluded.encrypted_key,\n        encrypted_key_iv = excluded.encrypted_key_iv" : "";
+  const bindValues = [
+    apiKey.id,
+    apiKey.organization_id,
+    apiKey.user_id,
+    apiKey.name,
+    apiKey.key_hash,
+    apiKey.key_prefix,
+    ...(includeEncryptedFields ? [apiKey.encrypted_key || null, apiKey.encrypted_key_iv || null] : []),
+    apiKey.allowed_models ? JSON.stringify(apiKey.allowed_models) : null,
+    apiKey.status,
+    apiKey.expires_at || null,
+    apiKey.last_used_at || null,
+    apiKey.created_at,
+    apiKey.updated_at
+  ];
+
+  await db.prepare(`
+    INSERT INTO api_keys (
+      id,
+      organization_id,
+      user_id,
+      name,
+      key_hash,
+      key_prefix${encryptedColumns},
+      allowed_models,
+      status,
+      expires_at,
+      last_used_at,
+      created_at,
+      updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?${encryptedPlaceholders}, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET
+      organization_id = excluded.organization_id,
+      user_id = excluded.user_id,
+      name = excluded.name,
+      key_hash = excluded.key_hash,
+      key_prefix = excluded.key_prefix${encryptedUpdates},
+      allowed_models = excluded.allowed_models,
+      status = excluded.status,
+      expires_at = excluded.expires_at,
+      last_used_at = excluded.last_used_at,
+      updated_at = excluded.updated_at
+  `).bind(...bindValues).run();
 }
 
 export async function touchAdminApiKey(env: Env, apiKey: AdminApiKey): Promise<void> {
@@ -763,11 +837,17 @@ function numberValue(value: unknown): number {
 }
 
 function isMissingUsageTableError(error: unknown): boolean {
-  return errorMessage(error).includes("no such table: usage_records");
+  return isMissingD1TableError(error, "usage_records");
+}
+
+function isMissingD1TableError(error: unknown, table: string): boolean {
+  return errorMessage(error).includes(`no such table: ${table.toLowerCase()}`);
 }
 
 function isMissingD1ColumnError(error: unknown, column: string): boolean {
-  return errorMessage(error).includes(`no such column: ${column.toLowerCase()}`);
+  const message = errorMessage(error);
+  const normalizedColumn = column.toLowerCase();
+  return message.includes(`no such column: ${normalizedColumn}`) || message.includes(`no column named ${normalizedColumn}`);
 }
 
 function errorMessage(error: unknown): string {

@@ -6,8 +6,18 @@ type TaskRow = Record<string, unknown>;
 
 export async function saveTask(env: Env, task: AsyncTaskRecord): Promise<void> {
   if (env.DB) {
-    await saveTaskToD1(env.DB, task);
-    return;
+    try {
+      await saveTaskToD1(env.DB, task, true);
+      return;
+    } catch (error) {
+      if (isMissingD1ColumnError(error, "events")) {
+        await saveTaskToD1(env.DB, task, false);
+        return;
+      }
+      if (!isMissingD1TableError(error, "async_tasks")) {
+        throw error;
+      }
+    }
   }
 
   MEMORY_TASKS.set(task.id, task);
@@ -21,8 +31,14 @@ export async function saveTask(env: Env, task: AsyncTaskRecord): Promise<void> {
 
 export async function getTask(env: Env, taskId: string): Promise<AsyncTaskRecord | undefined> {
   if (env.DB) {
-    const row = await env.DB.prepare("SELECT * FROM async_tasks WHERE id = ?").bind(taskId).first<TaskRow>();
-    return row ? taskFromRow(row) : undefined;
+    try {
+      const row = await env.DB.prepare("SELECT * FROM async_tasks WHERE id = ?").bind(taskId).first<TaskRow>();
+      return row ? taskFromRow(row) : undefined;
+    } catch (error) {
+      if (!isMissingD1TableError(error, "async_tasks")) {
+        throw error;
+      }
+    }
   }
 
   if (env.AI_GATEWAY_KV) {
@@ -40,8 +56,14 @@ export async function listTasks(env: Env, limit = 25): Promise<AsyncTaskRecord[]
   const boundedLimit = Math.min(Math.max(requestedLimit, 1), 100);
 
   if (env.DB) {
-    const result = await env.DB.prepare("SELECT * FROM async_tasks ORDER BY created_at DESC LIMIT ?").bind(boundedLimit).all<TaskRow>();
-    return (result.results || []).map(taskFromRow);
+    try {
+      const result = await env.DB.prepare("SELECT * FROM async_tasks ORDER BY created_at DESC LIMIT ?").bind(boundedLimit).all<TaskRow>();
+      return (result.results || []).map(taskFromRow);
+    } catch (error) {
+      if (!isMissingD1TableError(error, "async_tasks")) {
+        throw error;
+      }
+    }
   }
 
   const kv = env.AI_GATEWAY_KV;
@@ -59,7 +81,38 @@ function taskKey(taskId: string): string {
   return `task:${taskId}`;
 }
 
-async function saveTaskToD1(db: D1Database, task: AsyncTaskRecord): Promise<void> {
+async function saveTaskToD1(db: D1Database, task: AsyncTaskRecord, includeEvents: boolean): Promise<void> {
+  const eventsColumn = includeEvents ? ",\n      events" : "";
+  const eventsPlaceholder = includeEvents ? ", ?" : "";
+  const eventsUpdate = includeEvents ? ",\n      events = excluded.events" : "";
+  const bindValues = [
+    task.id,
+    task.organization_id,
+    task.api_key_id,
+    task.type,
+    task.model,
+    task.upstream_id || null,
+    task.plugin_id || null,
+    task.provider_execution_mode || null,
+    task.provider_task_id || null,
+    jsonOrNull(task.provider_context),
+    task.status,
+    JSON.stringify(task.input || {}),
+    jsonOrNull(task.output),
+    task.store_output ? 1 : 0,
+    task.storage_ttl_seconds,
+    task.output_expires_at || null,
+    task.callback_url || null,
+    jsonOrNull(task.metadata),
+    jsonOrNull(task.error),
+    task.idempotency_key || null,
+    task.next_poll_at || null,
+    task.created_at,
+    task.updated_at,
+    task.completed_at || null,
+    ...(includeEvents ? [jsonOrNull(task.events)] : [])
+  ];
+
   await db.prepare(`
     INSERT INTO async_tasks (
       id,
@@ -85,9 +138,8 @@ async function saveTaskToD1(db: D1Database, task: AsyncTaskRecord): Promise<void
       next_poll_at,
       created_at,
       updated_at,
-      completed_at,
-      events
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      completed_at${eventsColumn}
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?${eventsPlaceholder})
     ON CONFLICT(id) DO UPDATE SET
       organization_id = excluded.organization_id,
       api_key_id = excluded.api_key_id,
@@ -110,35 +162,8 @@ async function saveTaskToD1(db: D1Database, task: AsyncTaskRecord): Promise<void
       idempotency_key = excluded.idempotency_key,
       next_poll_at = excluded.next_poll_at,
       updated_at = excluded.updated_at,
-      completed_at = excluded.completed_at,
-      events = excluded.events
-  `).bind(
-    task.id,
-    task.organization_id,
-    task.api_key_id,
-    task.type,
-    task.model,
-    task.upstream_id || null,
-    task.plugin_id || null,
-    task.provider_execution_mode || null,
-    task.provider_task_id || null,
-    jsonOrNull(task.provider_context),
-    task.status,
-    JSON.stringify(task.input || {}),
-    jsonOrNull(task.output),
-    task.store_output ? 1 : 0,
-    task.storage_ttl_seconds,
-    task.output_expires_at || null,
-    task.callback_url || null,
-    jsonOrNull(task.metadata),
-    jsonOrNull(task.error),
-    task.idempotency_key || null,
-    task.next_poll_at || null,
-    task.created_at,
-    task.updated_at,
-    task.completed_at || null,
-    jsonOrNull(task.events)
-  ).run();
+      completed_at = excluded.completed_at${eventsUpdate}
+  `).bind(...bindValues).run();
 }
 
 function taskFromRow(row: TaskRow): AsyncTaskRecord {
@@ -207,6 +232,20 @@ function optionalString(value: unknown): string | undefined {
 
 function numberValue(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) ? value : Number(value || 0);
+}
+
+function isMissingD1TableError(error: unknown, table: string): boolean {
+  return errorMessage(error).includes(`no such table: ${table.toLowerCase()}`);
+}
+
+function isMissingD1ColumnError(error: unknown, column: string): boolean {
+  const message = errorMessage(error);
+  const normalizedColumn = column.toLowerCase();
+  return message.includes(`no such column: ${normalizedColumn}`) || message.includes(`no column named ${normalizedColumn}`);
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
 }
 
 function isTaskRecord(value: unknown): value is AsyncTaskRecord {
