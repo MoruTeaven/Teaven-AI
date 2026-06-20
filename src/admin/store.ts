@@ -448,8 +448,15 @@ export async function recordTaskUsage(env: Env, task: AsyncTaskRecord, statusCod
 
 export async function listUsageRecords(env: Env): Promise<UsageRecord[]> {
   if (env.DB) {
-    const result = await env.DB.prepare("SELECT * FROM usage_records ORDER BY created_at DESC LIMIT ?").bind(MAX_LIST_LIMIT).all<D1Row>();
-    return (result.results || []).map(usageRecordFromRow);
+    try {
+      const result = await env.DB.prepare("SELECT * FROM usage_records ORDER BY created_at DESC LIMIT ?").bind(MAX_LIST_LIMIT).all<D1Row>();
+      return (result.results || []).map(usageRecordFromRow);
+    } catch (error) {
+      if (isMissingUsageTableError(error)) {
+        return [];
+      }
+      throw error;
+    }
   }
 
   return listStoredObjects<UsageRecord>(env, USAGE_PREFIX, MEMORY.usage, isUsageRecord);
@@ -457,52 +464,17 @@ export async function listUsageRecords(env: Env): Promise<UsageRecord[]> {
 
 export async function summarizeUsage(env: Env): Promise<UsageSummary> {
   if (env.DB) {
-    const [totalRow, byModelRows, recentRows] = await Promise.all([
-      env.DB.prepare(`
-        SELECT
-          COUNT(*) AS total_requests,
-          COALESCE(SUM(total_tokens), 0) AS total_tokens,
-          COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,
-          COALESCE(SUM(completion_tokens), 0) AS completion_tokens,
-          COALESCE(SUM(media_count), 0) AS media_count,
-          COALESCE(SUM(cost), 0) AS cost
-        FROM usage_records
-      `).first<D1Row>(),
-      env.DB.prepare(`
-        SELECT
-          model,
-          COUNT(*) AS requests,
-          COALESCE(SUM(total_tokens), 0) AS total_tokens,
-          COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,
-          COALESCE(SUM(completion_tokens), 0) AS completion_tokens,
-          COALESCE(SUM(media_count), 0) AS media_count,
-          COALESCE(SUM(cost), 0) AS cost
-        FROM usage_records
-        GROUP BY model
-        ORDER BY requests DESC
-        LIMIT ?
-      `).bind(MAX_LIST_LIMIT).all<D1Row>(),
-      env.DB.prepare("SELECT * FROM usage_records ORDER BY created_at DESC LIMIT 50").all<D1Row>()
-    ]);
-
-    return {
-      total_requests: numberValue(totalRow?.total_requests),
-      total_tokens: numberValue(totalRow?.total_tokens),
-      prompt_tokens: numberValue(totalRow?.prompt_tokens),
-      completion_tokens: numberValue(totalRow?.completion_tokens),
-      media_count: numberValue(totalRow?.media_count),
-      cost: numberValue(totalRow?.cost),
-      by_model: (byModelRows.results || []).map((row) => ({
-        model: stringValue(row.model),
-        requests: numberValue(row.requests),
-        total_tokens: numberValue(row.total_tokens),
-        prompt_tokens: numberValue(row.prompt_tokens),
-        completion_tokens: numberValue(row.completion_tokens),
-        media_count: numberValue(row.media_count),
-        cost: numberValue(row.cost)
-      })),
-      recent: (recentRows.results || []).map(usageRecordFromRow)
-    };
+    try {
+      return await summarizeUsageFromD1(env.DB, true);
+    } catch (error) {
+      if (isMissingUsageTableError(error)) {
+        return emptyUsageSummary();
+      }
+      if (isMissingD1ColumnError(error, "cost")) {
+        return summarizeUsageFromD1(env.DB, false);
+      }
+      throw error;
+    }
   }
 
   const records = (await listUsageRecords(env)).sort((left, right) => right.created_at.localeCompare(left.created_at));
@@ -547,50 +519,83 @@ export async function summarizeUsage(env: Env): Promise<UsageSummary> {
   return summary;
 }
 
+async function summarizeUsageFromD1(db: D1Database, includeCost: boolean): Promise<UsageSummary> {
+  const costSelect = includeCost ? "COALESCE(SUM(cost), 0) AS cost" : "0 AS cost";
+  const [totalRow, byModelRows, recentRows] = await Promise.all([
+    db.prepare(`
+      SELECT
+        COUNT(*) AS total_requests,
+        COALESCE(SUM(total_tokens), 0) AS total_tokens,
+        COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,
+        COALESCE(SUM(completion_tokens), 0) AS completion_tokens,
+        COALESCE(SUM(media_count), 0) AS media_count,
+        ${costSelect}
+      FROM usage_records
+    `).first<D1Row>(),
+    db.prepare(`
+      SELECT
+        model,
+        COUNT(*) AS requests,
+        COALESCE(SUM(total_tokens), 0) AS total_tokens,
+        COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,
+        COALESCE(SUM(completion_tokens), 0) AS completion_tokens,
+        COALESCE(SUM(media_count), 0) AS media_count,
+        ${costSelect}
+      FROM usage_records
+      GROUP BY model
+      ORDER BY requests DESC
+      LIMIT ?
+    `).bind(MAX_LIST_LIMIT).all<D1Row>(),
+    db.prepare("SELECT * FROM usage_records ORDER BY created_at DESC LIMIT 50").all<D1Row>()
+  ]);
+
+  return {
+    total_requests: numberValue(totalRow?.total_requests),
+    total_tokens: numberValue(totalRow?.total_tokens),
+    prompt_tokens: numberValue(totalRow?.prompt_tokens),
+    completion_tokens: numberValue(totalRow?.completion_tokens),
+    media_count: numberValue(totalRow?.media_count),
+    cost: numberValue(totalRow?.cost),
+    by_model: (byModelRows.results || []).map((row) => ({
+      model: stringValue(row.model),
+      requests: numberValue(row.requests),
+      total_tokens: numberValue(row.total_tokens),
+      prompt_tokens: numberValue(row.prompt_tokens),
+      completion_tokens: numberValue(row.completion_tokens),
+      media_count: numberValue(row.media_count),
+      cost: numberValue(row.cost)
+    })),
+    recent: (recentRows.results || []).map(usageRecordFromRow)
+  };
+}
+
+function emptyUsageSummary(): UsageSummary {
+  return {
+    total_requests: 0,
+    total_tokens: 0,
+    prompt_tokens: 0,
+    completion_tokens: 0,
+    media_count: 0,
+    cost: 0,
+    by_model: [],
+    recent: []
+  };
+}
+
 async function saveUsageRecord(env: Env, record: UsageRecord): Promise<void> {
   if (env.DB) {
-    await env.DB.prepare(`
-      INSERT INTO usage_records (
-        id,
-        request_id,
-        organization_id,
-        api_key_id,
-        endpoint,
-        model,
-        upstream_id,
-        plugin_id,
-        provider_model,
-        status_code,
-        latency_ms,
-        stream,
-        prompt_tokens,
-        completion_tokens,
-        total_tokens,
-        media_count,
-        cost,
-        created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(request_id) DO NOTHING
-    `).bind(
-      record.id,
-      record.request_id,
-      record.organization_id,
-      record.api_key_id,
-      record.endpoint,
-      record.model,
-      record.upstream_id || null,
-      record.plugin_id || null,
-      record.provider_model || null,
-      record.status_code,
-      record.latency_ms,
-      record.stream ? 1 : 0,
-      record.prompt_tokens,
-      record.completion_tokens,
-      record.total_tokens,
-      record.media_count,
-      record.cost,
-      record.created_at
-    ).run();
+    try {
+      await insertUsageRecord(env.DB, record, true);
+    } catch (error) {
+      if (isMissingUsageTableError(error)) {
+        return;
+      }
+      if (isMissingD1ColumnError(error, "cost")) {
+        await insertUsageRecord(env.DB, record, false);
+        return;
+      }
+      throw error;
+    }
     return;
   }
 
@@ -599,6 +604,53 @@ async function saveUsageRecord(env: Env, record: UsageRecord): Promise<void> {
   if (env.AI_GATEWAY_KV) {
     await env.AI_GATEWAY_KV.put(`${USAGE_PREFIX}${record.id}`, JSON.stringify(record));
   }
+}
+
+async function insertUsageRecord(db: D1Database, record: UsageRecord, includeCost: boolean): Promise<void> {
+  const costColumn = includeCost ? ",\n        cost" : "";
+  const costPlaceholder = includeCost ? ", ?" : "";
+  const bindValues = [
+    record.id,
+    record.request_id,
+    record.organization_id,
+    record.api_key_id,
+    record.endpoint,
+    record.model,
+    record.upstream_id || null,
+    record.plugin_id || null,
+    record.provider_model || null,
+    record.status_code,
+    record.latency_ms,
+    record.stream ? 1 : 0,
+    record.prompt_tokens,
+    record.completion_tokens,
+    record.total_tokens,
+    record.media_count,
+    ...(includeCost ? [record.cost] : []),
+    record.created_at
+  ];
+
+  await db.prepare(`
+    INSERT OR IGNORE INTO usage_records (
+      id,
+      request_id,
+      organization_id,
+      api_key_id,
+      endpoint,
+      model,
+      upstream_id,
+      plugin_id,
+      provider_model,
+      status_code,
+      latency_ms,
+      stream,
+      prompt_tokens,
+      completion_tokens,
+      total_tokens,
+      media_count${costColumn},
+      created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?${costPlaceholder}, ?)
+  `).bind(...bindValues).run();
 }
 
 async function listStoredObjects<T>(
@@ -708,6 +760,18 @@ function optionalString(value: unknown): string | undefined {
 
 function numberValue(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) ? value : Number(value || 0);
+}
+
+function isMissingUsageTableError(error: unknown): boolean {
+  return errorMessage(error).includes("no such table: usage_records");
+}
+
+function isMissingD1ColumnError(error: unknown, column: string): boolean {
+  return errorMessage(error).includes(`no such column: ${column.toLowerCase()}`);
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
 }
 
 function normalizeUsage(value: unknown): Pick<UsageRecord, "prompt_tokens" | "completion_tokens" | "total_tokens"> {
