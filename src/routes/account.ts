@@ -1728,25 +1728,77 @@ Content-Type: application/json</code></pre></div>
 
       function providerStatusText(status) {
         if (!status) return '-';
-        const text = statusText(status);
-        if (text !== status) return text;
-        const normalized = String(status).toLowerCase();
+        const normalized = String(status).trim().toLowerCase().replace(/[\s-]+/g, '_');
+        const text = statusText(normalized);
+        if (text !== normalized) return text;
         const map = {
+          new: '新建',
+          created: '已创建',
+          accepted: '已接收',
+          submitted: '已提交',
+          scheduled: '已调度',
+          waiting: '等待中',
+          wait: '等待中',
+          pending_review: '等待审核',
+          queue: '排队中',
+          queued: '排队中',
           pending: '等待中',
+          starting: '启动中',
+          started: '已启动',
+          init: '初始化中',
+          initializing: '初始化中',
+          in_progress: '进行中',
           processing: '处理中',
           process: '处理中',
+          generating: '生成中',
+          rendering: '渲染中',
+          uploading: '上传中',
+          storing: '存储中',
+          delivering: '投递中',
+          retry: '重试中',
+          retrying: '重试中',
+          done: '已完成',
+          finished: '已完成',
+          finish: '已完成',
           completed: '已完成',
           complete: '已完成',
           success: '成功',
           successful: '成功',
           failure: '失败',
+          failed: '失败',
           error: '错误',
+          errored: '错误',
+          http_error: 'HTTP 错误',
+          request_error: '请求错误',
+          api_error: '接口错误',
+          upstream_error: '上游错误',
+          bad_request: '请求参数错误',
+          invalid: '无效',
+          unauthorized: '未授权',
+          forbidden: '禁止访问',
+          not_found: '未找到',
+          rate_limited: '已限流',
+          throttled: '已限流',
+          internal_error: '内部错误',
+          server_error: '服务端错误',
+          service_unavailable: '服务不可用',
+          rejected: '已拒绝',
+          blocked: '已阻塞',
+          denied: '已拒绝',
           cancelled: '已取消',
+          canceled: '已取消',
           cancel: '已取消',
+          canceling: '取消中',
+          cancelling: '取消中',
           timeout: '超时',
-          timeouted: '已超时'
+          timed_out: '已超时',
+          timeouted: '已超时',
+          expired: '已过期',
+          ok: '正常',
+          warning: '警告',
+          degraded: '降级'
         };
-        return map[normalized] || status;
+        return map[normalized] || '未知状态：' + status;
       }
 
       function stageText(stage) {
