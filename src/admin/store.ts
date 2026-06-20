@@ -7,6 +7,8 @@ const API_KEY_PREFIX = "admin:api_key:";
 const API_KEY_HASH_PREFIX = "admin:api_key_hash:";
 const USAGE_PREFIX = "admin:usage:";
 const MAX_LIST_LIMIT = 200;
+const D1_GATEWAY_CONFIG_KEY = "default";
+type D1Row = Record<string, unknown>;
 
 const MEMORY = {
   gatewayConfig: undefined as GatewayConfig | undefined,
@@ -90,6 +92,13 @@ export interface UsageSummary {
 }
 
 export async function loadManagedGatewayConfig(env: Env): Promise<GatewayConfig | undefined> {
+  if (env.DB) {
+    const row = await env.DB.prepare("SELECT config_json FROM gateway_configs WHERE key = ?").bind(D1_GATEWAY_CONFIG_KEY).first<D1Row>();
+    if (typeof row?.config_json === "string") {
+      return JSON.parse(row.config_json) as GatewayConfig;
+    }
+  }
+
   if (env.AI_GATEWAY_KV) {
     const stored = await env.AI_GATEWAY_KV.get(GATEWAY_CONFIG_KEY, "json");
     if (stored && typeof stored === "object") {
@@ -101,6 +110,17 @@ export async function loadManagedGatewayConfig(env: Env): Promise<GatewayConfig 
 }
 
 export async function saveManagedGatewayConfig(env: Env, config: GatewayConfig): Promise<void> {
+  if (env.DB) {
+    await env.DB.prepare(`
+      INSERT INTO gateway_configs (key, config_json, updated_at)
+      VALUES (?, ?, ?)
+      ON CONFLICT(key) DO UPDATE SET
+        config_json = excluded.config_json,
+        updated_at = excluded.updated_at
+    `).bind(D1_GATEWAY_CONFIG_KEY, JSON.stringify(config), new Date().toISOString()).run();
+    return;
+  }
+
   MEMORY.gatewayConfig = config;
 
   if (env.AI_GATEWAY_KV) {
@@ -109,6 +129,11 @@ export async function saveManagedGatewayConfig(env: Env, config: GatewayConfig):
 }
 
 export async function clearManagedGatewayConfig(env: Env): Promise<void> {
+  if (env.DB) {
+    await env.DB.prepare("DELETE FROM gateway_configs WHERE key = ?").bind(D1_GATEWAY_CONFIG_KEY).run();
+    return;
+  }
+
   MEMORY.gatewayConfig = undefined;
 
   if (env.AI_GATEWAY_KV) {
@@ -117,15 +142,30 @@ export async function clearManagedGatewayConfig(env: Env): Promise<void> {
 }
 
 export async function listAdminUsers(env: Env): Promise<AdminUser[]> {
+  if (env.DB) {
+    const result = await env.DB.prepare("SELECT * FROM users ORDER BY created_at DESC LIMIT ?").bind(MAX_LIST_LIMIT).all<D1Row>();
+    return (result.results || []).map(adminUserFromRow);
+  }
+
   return listStoredObjects<AdminUser>(env, USER_PREFIX, MEMORY.users, isAdminUser);
 }
 
 export async function getAdminUser(env: Env, userId: string): Promise<AdminUser | undefined> {
+  if (env.DB) {
+    const row = await env.DB.prepare("SELECT * FROM users WHERE id = ?").bind(userId).first<D1Row>();
+    return row ? adminUserFromRow(row) : undefined;
+  }
+
   return getStoredObject<AdminUser>(env, `${USER_PREFIX}${userId}`, MEMORY.users, userId, isAdminUser);
 }
 
 export async function findAdminUserByEmail(env: Env, email: string): Promise<AdminUser | undefined> {
   const normalizedEmail = email.trim().toLowerCase();
+  if (env.DB) {
+    const row = await env.DB.prepare("SELECT * FROM users WHERE lower(email) = ? LIMIT 1").bind(normalizedEmail).first<D1Row>();
+    return row ? adminUserFromRow(row) : undefined;
+  }
+
   const users = await listAdminUsers(env);
   return users.find((user) => user.email.toLowerCase() === normalizedEmail);
 }
@@ -138,7 +178,7 @@ export async function createAdminUser(
   const user: AdminUser = {
     id: createId("user"),
     organization_id: input.organization_id || createId("organization"),
-    email: input.email,
+    email: input.email.trim().toLowerCase(),
     name: input.name,
     role: input.role || "member",
     status: input.status || "active",
@@ -151,6 +191,39 @@ export async function createAdminUser(
 }
 
 export async function saveAdminUser(env: Env, user: AdminUser): Promise<void> {
+  user.email = user.email.trim().toLowerCase();
+
+  if (env.DB) {
+    await env.DB.batch([
+      env.DB.prepare(`
+        INSERT INTO organizations (id, name, status, created_at, updated_at)
+        VALUES (?, ?, 'active', ?, ?)
+        ON CONFLICT(id) DO UPDATE SET updated_at = excluded.updated_at
+      `).bind(user.organization_id, "", user.created_at, user.updated_at),
+      env.DB.prepare(`
+        INSERT INTO users (id, organization_id, email, name, role, status, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+          organization_id = excluded.organization_id,
+          email = excluded.email,
+          name = excluded.name,
+          role = excluded.role,
+          status = excluded.status,
+          updated_at = excluded.updated_at
+      `).bind(
+        user.id,
+        user.organization_id,
+        user.email,
+        user.name || "",
+        user.role,
+        user.status,
+        user.created_at,
+        user.updated_at
+      )
+    ]);
+    return;
+  }
+
   MEMORY.users.set(user.id, user);
 
   if (env.AI_GATEWAY_KV) {
@@ -159,10 +232,20 @@ export async function saveAdminUser(env: Env, user: AdminUser): Promise<void> {
 }
 
 export async function listAdminApiKeys(env: Env): Promise<AdminApiKey[]> {
+  if (env.DB) {
+    const result = await env.DB.prepare("SELECT * FROM api_keys ORDER BY created_at DESC LIMIT ?").bind(MAX_LIST_LIMIT).all<D1Row>();
+    return (result.results || []).map(adminApiKeyFromRow);
+  }
+
   return listStoredObjects<AdminApiKey>(env, API_KEY_PREFIX, MEMORY.apiKeys, isAdminApiKey);
 }
 
 export async function getAdminApiKey(env: Env, apiKeyId: string): Promise<AdminApiKey | undefined> {
+  if (env.DB) {
+    const row = await env.DB.prepare("SELECT * FROM api_keys WHERE id = ?").bind(apiKeyId).first<D1Row>();
+    return row ? adminApiKeyFromRow(row) : undefined;
+  }
+
   return getStoredObject<AdminApiKey>(env, `${API_KEY_PREFIX}${apiKeyId}`, MEMORY.apiKeys, apiKeyId, isAdminApiKey);
 }
 
@@ -203,6 +286,11 @@ export async function revealAdminApiKeyToken(env: Env, apiKey: AdminApiKey): Pro
 
 export async function findAdminApiKeyByToken(env: Env, token: string): Promise<AdminApiKey | undefined> {
   const hash = await sha256Base64Url(token);
+  if (env.DB) {
+    const row = await env.DB.prepare("SELECT * FROM api_keys WHERE key_hash = ? LIMIT 1").bind(hash).first<D1Row>();
+    return row ? adminApiKeyFromRow(row) : undefined;
+  }
+
   let apiKeyId: string | undefined;
 
   if (env.AI_GATEWAY_KV) {
@@ -224,6 +312,60 @@ export async function findAdminApiKeyByToken(env: Env, token: string): Promise<A
 }
 
 export async function saveAdminApiKey(env: Env, apiKey: AdminApiKey): Promise<void> {
+  if (env.DB) {
+    await env.DB.prepare(`
+      INSERT INTO api_keys (
+        id,
+        organization_id,
+        user_id,
+        name,
+        key_hash,
+        key_prefix,
+        encrypted_key,
+        encrypted_key_iv,
+        allowed_models,
+        status,
+        expires_at,
+        last_used_at,
+        created_at,
+        updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        organization_id = excluded.organization_id,
+        user_id = excluded.user_id,
+        name = excluded.name,
+        key_hash = excluded.key_hash,
+        key_prefix = excluded.key_prefix,
+        encrypted_key = excluded.encrypted_key,
+        encrypted_key_iv = excluded.encrypted_key_iv,
+        allowed_models = excluded.allowed_models,
+        status = excluded.status,
+        expires_at = excluded.expires_at,
+        last_used_at = excluded.last_used_at,
+        updated_at = excluded.updated_at
+    `).bind(
+      apiKey.id,
+      apiKey.organization_id,
+      apiKey.user_id,
+      apiKey.name,
+      apiKey.key_hash,
+      apiKey.key_prefix,
+      apiKey.encrypted_key || null,
+      apiKey.encrypted_key_iv || null,
+      apiKey.allowed_models ? JSON.stringify(apiKey.allowed_models) : null,
+      apiKey.status,
+      apiKey.expires_at || null,
+      apiKey.last_used_at || null,
+      apiKey.created_at,
+      apiKey.updated_at
+    ).run();
+    return;
+  }
+
+  const previous = MEMORY.apiKeys.get(apiKey.id);
+  if (previous && previous.key_hash !== apiKey.key_hash) {
+    MEMORY.apiKeyHashes.delete(previous.key_hash);
+  }
   MEMORY.apiKeys.set(apiKey.id, apiKey);
   MEMORY.apiKeyHashes.set(apiKey.key_hash, apiKey.id);
 
@@ -305,10 +447,64 @@ export async function recordTaskUsage(env: Env, task: AsyncTaskRecord, statusCod
 }
 
 export async function listUsageRecords(env: Env): Promise<UsageRecord[]> {
+  if (env.DB) {
+    const result = await env.DB.prepare("SELECT * FROM usage_records ORDER BY created_at DESC LIMIT ?").bind(MAX_LIST_LIMIT).all<D1Row>();
+    return (result.results || []).map(usageRecordFromRow);
+  }
+
   return listStoredObjects<UsageRecord>(env, USAGE_PREFIX, MEMORY.usage, isUsageRecord);
 }
 
 export async function summarizeUsage(env: Env): Promise<UsageSummary> {
+  if (env.DB) {
+    const [totalRow, byModelRows, recentRows] = await Promise.all([
+      env.DB.prepare(`
+        SELECT
+          COUNT(*) AS total_requests,
+          COALESCE(SUM(total_tokens), 0) AS total_tokens,
+          COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,
+          COALESCE(SUM(completion_tokens), 0) AS completion_tokens,
+          COALESCE(SUM(media_count), 0) AS media_count,
+          COALESCE(SUM(cost), 0) AS cost
+        FROM usage_records
+      `).first<D1Row>(),
+      env.DB.prepare(`
+        SELECT
+          model,
+          COUNT(*) AS requests,
+          COALESCE(SUM(total_tokens), 0) AS total_tokens,
+          COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,
+          COALESCE(SUM(completion_tokens), 0) AS completion_tokens,
+          COALESCE(SUM(media_count), 0) AS media_count,
+          COALESCE(SUM(cost), 0) AS cost
+        FROM usage_records
+        GROUP BY model
+        ORDER BY requests DESC
+        LIMIT ?
+      `).bind(MAX_LIST_LIMIT).all<D1Row>(),
+      env.DB.prepare("SELECT * FROM usage_records ORDER BY created_at DESC LIMIT 50").all<D1Row>()
+    ]);
+
+    return {
+      total_requests: numberValue(totalRow?.total_requests),
+      total_tokens: numberValue(totalRow?.total_tokens),
+      prompt_tokens: numberValue(totalRow?.prompt_tokens),
+      completion_tokens: numberValue(totalRow?.completion_tokens),
+      media_count: numberValue(totalRow?.media_count),
+      cost: numberValue(totalRow?.cost),
+      by_model: (byModelRows.results || []).map((row) => ({
+        model: stringValue(row.model),
+        requests: numberValue(row.requests),
+        total_tokens: numberValue(row.total_tokens),
+        prompt_tokens: numberValue(row.prompt_tokens),
+        completion_tokens: numberValue(row.completion_tokens),
+        media_count: numberValue(row.media_count),
+        cost: numberValue(row.cost)
+      })),
+      recent: (recentRows.results || []).map(usageRecordFromRow)
+    };
+  }
+
   const records = (await listUsageRecords(env)).sort((left, right) => right.created_at.localeCompare(left.created_at));
   const byModel = new Map<string, UsageSummary["by_model"][number]>();
   const summary: UsageSummary = {
@@ -352,6 +548,52 @@ export async function summarizeUsage(env: Env): Promise<UsageSummary> {
 }
 
 async function saveUsageRecord(env: Env, record: UsageRecord): Promise<void> {
+  if (env.DB) {
+    await env.DB.prepare(`
+      INSERT INTO usage_records (
+        id,
+        request_id,
+        organization_id,
+        api_key_id,
+        endpoint,
+        model,
+        upstream_id,
+        plugin_id,
+        provider_model,
+        status_code,
+        latency_ms,
+        stream,
+        prompt_tokens,
+        completion_tokens,
+        total_tokens,
+        media_count,
+        cost,
+        created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(request_id) DO NOTHING
+    `).bind(
+      record.id,
+      record.request_id,
+      record.organization_id,
+      record.api_key_id,
+      record.endpoint,
+      record.model,
+      record.upstream_id || null,
+      record.plugin_id || null,
+      record.provider_model || null,
+      record.status_code,
+      record.latency_ms,
+      record.stream ? 1 : 0,
+      record.prompt_tokens,
+      record.completion_tokens,
+      record.total_tokens,
+      record.media_count,
+      record.cost,
+      record.created_at
+    ).run();
+    return;
+  }
+
   MEMORY.usage.set(record.id, record);
 
   if (env.AI_GATEWAY_KV) {
@@ -387,6 +629,85 @@ async function getStoredObject<T>(
   }
 
   return memoryStore.get(id);
+}
+
+function adminUserFromRow(row: D1Row): AdminUser {
+  return {
+    id: stringValue(row.id),
+    organization_id: stringValue(row.organization_id),
+    email: stringValue(row.email),
+    name: optionalString(row.name),
+    role: stringValue(row.role) as AdminUser["role"],
+    status: stringValue(row.status) as AdminUser["status"],
+    created_at: stringValue(row.created_at),
+    updated_at: stringValue(row.updated_at)
+  };
+}
+
+function adminApiKeyFromRow(row: D1Row): AdminApiKey {
+  return {
+    id: stringValue(row.id),
+    organization_id: stringValue(row.organization_id),
+    user_id: stringValue(row.user_id),
+    name: stringValue(row.name),
+    key_hash: stringValue(row.key_hash),
+    key_prefix: stringValue(row.key_prefix),
+    encrypted_key: optionalString(row.encrypted_key),
+    encrypted_key_iv: optionalString(row.encrypted_key_iv),
+    allowed_models: parseStringArray(row.allowed_models),
+    status: stringValue(row.status) as AdminApiKey["status"],
+    expires_at: optionalString(row.expires_at) || null,
+    created_at: stringValue(row.created_at),
+    updated_at: stringValue(row.updated_at),
+    last_used_at: optionalString(row.last_used_at) || null
+  };
+}
+
+function usageRecordFromRow(row: D1Row): UsageRecord {
+  return {
+    id: stringValue(row.id),
+    request_id: stringValue(row.request_id),
+    organization_id: stringValue(row.organization_id),
+    api_key_id: stringValue(row.api_key_id),
+    endpoint: stringValue(row.endpoint),
+    model: stringValue(row.model),
+    upstream_id: optionalString(row.upstream_id),
+    plugin_id: optionalString(row.plugin_id),
+    provider_model: optionalString(row.provider_model),
+    status_code: numberValue(row.status_code),
+    latency_ms: numberValue(row.latency_ms),
+    stream: row.stream === 1 || row.stream === true,
+    prompt_tokens: numberValue(row.prompt_tokens),
+    completion_tokens: numberValue(row.completion_tokens),
+    total_tokens: numberValue(row.total_tokens),
+    media_count: numberValue(row.media_count),
+    cost: numberValue(row.cost),
+    created_at: stringValue(row.created_at)
+  };
+}
+
+function parseStringArray(value: unknown): string[] | undefined {
+  if (typeof value !== "string" || value.length === 0) {
+    return undefined;
+  }
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === "string") : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function stringValue(value: unknown): string {
+  return typeof value === "string" ? value : String(value || "");
+}
+
+function optionalString(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function numberValue(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : Number(value || 0);
 }
 
 function normalizeUsage(value: unknown): Pick<UsageRecord, "prompt_tokens" | "completion_tokens" | "total_tokens"> {

@@ -197,8 +197,8 @@ async function handleAccountProfile(user: AdminUser, env: Env, requestId: string
       tasks: userTasks.map(publicTaskSummary),
       models,
       storage: {
-        durable: Boolean(env.AI_GATEWAY_KV),
-        source: env.AI_GATEWAY_KV ? "AI_GATEWAY_KV" : "memory"
+        durable: Boolean(env.DB || env.AI_GATEWAY_KV),
+        source: env.DB ? "D1" : env.AI_GATEWAY_KV ? "AI_GATEWAY_KV" : "memory"
       }
     },
     {

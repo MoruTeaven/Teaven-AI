@@ -444,7 +444,7 @@ async function handleUpsertAdminUpstream(request: Request, env: Env, requestId: 
   return jsonResponse(
     {
       upstream: publicUpstream(upstream, nextConfig, env),
-      config_source: env.AI_GATEWAY_KV ? "AI_GATEWAY_KV" : "memory"
+      config_source: env.DB ? "D1" : env.AI_GATEWAY_KV ? "AI_GATEWAY_KV" : "memory"
     },
     {
       headers: {
@@ -510,7 +510,7 @@ async function handleUpsertAdminModel(request: Request, env: Env, requestId: str
   return jsonResponse(
     {
       model: publicModel(savedModel, env),
-      config_source: env.AI_GATEWAY_KV ? "AI_GATEWAY_KV" : "memory"
+      config_source: env.DB ? "D1" : env.AI_GATEWAY_KV ? "AI_GATEWAY_KV" : "memory"
     },
     {
       headers: {
