@@ -1144,6 +1144,9 @@ const ACCOUNT_APP_HTML = String.raw`<!doctype html>
     .card h3 { margin: 0 0 12px; font-size: 17px; }
     .card-head { display: flex; justify-content: space-between; gap: 16px; align-items: flex-start; margin-bottom: 14px; }
     .card-head h3 { margin-bottom: 6px; }
+    .copy-docs-btn { font-size: 13px; padding: 6px 14px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg); color: var(--text); cursor: pointer; white-space: nowrap; transition: background .15s, border-color .15s; }
+    .copy-docs-btn:hover { border-color: var(--accent); color: var(--accent); }
+    .copy-docs-btn.copied { border-color: var(--success); color: var(--success); }
     .stat-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
     .stat { padding: 15px; background: var(--panel-strong); border: 1px solid var(--line); border-radius: 16px; }
     .stat strong { display: block; font-size: 28px; letter-spacing: -0.04em; }
@@ -1405,7 +1408,7 @@ const ACCOUNT_APP_HTML = String.raw`<!doctype html>
       <section id="api-docs" class="section">
         <div class="grid">
           <div class="card span-12 doc-block">
-            <div class="card-head"><h3>异步媒体、文件接口</h3></div>
+            <div class="card-head"><h3>异步媒体、文件接口</h3><button id="copyApiDocs" type="button" class="copy-docs-btn" title="将下方所有接口文档复制为 Markdown">复制为 Markdown</button></div>
             <p>图片、视频、文件等非文本能力统一使用异步任务接口。创建任务会立即返回 <code>queued</code> 状态，后续通过任务查询接口轮询结果；如传入 <code>callback_url</code>，后台完成后可向该地址投递任务结果。图片模型建议优先使用平台标准参数，平台会按当前模型绑定的 Provider 自动转换为上游参数。</p>
             <div id="mediaModelDocs"></div>
           </div>
@@ -2256,6 +2259,61 @@ Content-Type: application/json</code></pre></div>
         .replace(/\r/g, '\\r')
         .replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' }[char]));
     }
+
+    function apiDocsToMarkdown() {
+      const section = document.querySelector('#api-docs');
+      if (!section) return '';
+      const BQ = String.fromCharCode(96);
+      const FENCE = BQ + BQ + BQ;
+      const lines = [];
+      const blocks = section.querySelectorAll('.doc-block');
+      for (const block of blocks) {
+        const heading = block.querySelector('h3');
+        if (heading) lines.push('## ' + heading.textContent.trim(), '');
+        for (const node of block.children) {
+          if (node.classList.contains('card-head') || node.classList.contains('code-card')) continue;
+          if (node.tagName === 'H3') continue;
+          if (node.tagName === 'P') { lines.push(node.textContent.trim(), ''); continue; }
+          if (node.tagName === 'TABLE') {
+            const rows = node.querySelectorAll('tr');
+            for (let i = 0; i < rows.length; i++) {
+              const cells = rows[i].querySelectorAll('th, td');
+              const row = '| ' + Array.from(cells).map(c => c.textContent.trim().replace(/\|/g, '\\|')).join(' | ') + ' |';
+              lines.push(row);
+              if (i === 0) lines.push('| ' + Array.from(cells).map(() => '---').join(' | ') + ' |');
+            }
+            lines.push('');
+            continue;
+          }
+          if (node.tagName === 'UL') {
+            for (const li of node.querySelectorAll('li')) lines.push('- ' + li.textContent.trim());
+            lines.push('');
+            continue;
+          }
+          if (node.tagName === 'PRE' || node.classList?.contains('code-card')) {
+            const code = node.querySelector('code') || node;
+            lines.push(FENCE + 'json', code.textContent.trim(), FENCE, '');
+            continue;
+          }
+          if (node.tagName === 'DIV' && !node.classList.contains('code-card') && node.id !== 'mediaModelDocs') {
+            const codeEl = node.querySelector('code');
+            if (codeEl) lines.push(FENCE, codeEl.textContent.trim(), FENCE, '');
+          }
+        }
+      }
+      return lines.join('\n').replace(/\n{3,}/g, '\n\n').trim() + '\n';
+    }
+
+    $('#copyApiDocs')?.addEventListener('click', async () => {
+      const btn = $('#copyApiDocs');
+      try {
+        const md = apiDocsToMarkdown();
+        await navigator.clipboard.writeText(md);
+        btn.textContent = '已复制 ✓';
+        btn.classList.add('copied');
+        setTimeout(() => { btn.textContent = '复制为 Markdown'; btn.classList.remove('copied'); }, 2000);
+      } catch { btn.textContent = '复制失败'; setTimeout(() => { btn.textContent = '复制为 Markdown'; }, 2000); }
+    });
 
     const savedTheme = localStorage.getItem('theme') || 'dark';
     document.documentElement.setAttribute('data-theme', savedTheme);
