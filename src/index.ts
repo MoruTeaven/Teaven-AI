@@ -79,7 +79,7 @@ async function routeRequest(request: Request, env: Env, requestId: string): Prom
   const auth = await authenticate(request, env);
 
   if (request.method === "GET" && pathname === "/v1/models") {
-    return handleListModels(env, auth, requestId);
+    return handleListModels(request, env, auth, requestId);
   }
 
   if (request.method === "POST" && pathname === "/v1/chat/completions") {
