@@ -2271,7 +2271,7 @@ Content-Type: application/json</code></pre></div>
         const heading = block.querySelector('h3');
         if (heading) lines.push('## ' + heading.textContent.trim(), '');
         for (const node of block.children) {
-          if (node.classList.contains('card-head') || node.classList.contains('code-card')) continue;
+          if (node.classList.contains('card-head')) continue;
           if (node.tagName === 'H3') continue;
           if (node.tagName === 'P') { lines.push(node.textContent.trim(), ''); continue; }
           if (node.tagName === 'TABLE') {
@@ -2290,14 +2290,21 @@ Content-Type: application/json</code></pre></div>
             lines.push('');
             continue;
           }
-          if (node.tagName === 'PRE' || node.classList?.contains('code-card')) {
+          if (node.tagName === 'PRE') {
             const code = node.querySelector('code') || node;
             lines.push(FENCE + 'json', code.textContent.trim(), FENCE, '');
             continue;
           }
-          if (node.tagName === 'DIV' && !node.classList.contains('code-card') && node.id !== 'mediaModelDocs') {
-            const codeEl = node.querySelector('code');
-            if (codeEl) lines.push(FENCE, codeEl.textContent.trim(), FENCE, '');
+          if (node.tagName === 'DIV') {
+            if (node.id === 'mediaModelDocs') continue;
+            const preEl = node.querySelector('pre');
+            if (preEl) {
+              const code = preEl.querySelector('code') || preEl;
+              lines.push(FENCE + 'json', code.textContent.trim(), FENCE, '');
+            } else {
+              const codeEl = node.querySelector('code');
+              if (codeEl) lines.push(FENCE, codeEl.textContent.trim(), FENCE, '');
+            }
           }
         }
       }
