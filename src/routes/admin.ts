@@ -2105,6 +2105,7 @@ const ADMIN_APP_HTML = `<!doctype html>
       var state = { overview: null, config: null, models: [], selectedModelAlias: null, editingModelAlias: null, users: [], apiKeys: [], usage: null, tasks: [] };
       var titles = { dashboard: '仪表盘', upstreams: '上游管理', models: '模型管理', users: '用户管理', usage: '模型用量', tasks: '任务管理', config: '配置工具' };
       var statusEl = document.getElementById('status');
+      var lastAutoRefreshAt = Date.now();
       var theme = localStorage.getItem('teaven_admin_theme') || 'dark';
       document.documentElement.setAttribute('data-theme', theme);
       document.getElementById('theme-toggle').textContent = theme === 'dark' ? '切换浅色' : '切换深色';
@@ -2141,6 +2142,8 @@ const ADMIN_APP_HTML = `<!doctype html>
       document.getElementById('users-list').addEventListener('click', handleUserAction);
       document.getElementById('keys-list').addEventListener('click', handleKeyAction);
       document.getElementById('tasks-table').addEventListener('click', handleTaskAction);
+      document.addEventListener('visibilitychange', refreshAfterTabSwitch);
+      window.addEventListener('focus', refreshAfterTabSwitch);
 
       showSection((location.hash || '#dashboard').slice(1));
       loadAll();
@@ -2177,6 +2180,14 @@ const ADMIN_APP_HTML = `<!doctype html>
         } catch (error) {
           setStatus(error.message || String(error), 'error');
         }
+      }
+
+      function refreshAfterTabSwitch() {
+        if (document.visibilityState !== 'visible') return;
+        var now = Date.now();
+        if (now - lastAutoRefreshAt < 1000) return;
+        lastAutoRefreshAt = now;
+        loadAll();
       }
 
       function renderAll() {

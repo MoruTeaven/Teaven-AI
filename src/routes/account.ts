@@ -1585,6 +1585,7 @@ Content-Type: application/json</code></pre></div>
   <script>window.__APP_ORIGIN__ = ${JSON.stringify(origin)};</script>
   <script>
     let state = null;
+    let lastAutoRefreshAt = Date.now();
     const $ = (selector) => document.querySelector(selector);
     const fmt = new Intl.NumberFormat('zh-CN');
     const pageTitles = { dashboard: '仪表盘', profile: '个人资料', 'api-keys': 'API Key', models: '可用模型', test: '测试体验', 'api-docs': '接口文档', usage: '用量统计', tasks: '任务管理' };
@@ -1606,6 +1607,17 @@ Content-Type: application/json</code></pre></div>
     async function load() {
       state = await api('/account/api/profile');
       render();
+    }
+
+    function refreshAfterTabSwitch() {
+      if (document.visibilityState !== 'visible') return;
+      const now = Date.now();
+      if (now - lastAutoRefreshAt < 1000) return;
+      lastAutoRefreshAt = now;
+      $('#status').textContent = '正在自动刷新...';
+      load()
+        .then(() => { $('#status').textContent = '已自动刷新'; })
+        .catch((error) => { $('#status').textContent = error.message || String(error); });
     }
 
     function render() {
@@ -2254,6 +2266,9 @@ Content-Type: application/json</code></pre></div>
         await openTaskDetailModal(taskId);
       }
     });
+
+    document.addEventListener('visibilitychange', refreshAfterTabSwitch);
+    window.addEventListener('focus', refreshAfterTabSwitch);
 
     function escapeHtml(value) {
       return String(value ?? '')
