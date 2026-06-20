@@ -25,10 +25,10 @@ import {
   type UsageSummary
 } from "../admin/store";
 import { appendTaskEvent, lastTaskEvent, taskDiagnostics } from "../tasks/events";
-import { publicTaskOutput } from "../tasks/output";
+import { normalizeStoredObjectKey, publicTaskOutput } from "../tasks/output";
 import { getTask, listTasks, saveTask } from "../tasks/store";
 import { createProviderRegistry, resolveProviderCredential } from "../providers/registry";
-import type { AsyncTaskRecord, Env, ModelConfig } from "../types";
+import type { AsyncTaskOutputItem, AsyncTaskRecord, Env, ModelConfig } from "../types";
 import { createId } from "../utils/ids";
 import { readJsonObject, requireString } from "../utils/request";
 
@@ -128,6 +128,11 @@ export async function handleAccountRequest(request: Request, env: Env, requestId
   const taskCancelMatch = pathname.match(/^\/account\/api\/tasks\/([^/]+)\/cancel$/);
   if (request.method === "POST" && taskCancelMatch) {
     return handleCancelAccountTask(user, decodeURIComponent(taskCancelMatch[1]), env, requestId);
+  }
+
+  const fileMatch = pathname.match(/^\/account\/api\/files\/(.+)$/);
+  if (request.method === "GET" && fileMatch) {
+    return handleGetAccountFile(user, fileMatch[1], env, requestId, request.url);
   }
 
   throw notFound("接口不存在");
@@ -431,6 +436,54 @@ async function handleCancelAccountTask(user: AdminUser, taskId: string, env: Env
       }
     }
   );
+}
+
+async function handleGetAccountFile(
+  user: AdminUser,
+  rawObjectKey: string,
+  env: Env,
+  requestId: string,
+  requestUrl?: string
+): Promise<Response> {
+  const objectKey = decodeAccountObjectKey(rawObjectKey, env, requestUrl);
+  const taskId = objectKey.match(/^tasks\/([^/]+)\/[^/]+$/)?.[1];
+  if (!taskId) {
+    throw notFound("文件不存在");
+  }
+
+  const task = await getTask(env, taskId);
+  if (!task || task.organization_id !== user.organization_id || !taskReferencesAccountObjectKey(task, objectKey, env, requestUrl)) {
+    throw notFound("文件不存在");
+  }
+  if (!env.FILES) {
+    throw notFound("文件不存在");
+  }
+
+  const object = await env.FILES.get(objectKey);
+  if (!object) {
+    throw notFound("文件不存在");
+  }
+
+  const headers = new Headers({
+    "Cache-Control": "private, max-age=300",
+    "X-Request-Id": requestId
+  });
+  object.writeHttpMetadata(headers);
+  headers.set("ETag", object.httpEtag);
+
+  return new Response(object.body, { headers });
+}
+
+function decodeAccountObjectKey(value: string, env: Env, requestUrl?: string): string {
+  try {
+    const objectKey = normalizeStoredObjectKey(decodeURIComponent(value), env, requestUrl);
+    if (objectKey) {
+      return objectKey;
+    }
+  } catch {
+    // Fall through to the generic 404 below.
+  }
+  throw notFound("文件不存在");
 }
 
 async function handleAccountTest(user: AdminUser, request: Request, env: Env, requestId: string): Promise<Response> {
@@ -776,7 +829,7 @@ function publicTaskFull(task: AsyncTaskRecord, env: Env, requestUrl?: string): R
     provider_execution_mode: task.provider_execution_mode || null,
     provider_task_id: task.provider_task_id || null,
     input: task.input,
-    output: publicTaskOutput(task.output, env, requestUrl) || null,
+    output: publicAccountTaskOutput(task.output, env, requestUrl) || null,
     store_output: task.store_output,
     storage_ttl_seconds: task.storage_ttl_seconds,
     output_expires_at: task.output_expires_at || null,
@@ -789,6 +842,54 @@ function publicTaskFull(task: AsyncTaskRecord, env: Env, requestUrl?: string): R
     updated_at: task.updated_at,
     completed_at: task.completed_at || null
   };
+}
+
+function publicAccountTaskOutput(
+  output: AsyncTaskOutputItem[] | undefined,
+  env: Env,
+  requestUrl?: string
+): AsyncTaskOutputItem[] | undefined {
+  const items = publicTaskOutput(output, env, requestUrl);
+  if (!items) {
+    return items;
+  }
+
+  return items.map((item) => {
+    if ((item.source !== "r2" && item.stored !== true) || typeof item.url !== "string") {
+      return item;
+    }
+
+    const objectKey = normalizeStoredObjectKey(item.url, env, requestUrl);
+    if (!objectKey) {
+      return item;
+    }
+
+    return {
+      ...item,
+      url: buildAccountFileUrl(objectKey, requestUrl)
+    };
+  });
+}
+
+function buildAccountFileUrl(objectKey: string, requestUrl?: string): string {
+  const path = `/account/api/files/${objectKey.split("/").map(encodeURIComponent).join("/")}`;
+  if (!requestUrl) {
+    return path;
+  }
+  try {
+    return `${new URL(requestUrl).origin}${path}`;
+  } catch {
+    return path;
+  }
+}
+
+function taskReferencesAccountObjectKey(task: AsyncTaskRecord, objectKey: string, env: Env, requestUrl?: string): boolean {
+  return (task.output || []).some((item) => {
+    if ((item.source !== "r2" && item.stored !== true) || typeof item.url !== "string") {
+      return false;
+    }
+    return normalizeStoredObjectKey(item.url, env, requestUrl) === objectKey;
+  });
 }
 
 function summarizeUsage(records: UsageRecord[]): UsageSummary {
@@ -1087,7 +1188,7 @@ function renderAccountAppHtml(env: Env): string {
     button.danger { background: rgba(251, 113, 133, 0.16); color: var(--danger); border: 1px solid rgba(251, 113, 133, 0.35); }
     button.compact { padding: 6px 10px; font-size: 12px; }
     button:disabled { cursor: not-allowed; opacity: 0.55; }
-    input, select {
+    input, select, textarea {
       width: 100%;
       color: var(--text);
       background: var(--panel-strong);
@@ -1096,7 +1197,8 @@ function renderAccountAppHtml(env: Env): string {
       outline: none;
       padding: 10px 12px;
     }
-    input:focus, select:focus { border-color: var(--accent-strong); box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.12); }
+    textarea { resize: vertical; min-height: 86px; }
+    input:focus, select:focus, textarea:focus { border-color: var(--accent-strong); box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.12); }
 
     .layout { display: grid; grid-template-columns: 270px 1fr; min-height: 100vh; }
     .sidebar {
@@ -1207,6 +1309,14 @@ function renderAccountAppHtml(env: Env): string {
 
     .secret { display: none; margin-top: 12px; border: 1px solid rgba(125, 211, 252, 0.38); border-radius: 18px; background: rgba(125, 211, 252, 0.1); padding: 14px; }
     .notice { color: var(--muted); border: 1px dashed var(--line); border-radius: 18px; padding: 14px; background: rgba(148, 163, 184, 0.06); }
+    .test-preview { display: grid; gap: 12px; }
+    .test-task-card { border: 1px solid var(--line); border-radius: 16px; background: var(--panel-strong); padding: 14px; }
+    .test-task-card header { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; margin-bottom: 10px; }
+    .image-preview-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
+    .image-preview-card { overflow: hidden; border: 1px solid var(--line); border-radius: 16px; background: var(--panel-strong); }
+    .image-preview-card img { display: block; width: 100%; aspect-ratio: 1; object-fit: cover; background: rgba(148, 163, 184, 0.08); }
+    .image-preview-card footer { display: flex; justify-content: space-between; gap: 8px; align-items: center; padding: 10px 12px; font-size: 12px; }
+    .image-preview-card a { color: var(--accent); font-weight: 800; text-decoration: none; }
     .doc-block { display: grid; gap: 12px; }
     .doc-block p { margin: 0; color: var(--muted); line-height: 1.7; }
     .doc-list { margin: 0; padding-left: 18px; color: var(--muted); line-height: 1.8; }
@@ -1217,6 +1327,14 @@ function renderAccountAppHtml(env: Env): string {
     .key-features .badge { font-size: 11px; }
     .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
     .actions { display: flex; gap: 7px; flex-wrap: wrap; }
+    .image-param-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; align-items: end; }
+    .image-param-grid .wide { grid-column: span 2; }
+    .test-preview { display: grid; gap: 12px; }
+    .test-preview-card { border: 1px solid var(--line); border-radius: 16px; background: rgba(125, 211, 252, 0.08); padding: 12px; }
+    .image-preview-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px; }
+    .image-preview-card { overflow: hidden; border: 1px solid var(--line); border-radius: 16px; background: var(--panel-strong); }
+    .image-preview-card img { display: block; width: 100%; aspect-ratio: 1; object-fit: cover; background: rgba(148, 163, 184, 0.08); }
+    .image-preview-card footer { display: flex; justify-content: space-between; gap: 8px; align-items: center; padding: 10px; font-size: 12px; color: var(--muted); }
     .modal {
       position: fixed;
       inset: 0;
@@ -1263,6 +1381,8 @@ function renderAccountAppHtml(env: Env): string {
       .topbar { display: grid; }
       .toolbar { justify-content: flex-start; }
       .stat-grid, .form-grid { grid-template-columns: 1fr; }
+      .image-param-grid { grid-template-columns: 1fr; }
+      .image-param-grid .wide { grid-column: span 1; }
       .card-head { display: grid; }
       .card-head button { width: 100%; }
       .entity-row { grid-template-columns: 1fr; gap: 4px; }
@@ -1401,14 +1521,15 @@ function renderAccountAppHtml(env: Env): string {
 
            <div class="card span-12">
              <div class="card-head"><h3>测试结果</h3></div>
-             <div id="testResult" class="stack" style="display:none;">
-               <div style="font-size:12px;color:var(--muted);">
-                 <div><span style="font-weight:bold;">状态:</span> <span id="testStatus"></span></div>
-                 <div><span style="font-weight:bold;">耗时:</span> <span id="testDuration">-</span>ms</div>
-               </div>
-               <div style="border:1px solid var(--line);border-radius:12px;background:var(--panel-strong);padding:12px;overflow:auto;max-height:400px;font-family:Consolas,'SFMono-Regular',monospace;font-size:13px;line-height:1.5;">
-                 <pre id="testOutput" style="margin:0;white-space:pre-wrap;word-break:break-word;"></pre>
-               </div>
+              <div id="testResult" class="stack" style="display:none;">
+                <div style="font-size:12px;color:var(--muted);">
+                  <div><span style="font-weight:bold;">状态:</span> <span id="testStatus"></span></div>
+                  <div><span style="font-weight:bold;">耗时:</span> <span id="testDuration">-</span>ms</div>
+                </div>
+                <div id="testPreview" class="test-preview"></div>
+                <div style="border:1px solid var(--line);border-radius:12px;background:var(--panel-strong);padding:12px;overflow:auto;max-height:400px;font-family:Consolas,'SFMono-Regular',monospace;font-size:13px;line-height:1.5;">
+                  <pre id="testOutput" style="margin:0;white-space:pre-wrap;word-break:break-word;"></pre>
+                </div>
              </div>
              <div id="testEmpty" class="notice">执行测试后将显示结果</div>
            </div>
@@ -1594,6 +1715,8 @@ Content-Type: application/json</code></pre></div>
   <script>
     let state = null;
     let lastAutoRefreshAt = Date.now();
+    let activeTestTaskPoll = null;
+    let activeTestTaskId = null;
     const $ = (selector) => document.querySelector(selector);
     const fmt = new Intl.NumberFormat('zh-CN');
     const pageTitles = { dashboard: '仪表盘', profile: '个人资料', 'api-keys': 'API Key', models: '可用模型', test: '测试体验', 'api-docs': '接口文档', usage: '用量统计', tasks: '任务管理' };
@@ -1862,6 +1985,92 @@ Content-Type: application/json</code></pre></div>
           throw new Error('输入参数 JSON 必须是对象');
         }
         return parsed;
+      }
+
+      function clearTestTaskPoll() {
+        if (activeTestTaskPoll) {
+          clearTimeout(activeTestTaskPoll);
+          activeTestTaskPoll = null;
+        }
+        activeTestTaskId = null;
+      }
+
+      function isTerminalTaskStatus(status) {
+        return status === 'succeeded' || status === 'failed' || status === 'canceled' || status === 'expired';
+      }
+
+      function renderTestTaskPreview(task, message) {
+        if (!task) {
+          $('#testPreview').innerHTML = '';
+          return;
+        }
+        const detail = task.last_event ? translateDiagnosticText(task.last_event.message || task.last_event.stage || '') : '';
+        const body = '<div class="test-task-card"><header><div><div class="muted" style="font-size:11px;font-weight:900;">异步任务</div><div><code>' + escapeHtml(task.id) + '</code></div></div><span class="badge ' + escapeHtml(task.status) + '">' + escapeHtml(statusText(task.status)) + '</span></header>' +
+          '<div class="entity-meta"><div class="entity-row"><span>模型</span><span>' + escapeHtml(task.model || '-') + '</span></div><div class="entity-row"><span>类型</span><span>' + escapeHtml(taskTypeText(task.type)) + '</span></div><div class="entity-row"><span>提示</span><span>' + escapeHtml(message || detail || '任务已创建，正在等待结果。') + '</span></div></div>' +
+          '<div class="actions" style="margin-top:12px;"><button class="compact" type="button" data-view-task="' + escapeHtml(task.id) + '">查看详情</button>' + (task.cancelable ? '<button class="compact danger" type="button" data-cancel-task="' + escapeHtml(task.id) + '">取消</button>' : '') + '</div></div>';
+        $('#testPreview').innerHTML = body + renderTestImagePreview(task);
+      }
+
+      function renderTestImagePreview(task) {
+        if (task.type !== 'image') return '';
+        const output = Array.isArray(task.output) ? task.output : [];
+        const images = output.filter((item) => item && (item.url || item.b64_json));
+        if (images.length) {
+          return '<div class="image-preview-grid">' + images.map((item, index) => {
+            const src = imageOutputSrc(item);
+            const label = item.stored ? '已转存' : (item.source === 'upstream' ? '上游 URL' : '图片');
+            const openLink = item.url ? '<a href="' + escapeHtml(item.url) + '" target="_blank" rel="noreferrer">打开原图</a>' : '<span class="muted">Base64</span>';
+            return '<article class="image-preview-card"><img src="' + escapeHtml(src) + '" alt="生成图片 ' + (index + 1) + '" loading="lazy"><footer><span>' + escapeHtml(label) + ' #' + (index + 1) + '</span>' + openLink + '</footer></article>';
+          }).join('') + '</div>';
+        }
+        if (task.status === 'succeeded') return '<div class="notice">任务已成功，但输出中没有可预览的图片 URL 或 Base64 内容。</div>';
+        if (task.status === 'failed') return '<div class="notice" style="color:var(--danger);border-color:rgba(251,113,133,0.35);">生图失败，请查看下方 JSON 或任务详情中的错误信息。</div>';
+        return '<div class="notice">图片生成中，完成后会在这里自动显示预览。</div>';
+      }
+
+      function imageOutputSrc(item) {
+        if (item.url) return item.url;
+        const value = String(item.b64_json || '');
+        return value.startsWith('data:') ? value : 'data:image/png;base64,' + value;
+      }
+
+      function taskTypeText(value) {
+        if (value === 'image' || value === 'image_generation' || value === 'image.generation' || value === 'image.generations' || value === 'images.generations') return '图片生成';
+        if (value === 'video' || value === 'video_generation' || value === 'video.generation' || value === 'video.generations' || value === 'videos.generations') return '视频生成';
+        if (value === 'file' || value === 'file.processing') return '文件处理';
+        if (value === 'chat' || value === 'chat.completions') return '聊天补全';
+        return value || '未知类型';
+      }
+
+      async function pollTestTask(taskId, attempt = 0) {
+        if (activeTestTaskId !== taskId) return;
+        if (attempt >= 60) {
+          $('#testStatus').textContent = '等待超时';
+          $('#testPreview').insertAdjacentHTML('beforeend', '<div class="notice">自动轮询已停止，可点击“查看详情”或刷新页面继续查看结果。</div>');
+          activeTestTaskPoll = null;
+          activeTestTaskId = null;
+          return;
+        }
+        try {
+          const data = await api('/account/api/tasks/' + encodeURIComponent(taskId));
+          if (activeTestTaskId !== taskId) return;
+          const task = data.task;
+          $('#testStatus').textContent = statusText(task.status);
+          $('#testOutput').textContent = JSON.stringify({ mode: 'async_task', task }, null, 2);
+          renderTestTaskPreview(task, isTerminalTaskStatus(task.status) ? '任务已结束。' : '正在自动查询任务结果...');
+          if (isTerminalTaskStatus(task.status)) {
+            activeTestTaskPoll = null;
+            activeTestTaskId = null;
+            await load();
+            return;
+          }
+          activeTestTaskPoll = setTimeout(() => pollTestTask(taskId, attempt + 1), 2000);
+        } catch (error) {
+          if (activeTestTaskId !== taskId) return;
+          activeTestTaskPoll = null;
+          activeTestTaskId = null;
+          $('#testPreview').insertAdjacentHTML('beforeend', '<div class="notice" style="color:var(--danger);border-color:rgba(251,113,133,0.35);">轮询任务失败：' + escapeHtml(error.message) + '</div>');
+        }
       }
 
     function renderKeys() {
@@ -2168,12 +2377,14 @@ Content-Type: application/json</code></pre></div>
        const selectedModel = selectedTestModel();
        if (!selectedModel) return;
        const model = selectedModel.id;
-       const isText = selectedModel.modality === 'text';
-       const prompt = $('#testPrompt').value;
-        
-       $('#testResult').style.display = 'none';
-       $('#testEmpty').style.display = 'block';
-       $('#testSubmit').disabled = true;
+        const isText = selectedModel.modality === 'text';
+        const prompt = $('#testPrompt').value;
+        clearTestTaskPoll();
+         
+        $('#testResult').style.display = 'none';
+        $('#testEmpty').style.display = 'block';
+        $('#testPreview').innerHTML = '';
+        $('#testSubmit').disabled = true;
        
        const startTime = Date.now();
         
@@ -2192,18 +2403,24 @@ Content-Type: application/json</code></pre></div>
            body: JSON.stringify(body)
          });
           
-         const duration = Date.now() - startTime;
-         $('#testStatus').textContent = result.mode === 'async_task' ? '已创建任务' : '成功';
-         $('#testDuration').textContent = duration;
-         $('#testOutput').textContent = JSON.stringify(result, null, 2);
-         $('#testEmpty').style.display = 'none';
-         $('#testResult').style.display = 'block';
-         if (result.mode === 'async_task') await load();
-       } catch (error) {
-         const duration = Date.now() - startTime;
-         $('#testStatus').textContent = '失败';
-         $('#testDuration').textContent = duration;
-         $('#testOutput').textContent = error.message;
+          const duration = Date.now() - startTime;
+          $('#testStatus').textContent = result.mode === 'async_task' ? '已创建任务' : '成功';
+          $('#testDuration').textContent = duration;
+          $('#testOutput').textContent = JSON.stringify(result, null, 2);
+          $('#testEmpty').style.display = 'none';
+          $('#testResult').style.display = 'block';
+          if (result.mode === 'async_task' && result.task) {
+            renderTestTaskPreview(result.task, selectedModel.modality === 'image' ? '生图任务已创建，正在自动等待图片结果...' : '任务已创建，正在自动等待结果...');
+            activeTestTaskId = result.task.id;
+            activeTestTaskPoll = setTimeout(() => pollTestTask(result.task.id), 1200);
+            await load();
+          }
+        } catch (error) {
+          const duration = Date.now() - startTime;
+          $('#testStatus').textContent = '失败';
+          $('#testDuration').textContent = duration;
+          $('#testPreview').innerHTML = '';
+          $('#testOutput').textContent = error.message;
          $('#testEmpty').style.display = 'none';
          $('#testResult').style.display = 'block';
        } finally {
