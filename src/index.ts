@@ -4,6 +4,7 @@ import { invalidRequest, notFound } from "./http/errors";
 import { handleAdminRequest } from "./routes/admin";
 import { handleAccountRequest } from "./routes/account";
 import { handleChatCompletions } from "./routes/chat-completions";
+import { handleGetFile } from "./routes/files";
 import { handleImageGenerations } from "./routes/image-generations";
 import { handleAsyncImageGenerations } from "./routes/async-image-generations";
 import { handleListModels } from "./routes/models";
@@ -97,6 +98,11 @@ async function routeRequest(request: Request, env: Env, requestId: string): Prom
     return handleCreateTask(request, env, auth, requestId);
   }
 
+  const fileMatch = pathname.match(/^\/v1\/files\/(.+)$/);
+  if (request.method === "GET" && fileMatch) {
+    return handleGetFile(fileMatch[1], env, auth, requestId, request.url);
+  }
+
   if (request.method === "GET" && pathname === "/v1/tasks") {
     return handleListTasks(request, env, auth, requestId);
   }
@@ -107,11 +113,11 @@ async function routeRequest(request: Request, env: Env, requestId: string): Prom
     const action = taskMatch[2];
 
     if (request.method === "GET" && !action) {
-      return handleGetTask(taskId, env, auth, requestId);
+      return handleGetTask(taskId, env, auth, requestId, request.url);
     }
 
     if (request.method === "POST" && action === "cancel") {
-      return handleCancelTask(taskId, env, auth, requestId);
+      return handleCancelTask(taskId, env, auth, requestId, request.url);
     }
 
     throw invalidRequest("Method not allowed for task endpoint");

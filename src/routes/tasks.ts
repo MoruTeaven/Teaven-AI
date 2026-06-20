@@ -3,6 +3,7 @@ import { conflict, invalidRequest, notFound } from "../http/errors";
 import { jsonResponse } from "../http/response";
 import { recordTaskUsage } from "../admin/store";
 import { appendTaskEvent, taskDiagnostics } from "../tasks/events";
+import { publicTaskOutput } from "../tasks/output";
 import { getTask, listTasks, saveTask } from "../tasks/store";
 import type { AsyncTaskRecord, AuthContext, Env } from "../types";
 import { createId } from "../utils/ids";
@@ -87,7 +88,7 @@ export async function handleCreateTask(request: Request, env: Env, auth: AuthCon
 
   await recordTaskUsage(env, task, 202, Date.now() - startedAt);
 
-  return jsonResponse(publicTask(task), {
+  return jsonResponse(publicTask(task, env, request.url), {
     status: 202,
     headers: {
       "X-Request-Id": requestId
@@ -111,7 +112,7 @@ export async function handleListTasks(request: Request, env: Env, auth: AuthCont
     const result = slice.slice(0, limit);
     return jsonResponse({
       object: "list",
-      data: result.map((task) => publicTask(task, false)),
+      data: result.map((task) => publicTask(task, env, request.url, false)),
       has_more: hasMore,
       first_id: result[0]?.id || null,
       last_id: result[result.length - 1]?.id || null
@@ -122,27 +123,39 @@ export async function handleListTasks(request: Request, env: Env, auth: AuthCont
   const result = myTasks.slice(0, limit);
   return jsonResponse({
     object: "list",
-    data: result.map((task) => publicTask(task, false)),
+    data: result.map((task) => publicTask(task, env, request.url, false)),
     has_more: hasMore,
     first_id: result[0]?.id || null,
     last_id: result[result.length - 1]?.id || null
   }, { headers: { "X-Request-Id": requestId } });
 }
 
-export async function handleGetTask(taskId: string, env: Env, auth: AuthContext, requestId: string): Promise<Response> {
+export async function handleGetTask(
+  taskId: string,
+  env: Env,
+  auth: AuthContext,
+  requestId: string,
+  requestUrl?: string
+): Promise<Response> {
   const task = await getTask(env, taskId);
   if (!task || task.organization_id !== auth.organization_id) {
     throw notFound("Task not found");
   }
 
-  return jsonResponse(publicTask(task), {
+  return jsonResponse(publicTask(task, env, requestUrl), {
     headers: {
       "X-Request-Id": requestId
     }
   });
 }
 
-export async function handleCancelTask(taskId: string, env: Env, auth: AuthContext, requestId: string): Promise<Response> {
+export async function handleCancelTask(
+  taskId: string,
+  env: Env,
+  auth: AuthContext,
+  requestId: string,
+  requestUrl?: string
+): Promise<Response> {
   const task = await getTask(env, taskId);
   if (!task || task.organization_id !== auth.organization_id) {
     throw notFound("Task not found");
@@ -166,7 +179,7 @@ export async function handleCancelTask(taskId: string, env: Env, auth: AuthConte
   });
   await saveTask(env, task);
 
-  return jsonResponse(publicTask(task), {
+  return jsonResponse(publicTask(task, env, requestUrl), {
     headers: {
       "X-Request-Id": requestId
     }
@@ -222,7 +235,7 @@ async function enqueueCreatedTask(env: Env, task: AsyncTaskRecord): Promise<void
   }
 }
 
-function publicTask(task: AsyncTaskRecord, includeEvents = true): Record<string, unknown> {
+function publicTask(task: AsyncTaskRecord, env: Env, requestUrl?: string, includeEvents = true): Record<string, unknown> {
   const payload: Record<string, unknown> = {
     id: task.id,
     object: task.object,
@@ -233,7 +246,7 @@ function publicTask(task: AsyncTaskRecord, includeEvents = true): Record<string,
     plugin_id: task.plugin_id || null,
     provider_execution_mode: task.provider_execution_mode || null,
     provider_task_id: task.provider_task_id || null,
-    output: task.output,
+    output: publicTaskOutput(task.output, env, requestUrl),
     usage: undefined,
     store_output: task.store_output,
     storage_ttl_seconds: task.storage_ttl_seconds,

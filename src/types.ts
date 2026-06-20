@@ -15,6 +15,7 @@ export interface Env {
   OPENAI_COMPATIBLE_API_KEY?: string;
   OPENAI_COMPATIBLE_BASE_URL?: string;
   OPENAI_COMPATIBLE_DEFAULT_MODEL?: string;
+  FILES_PUBLIC_BASE_URL?: string;
 }
 
 export interface AuthContext {

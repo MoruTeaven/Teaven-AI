@@ -25,6 +25,7 @@ import {
   type UsageSummary
 } from "../admin/store";
 import { appendTaskEvent, lastTaskEvent, taskDiagnostics } from "../tasks/events";
+import { publicTaskOutput } from "../tasks/output";
 import { getTask, listTasks, saveTask } from "../tasks/store";
 import { createProviderRegistry, resolveProviderCredential } from "../providers/registry";
 import type { AsyncTaskRecord, Env, ModelConfig } from "../types";
@@ -121,7 +122,7 @@ export async function handleAccountRequest(request: Request, env: Env, requestId
 
   const taskDetailMatch = pathname.match(/^\/account\/api\/tasks\/([^/]+)$/);
   if (request.method === "GET" && taskDetailMatch) {
-    return handleGetAccountTask(user, decodeURIComponent(taskDetailMatch[1]), env, requestId);
+    return handleGetAccountTask(user, decodeURIComponent(taskDetailMatch[1]), env, requestId, request.url);
   }
 
   const taskCancelMatch = pathname.match(/^\/account\/api\/tasks\/([^/]+)\/cancel$/);
@@ -377,14 +378,20 @@ async function handleRevealAccountApiKey(
   );
 }
 
-async function handleGetAccountTask(user: AdminUser, taskId: string, env: Env, requestId: string): Promise<Response> {
+async function handleGetAccountTask(
+  user: AdminUser,
+  taskId: string,
+  env: Env,
+  requestId: string,
+  requestUrl?: string
+): Promise<Response> {
   const task = await getTask(env, taskId);
   if (!task || task.organization_id !== user.organization_id) {
     throw notFound("任务不存在");
   }
 
   return jsonResponse(
-    { task: publicTaskFull(task) },
+    { task: publicTaskFull(task, env, requestUrl) },
     {
       headers: { "X-Request-Id": requestId }
     }
@@ -757,7 +764,7 @@ function publicTaskSummary(task: AsyncTaskRecord): Record<string, unknown> {
   };
 }
 
-function publicTaskFull(task: AsyncTaskRecord): Record<string, unknown> {
+function publicTaskFull(task: AsyncTaskRecord, env: Env, requestUrl?: string): Record<string, unknown> {
   return {
     id: task.id,
     object: task.object,
@@ -769,7 +776,7 @@ function publicTaskFull(task: AsyncTaskRecord): Record<string, unknown> {
     provider_execution_mode: task.provider_execution_mode || null,
     provider_task_id: task.provider_task_id || null,
     input: task.input,
-    output: task.output || null,
+    output: publicTaskOutput(task.output, env, requestUrl) || null,
     store_output: task.store_output,
     storage_ttl_seconds: task.storage_ttl_seconds,
     output_expires_at: task.output_expires_at || null,

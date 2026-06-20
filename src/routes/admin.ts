@@ -30,6 +30,7 @@ import {
 import { createProviderRegistry, resolveProviderCredential } from "../providers/registry";
 import type { ProviderPluginManifest } from "../providers/types";
 import { appendTaskEvent, lastTaskEvent, taskDiagnostics } from "../tasks/events";
+import { publicTaskOutput } from "../tasks/output";
 import { getTask, listTasks, saveTask } from "../tasks/store";
 import type {
   AsyncTaskRecord,
@@ -204,7 +205,7 @@ export async function handleAdminRequest(
 
   const taskMatch = pathname.match(/^\/admin\/api\/tasks\/([^/]+)$/);
   if (request.method === "GET" && taskMatch) {
-    return handleGetAdminTask(decodeURIComponent(taskMatch[1]), env, requestId);
+    return handleGetAdminTask(decodeURIComponent(taskMatch[1]), env, requestId, request.url);
   }
 
   const providerHealthMatch = pathname.match(/^\/admin\/api\/providers\/([^/]+)\/health$/);
@@ -785,7 +786,7 @@ async function handleListAdminTasks(searchParams: URLSearchParams, env: Env, req
   );
 }
 
-async function handleGetAdminTask(taskId: string, env: Env, requestId: string): Promise<Response> {
+async function handleGetAdminTask(taskId: string, env: Env, requestId: string, requestUrl?: string): Promise<Response> {
   const task = await getTask(env, taskId);
   if (!task) {
     throw notFound("任务不存在");
@@ -793,7 +794,10 @@ async function handleGetAdminTask(taskId: string, env: Env, requestId: string): 
 
   return jsonResponse(
     {
-      task
+      task: {
+        ...task,
+        output: publicTaskOutput(task.output, env, requestUrl)
+      }
     },
     {
       headers: {

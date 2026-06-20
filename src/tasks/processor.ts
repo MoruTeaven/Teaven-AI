@@ -13,6 +13,7 @@ import { ApiError } from "../http/errors";
 import type { ProviderCredential, ProviderRequestContext, TaskPollResult } from "../providers/types";
 import { createProviderRegistry, resolveProviderCredential } from "../providers/registry";
 import { appendTaskEvent, taskDiagnostics } from "../tasks/events";
+import { publicTaskOutput } from "../tasks/output";
 import { getTask, saveTask } from "../tasks/store";
 import { recordTaskUsage } from "../admin/store";
 import { createId } from "../utils/ids";
@@ -721,7 +722,7 @@ async function deliverCallback(env: Env, task: AsyncTaskRecord, processId: strin
       type: task.type,
       model: task.model,
       status: task.status,
-      output: task.output,
+      output: publicTaskOutput(task.output, env),
       error: task.error,
       metadata: task.metadata,
       diagnostics: taskDiagnostics(task),

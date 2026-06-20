@@ -34,6 +34,7 @@ OPENAI_COMPATIBLE_API_KEY=sk-replace-me
 | `OPENAI_COMPATIBLE_API_KEY` | 当前 MVP 默认 OpenAI 兼容上游的 API Key。 | 调用默认聊天补全必需 | 无 |
 | `OPENAI_COMPATIBLE_BASE_URL` | OpenAI 兼容上游的 API Base URL。请求会发到 `${BASE_URL}/chat/completions`。 | 可选 | `https://api.openai.com/v1` |
 | `OPENAI_COMPATIBLE_DEFAULT_MODEL` | 未配置 `MODEL_CONFIG_JSON` 时生成默认模型别名和上游模型名。 | 可选 | `gpt-4o-mini` |
+| `FILES_PUBLIC_BASE_URL` | R2 文件公开访问域名或路径前缀，用于把任务 `output[].url` 中的 R2 key 组装成完整 URL。未配置时任务查询接口使用当前 Worker 域名生成 `/v1/files/...` 受控下载 URL。 | 可选 | 当前请求域名 + `/v1/files/` |
 | `MODEL_CONFIG_JSON` | 覆盖默认上游实例和上游模型配置。 | 可选 | 自动生成一个默认上游和默认模型 |
 
 ## 配置分层
@@ -253,7 +254,7 @@ OPENAI_COMPATIBLE_DEFAULT_MODEL = "gpt-4o-mini"
 | `AI_GATEWAY_KV` | 保存后台模型配置、用户、API Key 哈希、用量记录和异步任务记录。未绑定时退回内存存储，跨 isolate 可能丢失。 |
 | `TASK_QUEUE` | 创建异步任务后发送队列消息。未绑定时只保存任务，不入队。 |
 | `DB` | 当前 MVP 主要用于后台状态和告警展示，租户、API Key、配额和计费持久化尚未实现。 |
-| `FILES` | 当前 MVP 主要用于后台状态展示，R2 文件转存能力尚未完整接入。 |
+| `FILES` | R2 文件转存和受控读取。任务输出转存后会以 R2 object key 存储，查询任务时返回带域名的访问 URL。 |
 
 管理后台会展示这些绑定是否存在，并在缺少关键配置时给出 warning。
 
