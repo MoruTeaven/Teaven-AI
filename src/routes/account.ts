@@ -1196,6 +1196,14 @@ function renderAccountAppHtml(env: Env): string {
     code, pre { font-family: Consolas, "SFMono-Regular", monospace; }
     pre { margin: 0; white-space: pre-wrap; word-break: break-word; }
     code { color: var(--accent); }
+    .table-scroll { overflow-x: auto; }
+    .task-table { min-width: 720px; table-layout: fixed; }
+    .task-table.summary { min-width: 620px; }
+    .task-table code { word-break: break-all; }
+    .task-events-scroll { margin-top: 4px; max-height: 240px; overflow: auto; border: 1px solid var(--line); border-radius: 12px; }
+    .task-events-table { margin: 0; min-width: 760px; table-layout: fixed; }
+    .task-events-table td { word-break: break-word; }
+    .time-cell { white-space: nowrap; }
 
     .secret { display: none; margin-top: 12px; border: 1px solid rgba(125, 211, 252, 0.38); border-radius: 18px; background: rgba(125, 211, 252, 0.1); padding: 14px; }
     .notice { color: var(--muted); border: 1px dashed var(--line); border-radius: 18px; padding: 14px; background: rgba(148, 163, 184, 0.06); }
@@ -1814,8 +1822,9 @@ Content-Type: application/json</code></pre></div>
     }
 
     function renderTasks() {
-      const rows = state.tasks.map((task) => '<tr id="task-row-' + escapeHtml(task.id) + '"><td><code>' + escapeHtml(task.id) + '</code></td><td>' + escapeHtml(task.model) + '</td><td><span class="badge ' + escapeHtml(task.status) + '">' + escapeHtml(statusText(task.status)) + '</span></td><td>' + formatDate(task.created_at) + '</td><td class="actions">' + (task.cancelable ? '<button class="compact danger" data-cancel-task="' + escapeHtml(task.id) + '">取消</button>' : '') + '<button class="compact" data-view-task="' + escapeHtml(task.id) + '">查看详情</button></td></tr>').join('');
-      $('#taskTable').innerHTML = rows ? '<table><thead><tr><th>任务</th><th>模型</th><th>状态</th><th>创建</th><th></th></tr></thead><tbody>' + rows + '</tbody></table>' : '<div class="notice">暂无任务。</div>';
+      const rows = state.tasks.map((task) => '<tr id="task-row-' + escapeHtml(task.id) + '"><td><code>' + escapeHtml(task.id) + '</code></td><td>' + escapeHtml(task.model) + '</td><td><span class="badge ' + escapeHtml(task.status) + '">' + escapeHtml(statusText(task.status)) + '</span></td><td class="time-cell">' + formatDate(task.created_at) + '</td><td class="actions">' + (task.cancelable ? '<button class="compact danger" data-cancel-task="' + escapeHtml(task.id) + '">取消</button>' : '') + '<button class="compact" data-view-task="' + escapeHtml(task.id) + '">查看详情</button></td></tr>').join('');
+      const cols = '<colgroup><col style="width:34%"><col style="width:24%"><col style="width:12%"><col style="width:18%"><col style="width:12%"></colgroup>';
+      $('#taskTable').innerHTML = rows ? '<div class="table-scroll"><table class="task-table summary">' + cols + '<thead><tr><th>任务</th><th>模型</th><th>状态</th><th>创建</th><th></th></tr></thead><tbody>' + rows + '</tbody></table></div>' : '<div class="notice">暂无任务。</div>';
     }
 
     function renderApiDocs() {
@@ -1845,8 +1854,9 @@ Content-Type: application/json</code></pre></div>
     }
 
     function renderTaskDetail() {
-      const rows = state.tasks.map((task) => '<tr id="task-detail-row-' + escapeHtml(task.id) + '"><td><code>' + escapeHtml(task.id) + '</code></td><td>' + escapeHtml(task.type) + '</td><td>' + escapeHtml(task.model) + '</td><td><span class="badge ' + escapeHtml(task.status) + '">' + escapeHtml(statusText(task.status)) + '</span></td><td>' + formatDate(task.created_at) + '</td><td>' + (task.completed_at ? formatDate(task.completed_at) : '-') + '</td><td class="actions">' + (task.cancelable ? '<button class="compact danger" data-cancel-task="' + escapeHtml(task.id) + '">取消</button>' : '') + '<button class="compact" data-view-task="' + escapeHtml(task.id) + '">查看详情</button></td></tr>').join('');
-      $('#taskDetail').innerHTML = rows ? '<table><thead><tr><th>任务</th><th>类型</th><th>模型</th><th>状态</th><th>创建</th><th>完成</th><th></th></tr></thead><tbody>' + rows + '</tbody></table>' : '<div class="notice">暂无任务。</div>';
+      const rows = state.tasks.map((task) => '<tr id="task-detail-row-' + escapeHtml(task.id) + '"><td><code>' + escapeHtml(task.id) + '</code></td><td>' + escapeHtml(task.type) + '</td><td>' + escapeHtml(task.model) + '</td><td><span class="badge ' + escapeHtml(task.status) + '">' + escapeHtml(statusText(task.status)) + '</span></td><td class="time-cell">' + formatDate(task.created_at) + '</td><td class="time-cell">' + (task.completed_at ? formatDate(task.completed_at) : '-') + '</td><td class="actions">' + (task.cancelable ? '<button class="compact danger" data-cancel-task="' + escapeHtml(task.id) + '">取消</button>' : '') + '<button class="compact" data-view-task="' + escapeHtml(task.id) + '">查看详情</button></td></tr>').join('');
+      const cols = '<colgroup><col style="width:28%"><col style="width:11%"><col style="width:18%"><col style="width:10%"><col style="width:14%"><col style="width:14%"><col style="width:5%"></colgroup>';
+      $('#taskDetail').innerHTML = rows ? '<div class="table-scroll"><table class="task-table">' + cols + '<thead><tr><th>任务</th><th>类型</th><th>模型</th><th>状态</th><th>创建</th><th>完成</th><th></th></tr></thead><tbody>' + rows + '</tbody></table></div>' : '<div class="notice">暂无任务。</div>';
     }
 
     function renderTaskDiagnostics(diagnostics) {
@@ -1866,8 +1876,9 @@ Content-Type: application/json</code></pre></div>
 
     function renderTaskEvents(events) {
       if (!events.length) return '<div style="margin-top:12px;"><span class="muted" style="font-size:11px;font-weight:900;">状态链</span><div class="notice" style="margin-top:4px;">暂无状态事件。</div></div>';
-      const rows = events.map((event) => '<tr><td>' + formatDate(event.at) + '</td><td>' + escapeHtml(stageText(event.stage) || '-') + '</td><td>' + escapeHtml(statusText(event.status) || '-') + '</td><td>' + escapeHtml(providerStatusText(event.provider_status)) + '</td><td>' + escapeHtml(formatTaskEventSummary(event)) + '</td></tr>').join('');
-      return '<div style="margin-top:12px;"><span class="muted" style="font-size:11px;font-weight:900;">状态链</span><div style="margin-top:4px;max-height:240px;overflow:auto;border:1px solid var(--line);border-radius:12px;"><table style="margin:0;"><thead><tr><th>时间</th><th>阶段</th><th>平台状态</th><th>上游状态</th><th>摘要</th></tr></thead><tbody>' + rows + '</tbody></table></div></div>';
+      const cols = '<colgroup><col style="width:170px"><col style="width:150px"><col style="width:96px"><col style="width:110px"><col></colgroup>';
+      const rows = events.map((event) => '<tr><td class="time-cell">' + escapeHtml(formatDateTime(event.at)) + '</td><td>' + escapeHtml(stageText(event.stage) || '-') + '</td><td>' + escapeHtml(statusText(event.status) || '-') + '</td><td>' + escapeHtml(providerStatusText(event.provider_status)) + '</td><td>' + escapeHtml(formatTaskEventSummary(event)) + '</td></tr>').join('');
+      return '<div style="margin-top:12px;"><span class="muted" style="font-size:11px;font-weight:900;">状态链</span><div class="task-events-scroll"><table class="task-events-table">' + cols + '<thead><tr><th>时间</th><th>阶段</th><th>平台状态</th><th>上游状态</th><th>摘要</th></tr></thead><tbody>' + rows + '</tbody></table></div></div>';
     }
 
     function formatTaskEventSummary(event) {
@@ -1993,6 +2004,13 @@ Content-Type: application/json</code></pre></div>
       if (!dateString) return '-';
       const date = new Date(dateString);
       return date.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+    }
+
+    function formatDateTime(dateString) {
+      if (!dateString) return '-';
+      const date = new Date(dateString);
+      if (Number.isNaN(date.getTime())) return String(dateString);
+      return date.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
     }
 
     function resetKeyForm() {

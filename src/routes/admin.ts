@@ -1823,6 +1823,20 @@ const ADMIN_APP_HTML = `<!doctype html>
     pre { margin: 0; white-space: pre-wrap; word-break: break-word; }
     .json-view { max-height: 360px; overflow: auto; padding: 14px; background: var(--panel-strong); border: 1px solid var(--line); border-radius: 16px; color: var(--text); font-size: 12px; }
     .table-wrap { overflow-x: auto; }
+    .tasks-table { min-width: 760px; table-layout: fixed; }
+    .task-detail-panel { max-height: 520px; overflow: auto; padding: 14px; background: var(--panel-strong); border: 1px solid var(--line); border-radius: 16px; color: var(--text); font-size: 13px; }
+    .task-detail-card { display: grid; gap: 12px; }
+    .task-detail-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
+    .task-detail-grid > div { min-width: 0; }
+    .muted-label { display: block; color: var(--muted); font-size: 11px; font-weight: 900; margin-bottom: 4px; }
+    .task-diagnostics { margin-top: 4px; display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 8px; }
+    .task-diagnostics > div { padding: 8px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
+    .task-events-scroll { margin-top: 4px; max-height: 260px; overflow: auto; border: 1px solid var(--line); border-radius: 12px; }
+    .task-events-table { margin: 0; min-width: 760px; table-layout: fixed; }
+    .task-events-table td { word-break: break-word; }
+    .task-json-block { margin-top: 4px; padding: 10px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); font-size: 12px; max-height: 180px; overflow: auto; }
+    .time-cell { white-space: nowrap; }
+    .break-all { word-break: break-all; }
     .actions { display: flex; gap: 7px; flex-wrap: wrap; }
     .empty { color: var(--muted); padding: 12px 0; }
     .secret { border: 1px solid rgba(125, 211, 252, 0.38); border-radius: 18px; background: rgba(125, 211, 252, 0.1); padding: 14px; }
@@ -1990,9 +2004,9 @@ const ADMIN_APP_HTML = `<!doctype html>
               <label>数量<select id="task-limit"><option value="25">25</option><option value="50" selected>50</option><option value="100">100</option></select></label>
             </div>
             <div class="actions" style="margin-top: 12px;"><button id="load-tasks" type="button">加载任务</button></div>
-            <div class="table-wrap"><table><thead><tr><th>ID</th><th>类型</th><th>模型</th><th>状态</th><th>创建时间</th><th>操作</th></tr></thead><tbody id="tasks-table"></tbody></table></div>
+            <div class="table-wrap"><table class="tasks-table"><colgroup><col style="width:31%"><col style="width:12%"><col style="width:20%"><col style="width:10%"><col style="width:15%"><col style="width:12%"></colgroup><thead><tr><th>ID</th><th>类型</th><th>模型</th><th>状态</th><th>创建时间</th><th>操作</th></tr></thead><tbody id="tasks-table"></tbody></table></div>
           </div>
-          <div class="card span-12"><h3>任务详情</h3><pre id="task-detail" class="json-view">选择任务后显示详情。</pre></div>
+          <div class="card span-12"><h3>任务详情</h3><div id="task-detail" class="task-detail-panel">选择任务后显示详情。</div></div>
         </div>
       </section>
 
@@ -2365,8 +2379,163 @@ const ADMIN_APP_HTML = `<!doctype html>
         document.getElementById('tasks-table').innerHTML = tasks.length ? tasks.map(function (task) {
           var actions = '<button class="secondary compact" data-task-view="' + esc(task.id) + '">详情</button>';
           if (task.cancelable) actions += '<button class="danger compact" data-task-cancel="' + esc(task.id) + '">取消</button>';
-          return '<tr><td><code>' + esc(task.id) + '</code></td><td>' + esc(taskTypeText(task.type)) + '</td><td>' + esc(task.model) + '</td><td><span class="pill ' + statusClass(task.status) + '">' + esc(statusText(task.status)) + '</span></td><td>' + esc(task.created_at) + '</td><td><div class="actions">' + actions + '</div></td></tr>';
+          return '<tr><td><code>' + esc(task.id) + '</code></td><td>' + esc(taskTypeText(task.type)) + '</td><td>' + esc(task.model) + '</td><td><span class="pill ' + statusClass(task.status) + '">' + esc(statusText(task.status)) + '</span></td><td class="time-cell">' + esc(formatDate(task.created_at)) + '</td><td><div class="actions">' + actions + '</div></td></tr>';
         }).join('') : '<tr><td colspan="6" class="empty">暂无任务。</td></tr>';
+      }
+
+      function renderTaskDetail(task) {
+        return '<div class="task-detail-card">' +
+          '<div class="task-detail-grid">' +
+            taskDetailItem('任务 ID', task.id, true) +
+            taskDetailItem('组织', task.organization_id || '-', true) +
+            taskDetailItem('API Key', task.api_key_id || '-', true) +
+            taskDetailItem('类型', taskTypeText(task.type), false) +
+            taskDetailItem('模型', task.model || '-', false) +
+            '<div><span class="muted-label">状态</span><div><span class="pill ' + statusClass(task.status) + '">' + esc(statusText(task.status)) + '</span></div></div>' +
+            taskDetailItem('上游', task.upstream_id || '-', false) +
+            taskDetailItem('Provider', task.plugin_id || '-', false) +
+            taskDetailItem('Provider 任务 ID', task.provider_task_id || '-', true) +
+            taskDetailItem('存储输出', task.store_output ? '是' : '否', false) +
+            taskDetailItem('存储 TTL', task.storage_ttl_seconds == null ? '-' : task.storage_ttl_seconds + ' 秒', false) +
+            taskDetailItem('回调 URL', task.callback_url || '未设置', false) +
+            taskDetailItem('创建时间', formatDate(task.created_at), false) +
+            taskDetailItem('更新时间', formatDate(task.updated_at), false) +
+            taskDetailItem('完成时间', task.completed_at ? formatDate(task.completed_at) : '-', false) +
+          '</div>' +
+          renderTaskDiagnostics(task.diagnostics) +
+          renderTaskEvents(task.events || []) +
+          renderTaskJsonSection('输入参数', task.input, false) +
+          renderTaskJsonSection('输出结果', task.output, false) +
+          renderTaskJsonSection('错误信息', task.error, true) +
+          renderTaskJsonSection('元数据', task.metadata, false) +
+        '</div>';
+      }
+
+      function taskDetailItem(label, value, code) {
+        var content = code ? '<code class="break-all">' + esc(value) + '</code>' : '<span class="break-all">' + esc(value) + '</span>';
+        return '<div><span class="muted-label">' + esc(label) + '</span><div>' + content + '</div></div>';
+      }
+
+      function renderTaskDiagnostics(diagnostics) {
+        if (!diagnostics) return '';
+        var items = [
+          ['轮询次数', diagnostics.poll_count == null ? 0 : diagnostics.poll_count],
+          ['创建尝试', diagnostics.create_attempt_count == null ? 0 : diagnostics.create_attempt_count],
+          ['上游状态', providerStatusText(diagnostics.provider_status)],
+          ['上游业务码', diagnostics.provider_response_code || '-'],
+          ['上游 HTTP', diagnostics.provider_http_status || '-'],
+          ['最后轮询', diagnostics.last_poll_at ? formatDate(diagnostics.last_poll_at) : '-'],
+          ['下次轮询', diagnostics.next_poll_at ? formatDate(diagnostics.next_poll_at) : '-'],
+          ['最近错误', diagnostics.last_error ? formatDiagnosticValue(diagnostics.last_error) : '-']
+        ];
+        return '<div><span class="muted-label">诊断摘要</span><div class="task-diagnostics">' + items.map(function (item) { return '<div><span class="muted-label">' + esc(item[0]) + '</span><div class="break-all">' + esc(String(item[1])) + '</div></div>'; }).join('') + '</div></div>';
+      }
+
+      function renderTaskEvents(events) {
+        if (!events.length) return '<div><span class="muted-label">状态链</span><div class="empty">暂无状态事件。</div></div>';
+        var cols = '<colgroup><col style="width:170px"><col style="width:150px"><col style="width:96px"><col style="width:110px"><col></colgroup>';
+        var rows = events.map(function (event) { return '<tr><td class="time-cell">' + esc(formatDate(event.at)) + '</td><td>' + esc(stageText(event.stage) || '-') + '</td><td>' + esc(statusText(event.status) || '-') + '</td><td>' + esc(providerStatusText(event.provider_status)) + '</td><td>' + esc(formatTaskEventSummary(event)) + '</td></tr>'; }).join('');
+        return '<div><span class="muted-label">状态链</span><div class="task-events-scroll"><table class="task-events-table">' + cols + '<thead><tr><th>时间</th><th>阶段</th><th>平台状态</th><th>上游状态</th><th>摘要</th></tr></thead><tbody>' + rows + '</tbody></table></div></div>';
+      }
+
+      function renderTaskJsonSection(label, value, danger) {
+        if (!value) return '';
+        var content = typeof value === 'object' ? JSON.stringify(value, null, 2) : String(value);
+        var style = danger ? ' style="border-color:var(--danger);color:var(--danger);background:rgba(251,113,133,0.05);"' : '';
+        return '<div><span class="muted-label"' + (danger ? ' style="color:var(--danger);"' : '') + '>' + esc(label) + '</span><pre class="task-json-block"' + style + '>' + esc(content) + '</pre></div>';
+      }
+
+      function formatTaskEventSummary(event) {
+        var parts = [];
+        if (event.message) parts.push(translateDiagnosticText(event.message));
+        if (event.provider_task_id) parts.push('上游任务 ID=' + event.provider_task_id);
+        if (event.poll_url) parts.push('轮询 URL=' + event.poll_url);
+        if (event.provider_response_code) parts.push('上游业务码=' + translateDiagnosticText(event.provider_response_code));
+        if (event.http_status) parts.push('HTTP=' + event.http_status);
+        if (event.attempt) parts.push('尝试次数=' + event.attempt);
+        if (event.delay_seconds !== undefined) parts.push('延迟=' + event.delay_seconds + ' 秒');
+        if (event.request_id) parts.push('请求 ID=' + event.request_id);
+        if (event.process_id) parts.push('处理进程=' + event.process_id);
+        if (event.error) parts.push('错误=' + formatDiagnosticValue(event.error));
+        if (event.details) parts.push('详情=' + formatDiagnosticValue(event.details));
+        return parts.length ? parts.join(' · ') : '-';
+      }
+
+      function formatDiagnosticValue(value) {
+        if (value === null || value === undefined) return '-';
+        if (typeof value === 'string') return translateDiagnosticText(value);
+        if (typeof value === 'object') return JSON.stringify(localizeDiagnosticValue(value));
+        return String(value);
+      }
+
+      function localizeDiagnosticValue(value) {
+        if (Array.isArray(value)) return value.map(localizeDiagnosticValue);
+        if (value && typeof value === 'object') {
+          return Object.keys(value).reduce(function (result, key) {
+            result[diagnosticKeyText(key)] = localizeDiagnosticValue(value[key]);
+            return result;
+          }, {});
+        }
+        if (typeof value === 'string') return translateDiagnosticText(value);
+        return value;
+      }
+
+      function diagnosticKeyText(key) {
+        var map = {
+          message: '消息', cause: '原因', error: '错误', errors: '错误列表', response: '响应', data: '数据', code: '业务码', status: '状态', type: '类型', id: 'ID', task_id: '任务 ID', provider_task_id: '上游任务 ID', provider_status: '上游状态', provider_response_code: '上游业务码', provider_http_status: '上游 HTTP', http_status: 'HTTP 状态', output_count: '输出数量', stored_count: '已存储数量', output_expires_at: '输出过期时间', poll_count: '轮询次数', poll_url: '轮询 URL', upstream_raw_body: '上游原始响应', raw_body: '原始响应', attempt: '尝试次数', delay_seconds: '延迟秒数', process_id: '处理进程', request_id: '请求 ID'
+        };
+        return map[key] || key;
+      }
+
+      function translateDiagnosticText(text) {
+        if (text === null || text === undefined) return '-';
+        var value = String(text);
+        var map = {
+          'Queue consumer picked up the task': '队列消费者已接收任务',
+          'Task has no plugin_id or provider_context, cannot be processed by consumer': '任务缺少 plugin_id 或 provider_context，队列消费者无法处理',
+          'Missing provider routing context': '缺少上游路由上下文',
+          'Upstream task creation failed with a non-retryable error': '上游任务创建失败，错误不可重试',
+          'Upstream creation returned a non-retryable error': '上游创建返回不可重试错误',
+          'Exceeded max upstream creation attempts': '已超过上游创建最大尝试次数',
+          'Cannot build provider request context from task record': '无法根据任务记录构建上游请求上下文',
+          'Polling upstream task status': '正在轮询上游任务状态',
+          'Provider does not implement pollTask': 'Provider 未实现 pollTask',
+          'Upstream task failed': '上游任务失败',
+          'TASK_QUEUE binding is not configured': '未配置 TASK_QUEUE 绑定',
+          'Task scheduled for the next processor run': '任务已安排到下一次处理',
+          'Task scheduled without delayed delivery': '任务已安排处理，但未使用延迟投递',
+          'Cannot build request context for upstream task creation': '无法为上游任务创建构建请求上下文',
+          'Cannot build provider request context': '无法构建上游请求上下文',
+          'Creating upstream async task': '正在创建上游异步任务',
+          'Provider does not support image generation': 'Provider 不支持图片生成',
+          'Upstream creation returned 202 without provider_task_id': '上游创建返回 202，但缺少 provider_task_id',
+          'Missing provider_task_id in upstream creation response': '上游创建响应缺少 provider_task_id',
+          'Upstream creation returned a non-success response': '上游创建返回非成功响应',
+          'Unsupported task type for upstream creation': '上游创建不支持该任务类型',
+          'Delivering terminal task webhook': '正在投递任务终态回调',
+          'Callback endpoint returned non-2xx status': '回调地址返回非 2xx 状态',
+          'Task created via /v1/tasks': '任务通过 /v1/tasks 创建',
+          'Task created via /v1/async/images/generations': '任务通过 /v1/async/images/generations 创建',
+          'Task created via account center test': '任务通过账户中心测试创建',
+          'Task submitted to TASK_QUEUE': '任务已提交到 TASK_QUEUE',
+          'Task canceled by API request': '任务已由 API 请求取消',
+          'Task canceled from account center': '任务已在账户中心取消',
+          'Task canceled by admin': '任务已由管理员取消'
+        };
+        if (map[value]) return map[value];
+        var matched = value.match(/^Exceeded max poll attempts \\((\\d+)\\)$/);
+        if (matched) return '已超过最大轮询次数（' + matched[1] + '）';
+        matched = value.match(/^Upstream task creation failed after (\\d+) attempts$/);
+        if (matched) return '上游任务创建失败，已尝试 ' + matched[1] + ' 次';
+        matched = value.match(/^Provider "(.+)" does not implement pollTask$/);
+        if (matched) return 'Provider "' + matched[1] + '" 未实现 pollTask';
+        matched = value.match(/^Provider "(.+)" does not support image generation$/);
+        if (matched) return 'Provider "' + matched[1] + '" 不支持图片生成';
+        matched = value.match(/^Unsupported task type for auto-creation: (.+)$/);
+        if (matched) return '不支持自动创建的任务类型：' + matched[1];
+        matched = value.match(/^Upstream creation failed: (.+)$/);
+        if (matched) return '上游创建失败：' + matched[1];
+        return value;
       }
 
       function renderConfig() {
@@ -2467,7 +2636,7 @@ const ADMIN_APP_HTML = `<!doctype html>
       }
       async function handleUserAction(event) { var toggleBtn = event.target.closest('[data-user-toggle]'); var impersonateBtn = event.target.closest('[data-user-impersonate]'); if (impersonateBtn) { var impersonateId = impersonateBtn.getAttribute('data-user-impersonate'); var impersonateUser = state.users.find(function (item) { return item.id === impersonateId; }); if (!impersonateUser) return; if (!confirm('将以 ' + impersonateUser.email + ' 的身份登录用户中心，确认继续？')) return; var impersonateWindow = window.open('about:blank', '_blank'); setStatus('正在模拟登录...', 'ok'); try { var impersonateData = await api('/admin/api/users/' + encodeURIComponent(impersonateId) + '/impersonate', { method: 'POST' }); var accountUrl = impersonateData.redirect || '/account'; if (impersonateWindow) impersonateWindow.location.assign(accountUrl); else window.open(accountUrl, '_blank'); setStatus('已在新窗口打开用户中心：' + impersonateUser.email, 'ok'); } catch (error) { if (impersonateWindow) impersonateWindow.close(); setStatus(error.message || '模拟登录失败', 'error'); } return; } if (!toggleBtn) return; var user = state.users.find(function (item) { return item.id === toggleBtn.getAttribute('data-user-toggle'); }); if (!user) return; await api('/admin/api/users/' + encodeURIComponent(user.id), { method: 'PATCH', body: JSON.stringify({ status: user.status === 'active' ? 'disabled' : 'active' }) }); await loadAll(); }
       async function handleKeyAction(event) { var viewBtn = event.target.closest('[data-key-view]'); var toggleBtn = event.target.closest('[data-key-toggle]'); if (viewBtn) { var keyId = viewBtn.getAttribute('data-key-view'); var key = state.apiKeys.find(function (item) { return item.id === keyId; }); if (!key) return; document.getElementById('key-reveal-title').textContent = '查看密钥：' + esc(key.name); document.getElementById('reveal-password').value = ''; document.getElementById('reveal-error').style.display = 'none'; document.getElementById('reveal-result').style.display = 'none'; document.getElementById('reveal-key-confirm').setAttribute('data-reveal-key-id', keyId); openModal('key-reveal-modal', 'key-reveal-title', '查看密钥：' + esc(key.name)); return; } if (!toggleBtn) return; var key = state.apiKeys.find(function (item) { return item.id === toggleBtn.getAttribute('data-key-toggle'); }); if (!key) return; await api('/admin/api/api-keys/' + encodeURIComponent(key.id), { method: 'PATCH', body: JSON.stringify({ status: key.status === 'active' ? 'disabled' : 'active' }) }); await loadAll(); }
-      async function handleTaskAction(event) { var view = event.target.closest('[data-task-view]'); var cancel = event.target.closest('[data-task-cancel]'); if (view) { var detail = await api('/admin/api/tasks/' + encodeURIComponent(view.getAttribute('data-task-view'))); document.getElementById('task-detail').textContent = JSON.stringify(detail.task, null, 2); } if (cancel && confirm('确定取消任务？')) { await api('/admin/api/tasks/' + encodeURIComponent(cancel.getAttribute('data-task-cancel')) + '/cancel', { method: 'POST' }); await loadTasks(); } }
+      async function handleTaskAction(event) { var view = event.target.closest('[data-task-view]'); var cancel = event.target.closest('[data-task-cancel]'); if (view) { var detail = await api('/admin/api/tasks/' + encodeURIComponent(view.getAttribute('data-task-view'))); document.getElementById('task-detail').innerHTML = renderTaskDetail(detail.task); } if (cancel && confirm('确定取消任务？')) { await api('/admin/api/tasks/' + encodeURIComponent(cancel.getAttribute('data-task-cancel')) + '/cancel', { method: 'POST' }); await loadTasks(); } }
 
       function fillModelEditor(alias, editing) { var model = state.models.find(function (item) { return item.alias === alias; }); if (!model) return; state.editingModelAlias = editing ? alias : null; var route = model.routes && model.routes[0] ? model.routes[0] : {}; document.getElementById('model-json').value = JSON.stringify(toModelInput(model), null, 2); document.getElementById('model-alias').value = model.alias; document.getElementById('model-modality').value = model.modality; document.getElementById('model-status').value = model.status; document.getElementById('model-stream').value = String(model.supports_stream !== false); var select = document.getElementById('model-upstream-select'); if (select.options.length > 1) { select.value = route.upstream_id || ''; } document.getElementById('route-provider-model').value = route.provider_model || ''; document.getElementById('route-priority').value = route.priority || 1; }
       function viewModel(alias) { state.selectedModelAlias = alias; renderModelDetail(); setStatus('正在查看模型：' + alias, 'ok'); }
@@ -2505,6 +2674,9 @@ const ADMIN_APP_HTML = `<!doctype html>
       function taskTypeText(value) { if (value === 'chat' || value === 'chat.completions') return '聊天补全'; if (value === 'responses') return '响应生成'; if (value === 'image' || value === 'image_generation' || value === 'image.generation' || value === 'image.generations' || value === 'images.generations') return '图片生成'; if (value === 'video' || value === 'video_generation' || value === 'video.generation' || value === 'video.generations' || value === 'videos.generations') return '视频生成'; if (value === 'speech' || value === 'audio.speech') return '语音合成'; if (value === 'transcriptions' || value === 'audio.transcriptions') return '语音转写'; if (value === 'translations' || value === 'audio.translations') return '语音翻译'; if (value === 'file' || value === 'file.processing') return '文件处理'; if (value === 'embeddings') return '向量嵌入'; return value ? '未知类型：' + value : '未知类型'; }
       function statusText(status) { if (status === 'active') return '启用'; if (status === 'degraded') return '降级'; if (status === 'hidden') return '隐藏'; if (status === 'disabled') return '停用'; if (status === 'queued') return '排队中'; if (status === 'running') return '运行中'; if (status === 'succeeded') return '成功'; if (status === 'failed') return '失败'; if (status === 'canceled') return '已取消'; if (status === 'expired') return '已过期'; if (status === 'ok') return '正常'; if (status === 'warning') return '警告'; if (status === 'error') return '异常'; return status; }
       function statusClass(status) { if (status === 'active' || status === 'succeeded' || status === 'running' || status === 'ok') return 'ok'; if (status === 'queued' || status === 'hidden' || status === 'degraded' || status === 'warning') return 'warn'; if (status === 'disabled' || status === 'failed' || status === 'canceled' || status === 'expired' || status === 'error') return 'danger'; return ''; }
+      function providerStatusText(status) { if (status === null || status === undefined || status === '') return '-'; return statusText(status) || status; }
+      function stageText(stage) { var map = { 'task.created': '任务创建', 'queue.enqueued': '已入队', 'queue.unavailable': '队列不可用', 'queue.enqueue_failed': '入队失败', 'queue.picked': '队列接收', 'process.started': '处理开始', 'process.failed': '处理失败', 'upstream.create.started': '上游创建开始', 'upstream.create.retry': '上游创建重试', 'upstream.create.succeeded': '上游创建成功', 'upstream.create.failed': '上游创建失败', 'upstream.poll.started': '轮询开始', 'upstream.poll.scheduled': '轮询已安排', 'upstream.poll.succeeded': '轮询成功', 'upstream.poll.failed': '轮询失败', 'poll.error': '轮询错误', 'task.succeeded': '任务成功', 'task.failed': '任务失败', 'task.canceled': '任务取消', 'task.expired': '任务过期', 'output.store.started': '输出存储开始', 'output.store.completed': '输出存储完成', 'callback.deliver_started': '回调投递开始', 'callback.delivered': '回调投递成功', 'callback.delivery_failed': '回调投递失败' }; return map[stage] || stage; }
+      function formatDate(dateString) { if (!dateString) return '-'; var date = new Date(dateString); if (Number.isNaN(date.getTime())) return String(dateString); return date.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }); }
       function providerClass(status) { return statusClass(status); }
       function providerText(status) { return status === 'ok' ? '可用' : status === 'warning' ? '未使用' : status === 'error' ? '异常' : status; }
       function findProvider(providers, pluginId) { return providers.find(function (p) { return p.id === pluginId; }) || null; }
