@@ -1661,62 +1661,89 @@ const ADMIN_APP_HTML = `<!doctype html>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Teaven AI 管理后台</title>
+  <link rel="stylesheet" href="https://cdn.bootcdn.net/ajax/libs/remixicon/4.6.0/remixicon.css">
   <style>
     :root {
-      color-scheme: dark;
-      --bg: #07111f;
-      --panel: rgba(15, 23, 42, 0.9);
-      --panel-strong: #111827;
-      --line: #26364f;
-      --text: #f8fafc;
-      --muted: #94a3b8;
-      --accent: #7dd3fc;
-      --accent-strong: #38bdf8;
-      --ok: #86efac;
-      --warn: #fbbf24;
-      --danger: #fb7185;
-      --shadow: rgba(0, 0, 0, 0.28);
+      color-scheme: light;
+      --bg: #f7f5fb;
+      --panel: rgba(255, 255, 255, 0.78);
+      --panel-strong: #ffffff;
+      --panel-muted: #fbfaff;
+      --line: rgba(96, 72, 140, 0.14);
+      --line-strong: rgba(96, 72, 140, 0.22);
+      --text: #171421;
+      --muted: #6f687d;
+      --muted-2: #928aa0;
+      --accent: #6d28d9;
+      --accent-strong: #5b21b6;
+      --accent-soft: rgba(109, 40, 217, 0.1);
+      --accent-glow: rgba(109, 40, 217, 0.22);
+      --ok: #16a34a;
+      --ok-soft: rgba(22, 163, 74, 0.12);
+      --warn: #d97706;
+      --warn-soft: rgba(217, 119, 6, 0.13);
+      --danger: #dc2626;
+      --danger-soft: rgba(220, 38, 38, 0.12);
+      --info: #2563eb;
+      --info-soft: rgba(37, 99, 235, 0.12);
+      --shadow: rgba(53, 38, 84, 0.11);
+      --sidebar: 276px;
+      --sidebar-collapsed: 88px;
+      --radius: 18px;
     }
 
-    html[data-theme="light"] {
-      color-scheme: light;
-      --bg: #f4f7fb;
-      --panel: rgba(255, 255, 255, 0.92);
-      --panel-strong: #ffffff;
-      --line: #d9e2ef;
-      --text: #0f172a;
-      --muted: #64748b;
-      --accent: #0369a1;
-      --accent-strong: #0284c7;
-      --ok: #15803d;
-      --warn: #a16207;
-      --danger: #be123c;
-      --shadow: rgba(15, 23, 42, 0.12);
+    html[data-theme="dark"] {
+      color-scheme: dark;
+      --bg: #0e0b14;
+      --panel: rgba(24, 19, 34, 0.78);
+      --panel-strong: #181322;
+      --panel-muted: #120f1b;
+      --line: rgba(194, 171, 255, 0.13);
+      --line-strong: rgba(194, 171, 255, 0.22);
+      --text: #f6f2ff;
+      --muted: #c8c0d8;
+      --muted-2: #8f86a3;
+      --accent: #a78bfa;
+      --accent-strong: #c4b5fd;
+      --accent-soft: rgba(167, 139, 250, 0.13);
+      --accent-glow: rgba(167, 139, 250, 0.18);
+      --shadow: rgba(0, 0, 0, 0.32);
     }
 
     * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
     body {
       margin: 0;
       min-height: 100vh;
       background:
-        radial-gradient(circle at top left, rgba(56, 189, 248, 0.18), transparent 30rem),
+        radial-gradient(circle at 8% 4%, var(--accent-glow), transparent 34rem),
+        radial-gradient(circle at 92% 8%, rgba(109, 40, 217, 0.13), transparent 30rem),
         var(--bg);
       color: var(--text);
-      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      transition: background 220ms ease, color 220ms ease;
     }
+    body.modal-open, body.drawer-open { overflow: hidden; }
     button, input, select, textarea { font: inherit; }
     button {
-      border: 0;
-      border-radius: 999px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      min-height: 38px;
+      border: 1px solid var(--accent);
+      border-radius: 12px;
       background: var(--accent);
-      color: white;
+      color: #fff;
       cursor: pointer;
-      font-weight: 800;
-      padding: 10px 14px;
+      font-weight: 900;
+      padding: 0 14px;
+      transition: transform 160ms ease, box-shadow 160ms ease, background 160ms ease, border-color 160ms ease;
     }
-    button.secondary { background: transparent; color: var(--text); border: 1px solid var(--line); }
-    button.danger { background: rgba(251, 113, 133, 0.16); color: var(--danger); border: 1px solid rgba(251, 113, 133, 0.35); }
-    button.compact { padding: 6px 10px; font-size: 12px; }
+    button:hover { transform: translateY(-1px); box-shadow: 0 12px 26px var(--accent-glow); }
+    button.secondary { background: var(--panel); color: var(--text); border: 1px solid var(--line); }
+    button.danger { background: var(--danger-soft); color: var(--danger); border-color: transparent; }
+    button.compact { min-height: 30px; padding: 0 10px; font-size: 12px; }
     button:disabled { cursor: not-allowed; opacity: 0.55; }
     input, select, textarea {
       width: 100%;
@@ -1728,55 +1755,82 @@ const ADMIN_APP_HTML = `<!doctype html>
       padding: 10px 12px;
     }
     textarea { min-height: 180px; resize: vertical; font-family: Consolas, "SFMono-Regular", monospace; font-size: 13px; line-height: 1.5; }
-    input:focus, select:focus, textarea:focus { border-color: var(--accent-strong); box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.12); }
+    input:focus, select:focus, textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 4px var(--accent-soft); }
+    a { color: inherit; text-decoration: none; }
 
-    .layout { display: grid; grid-template-columns: 270px 1fr; min-height: 100vh; }
+    .mobile-backdrop { position: fixed; inset: 0; z-index: 38; display: none; background: rgba(8, 6, 13, 0.45); backdrop-filter: blur(8px); }
+    .mobile-backdrop.open { display: block; }
+    .layout { display: grid; grid-template-columns: var(--sidebar) minmax(0, 1fr); min-height: 100vh; transition: grid-template-columns 220ms ease; }
+    .layout.collapsed { grid-template-columns: var(--sidebar-collapsed) minmax(0, 1fr); }
     .sidebar {
       position: sticky;
       top: 0;
       height: 100vh;
-      padding: 22px 16px;
-      background: color-mix(in srgb, var(--panel) 92%, transparent);
+      padding: 18px 14px;
+      background: color-mix(in srgb, var(--panel-strong) 82%, transparent);
       border-right: 1px solid var(--line);
-      backdrop-filter: blur(18px);
+      backdrop-filter: blur(22px);
       display: flex;
       flex-direction: column;
       gap: 18px;
+      z-index: 40;
+      transition: transform 220ms ease, background 220ms ease;
     }
-    .brand { padding: 6px 8px 14px; border-bottom: 1px solid var(--line); }
-    .eyebrow { color: var(--accent); font-size: 11px; font-weight: 900; letter-spacing: 0.22em; text-transform: uppercase; }
-    .brand h1 { margin: 8px 0 0; font-size: 24px; letter-spacing: -0.04em; }
-    .nav { display: grid; gap: 7px; }
+    .brand { display: flex; align-items: center; gap: 12px; padding: 10px 10px 18px; border-bottom: 1px solid var(--line); }
+    .brand-mark { display: grid; width: 42px; height: 42px; place-items: center; flex: 0 0 auto; border-radius: 14px; color: #fff; background: var(--accent); box-shadow: 0 14px 30px var(--accent-glow); }
+    .brand-mark i { font-size: 20px; }
+    .brand-copy { min-width: 0; }
+    .eyebrow { color: var(--accent-strong); font-size: 11px; font-weight: 900; letter-spacing: 0.12em; text-transform: uppercase; }
+    .brand h1 { margin: 4px 0 0; font-size: 22px; line-height: 1.08; letter-spacing: -0.04em; }
+    .nav { display: grid; gap: 6px; }
     .nav a {
       color: var(--muted);
-      text-decoration: none;
-      padding: 11px 12px;
-      border-radius: 14px;
-      font-weight: 800;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      min-height: 42px;
+      padding: 0 12px;
+      border-radius: 13px;
+      font-size: 14px;
+      font-weight: 900;
+      transition: background 160ms ease, color 160ms ease, transform 160ms ease;
     }
-    .nav a.active, .nav a:hover { color: var(--text); background: rgba(125, 211, 252, 0.13); }
+    .nav a i { font-size: 18px; }
+    .nav a.active, .nav a:hover { color: var(--accent-strong); background: var(--accent-soft); }
+    .nav a:hover { transform: translateX(2px); }
     .sidebar-footer { margin-top: auto; display: grid; gap: 10px; }
-    .content { padding: 28px; min-width: 0; }
-    .topbar { display: flex; justify-content: space-between; gap: 16px; align-items: flex-end; margin-bottom: 22px; }
-    .topbar h2 { margin: 0; font-size: clamp(30px, 5vw, 54px); letter-spacing: -0.06em; line-height: 0.95; }
-    .subtitle { color: var(--muted); margin: 10px 0 0; }
+    .sidebar-note { padding: 12px; border: 1px solid var(--line); border-radius: 16px; background: var(--panel-muted); color: var(--muted); font-size: 12px; line-height: 1.55; }
+    .layout.collapsed .brand-copy, .layout.collapsed .nav span, .layout.collapsed .sidebar-footer { display: none; }
+    .layout.collapsed .brand { justify-content: center; padding-inline: 0; }
+    .layout.collapsed .nav a { justify-content: center; padding-inline: 0; }
+    .content { min-width: 0; padding: 24px 26px 42px; }
+    .topbar { position: sticky; top: 0; z-index: 35; display: flex; justify-content: space-between; gap: 18px; align-items: flex-end; margin: -24px -26px 22px; padding: 18px 26px; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--bg) 78%, transparent); backdrop-filter: blur(20px); }
+    .topbar h2 { margin: 0; font-size: clamp(26px, 3vw, 40px); letter-spacing: -0.06em; line-height: 1.08; }
+    .subtitle { color: var(--muted); margin: 8px 0 0; font-size: 13px; line-height: 1.6; }
+    .breadcrumb { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; color: var(--muted-2); font-size: 12px; font-weight: 800; }
+    .breadcrumb strong { color: var(--accent-strong); }
     .toolbar { display: flex; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
+    .mobile-menu { display: none; }
+    .icon-button { width: 38px; min-width: 38px; padding: 0; }
     .grid { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 16px; }
     .card {
       background: var(--panel);
       border: 1px solid var(--line);
-      border-radius: 22px;
+      border-radius: var(--radius);
       padding: 18px;
-      box-shadow: 0 20px 70px var(--shadow);
+      box-shadow: 0 18px 46px var(--shadow);
       backdrop-filter: blur(18px);
+      position: relative;
+      overflow: hidden;
     }
+    .card::before { content: ""; position: absolute; inset: 0 0 auto; height: 1px; background: linear-gradient(90deg, transparent, rgba(109, 40, 217, 0.32), transparent); opacity: 0.8; }
     .span-12 { grid-column: span 12; }
     .span-8 { grid-column: span 8; }
     .span-7 { grid-column: span 7; }
     .span-6 { grid-column: span 6; }
     .span-5 { grid-column: span 5; }
     .span-4 { grid-column: span 4; }
-    .card h3 { margin: 0 0 12px; font-size: 17px; }
+    .card h3 { margin: 0 0 12px; font-size: 19px; letter-spacing: -0.04em; }
     .card-head { display: flex; justify-content: space-between; gap: 16px; align-items: flex-start; margin-bottom: 14px; }
     .card-head h3 { margin-bottom: 6px; }
     .entity-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; margin-top: 14px; }
@@ -1787,7 +1841,7 @@ const ADMIN_APP_HTML = `<!doctype html>
       padding: 16px;
       background: var(--panel-strong);
       border: 1px solid var(--line);
-      border-radius: 18px;
+      border-radius: 16px;
     }
     .entity-card:hover { border-color: color-mix(in srgb, var(--accent) 42%, var(--line)); }
     .entity-card header { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; }
@@ -1803,26 +1857,27 @@ const ADMIN_APP_HTML = `<!doctype html>
     .section.active { display: block; }
     .stat-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
     .stat { padding: 15px; background: var(--panel-strong); border: 1px solid var(--line); border-radius: 16px; }
-    .stat strong { display: block; font-size: 28px; letter-spacing: -0.04em; }
-    .stat span, label { color: var(--muted); font-size: 12px; font-weight: 800; }
+    .stat strong { display: block; font-size: 30px; letter-spacing: -0.06em; }
+    .stat span, label { color: var(--muted); font-size: 12px; font-weight: 900; }
     .form-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; align-items: end; }
     .form-grid label { display: grid; gap: 6px; }
     .stack { display: grid; gap: 10px; }
     .status { color: var(--muted); font-size: 13px; min-height: 20px; }
     .status.ok { color: var(--ok); }
     .status.error { color: var(--danger); }
-    .pill { display: inline-flex; border: 1px solid var(--line); border-radius: 999px; padding: 3px 8px; color: var(--muted); font-size: 12px; margin: 2px 4px 2px 0; }
-    .pill.ok { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 35%, transparent); }
-    .pill.warn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 35%, transparent); }
-    .pill.danger { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 35%, transparent); }
-    .warning { padding: 11px 12px; border-radius: 14px; color: var(--warn); background: rgba(251, 191, 36, 0.1); border: 1px solid rgba(251, 191, 36, 0.28); }
+    .pill { display: inline-flex; align-items: center; border: 1px solid var(--line); border-radius: 999px; padding: 3px 8px; color: var(--muted); background: var(--panel-muted); font-size: 12px; font-weight: 900; margin: 2px 4px 2px 0; }
+    .pill.ok { color: var(--ok); background: var(--ok-soft); border-color: transparent; }
+    .pill.warn { color: var(--warn); background: var(--warn-soft); border-color: transparent; }
+    .pill.danger { color: var(--danger); background: var(--danger-soft); border-color: transparent; }
+    .warning { padding: 11px 12px; border-radius: 14px; color: var(--warn); background: var(--warn-soft); border: 1px solid color-mix(in srgb, var(--warn) 26%, transparent); }
     table { width: 100%; border-collapse: collapse; }
-    th, td { border-bottom: 1px solid var(--line); padding: 10px 8px; text-align: left; vertical-align: top; font-size: 13px; }
-    th { color: var(--muted); font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; }
+    th, td { border-bottom: 1px solid var(--line); padding: 12px 10px; text-align: left; vertical-align: top; font-size: 13px; }
+    th { color: var(--muted); background: color-mix(in srgb, var(--panel-muted) 78%, transparent); font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; }
+    tbody tr:hover { background: var(--accent-soft); }
     code, pre { font-family: Consolas, "SFMono-Regular", monospace; }
     pre { margin: 0; white-space: pre-wrap; word-break: break-word; }
     .json-view { max-height: 360px; overflow: auto; padding: 14px; background: var(--panel-strong); border: 1px solid var(--line); border-radius: 16px; color: var(--text); font-size: 12px; }
-    .table-wrap { overflow-x: auto; }
+    .table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 16px; }
     .tasks-table { min-width: 760px; table-layout: fixed; }
     .task-detail-panel { max-height: 520px; overflow: auto; padding: 14px; background: var(--panel-strong); border: 1px solid var(--line); border-radius: 16px; color: var(--text); font-size: 13px; }
     .task-detail-card { display: grid; gap: 12px; }
@@ -1840,7 +1895,7 @@ const ADMIN_APP_HTML = `<!doctype html>
     .actions { display: flex; gap: 7px; flex-wrap: wrap; }
     .empty { color: var(--muted); padding: 12px 0; }
     .secret { border: 1px solid rgba(125, 211, 252, 0.38); border-radius: 18px; background: rgba(125, 211, 252, 0.1); padding: 14px; }
-    .alert { border: 1px solid rgba(251, 113, 133, 0.35); border-radius: 16px; background: rgba(251, 113, 133, 0.1); color: #fecdd3; padding: 12px 14px; font-size: 13px; }
+    .alert { border: 1px solid color-mix(in srgb, var(--danger) 35%, transparent); border-radius: 16px; background: var(--danger-soft); color: var(--danger); padding: 12px 14px; font-size: 13px; }
     .modal {
       position: fixed;
       inset: 0;
@@ -1872,10 +1927,16 @@ const ADMIN_APP_HTML = `<!doctype html>
     body.modal-open { overflow: hidden; }
     @media (max-width: 980px) {
       .layout { grid-template-columns: 1fr; }
-      .sidebar { position: static; height: auto; }
-      .content { padding: 18px; }
-      .topbar { display: grid; }
+      .layout.collapsed { grid-template-columns: 1fr; }
+      .sidebar { position: fixed; left: 0; width: 286px; transform: translateX(-105%); box-shadow: 0 20px 56px var(--shadow); }
+      .sidebar.open { transform: translateX(0); }
+      .layout.collapsed .brand-copy, .layout.collapsed .nav span, .layout.collapsed .sidebar-footer { display: block; }
+      .layout.collapsed .nav a { justify-content: flex-start; padding-inline: 12px; }
+      .content { padding: 18px 14px 34px; }
+      .topbar { display: grid; margin: -18px -14px 20px; padding: 14px; }
       .toolbar { justify-content: flex-start; }
+      .mobile-menu { display: inline-flex; }
+      #sidebar-collapse { display: none; }
       .stat-grid, .form-grid { grid-template-columns: 1fr; }
       .card-head, .modal-head { display: grid; }
       .card-head button, .modal-head button { width: 100%; }
@@ -1887,35 +1948,44 @@ const ADMIN_APP_HTML = `<!doctype html>
   </style>
 </head>
 <body>
-  <div class="layout">
-    <aside class="sidebar">
+  <div class="mobile-backdrop" id="mobile-backdrop"></div>
+  <div class="layout" id="admin-layout">
+    <aside class="sidebar" id="sidebar" aria-label="管理后台导航">
       <div class="brand">
-        <div class="eyebrow">Teaven AI Gateway</div>
-        <h1>管理后台</h1>
-        <p class="subtitle">模型、用户、用量与运行状态。</p>
+        <div class="brand-mark"><i class="ri-instance-line"></i></div>
+        <div class="brand-copy">
+          <div class="eyebrow">Teaven AI Gateway</div>
+          <h1>管理后台</h1>
+          <p class="subtitle">模型、用户、用量与运行状态。</p>
+        </div>
       </div>
       <nav class="nav" id="nav">
-        <a href="#dashboard" data-section="dashboard">仪表盘</a>
-        <a href="#upstreams" data-section="upstreams">上游管理</a>
-        <a href="#models" data-section="models">模型管理</a>
-        <a href="#users" data-section="users">用户管理</a>
-        <a href="#usage" data-section="usage">模型用量</a>
-        <a href="#tasks" data-section="tasks">任务管理</a>
-        <a href="#config" data-section="config">配置工具</a>
+        <a href="#dashboard" data-section="dashboard"><i class="ri-dashboard-3-line"></i><span>仪表盘</span></a>
+        <a href="#upstreams" data-section="upstreams"><i class="ri-plug-line"></i><span>上游管理</span></a>
+        <a href="#models" data-section="models"><i class="ri-route-line"></i><span>模型管理</span></a>
+        <a href="#users" data-section="users"><i class="ri-user-settings-line"></i><span>用户管理</span></a>
+        <a href="#usage" data-section="usage"><i class="ri-bar-chart-box-line"></i><span>模型用量</span></a>
+        <a href="#tasks" data-section="tasks"><i class="ri-time-line"></i><span>任务管理</span></a>
+        <a href="#config" data-section="config"><i class="ri-settings-4-line"></i><span>配置工具</span></a>
+        <a href="/account" target="_blank" rel="noreferrer"><i class="ri-account-circle-line"></i><span>用户中心</span></a>
       </nav>
       <div class="sidebar-footer">
-        <button id="theme-toggle" class="secondary" type="button">切换浅色</button>
+        <div class="sidebar-note">保留原后台能力：模型路由、上游配置、用户/API Key、用量、任务诊断和配置校验。</div>
+        <button id="theme-toggle" class="secondary" type="button"><i class="ri-contrast-2-line"></i><span>切换主题</span></button>
         <form action="/admin/logout" method="post"><button class="secondary" type="submit" style="width: 100%;">退出登录</button></form>
       </div>
     </aside>
     <main class="content">
       <div class="topbar">
         <div>
+          <div class="breadcrumb"><span>后台管理</span><i class="ri-arrow-right-s-line"></i><strong id="breadcrumb-section">仪表盘</strong><span>/admin</span></div>
           <h2 id="page-title">仪表盘</h2>
           <p id="status" class="subtitle">正在加载管理后台...</p>
         </div>
         <div class="toolbar">
-          <button id="refresh" class="secondary" type="button">刷新全部</button>
+          <button id="mobile-menu" class="secondary icon-button mobile-menu" type="button" aria-label="打开导航"><i class="ri-menu-2-line"></i></button>
+          <button id="sidebar-collapse" class="secondary icon-button" type="button" aria-label="折叠导航"><i class="ri-side-bar-line"></i></button>
+          <button id="refresh" class="secondary" type="button"><i class="ri-refresh-line"></i>刷新全部</button>
         </div>
       </div>
 
@@ -2120,14 +2190,16 @@ const ADMIN_APP_HTML = `<!doctype html>
       var titles = { dashboard: '仪表盘', upstreams: '上游管理', models: '模型管理', users: '用户管理', usage: '模型用量', tasks: '任务管理', config: '配置工具' };
       var statusEl = document.getElementById('status');
       var lastAutoRefreshAt = Date.now();
-      var theme = localStorage.getItem('teaven_admin_theme') || 'dark';
+      var savedTheme = localStorage.getItem('teaven_admin_theme');
+      var theme = savedTheme || (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
       document.documentElement.setAttribute('data-theme', theme);
-      document.getElementById('theme-toggle').textContent = theme === 'dark' ? '切换浅色' : '切换深色';
+      setThemeToggleText(theme);
 
       document.getElementById('nav').addEventListener('click', function (event) {
         var link = event.target.closest('[data-section]');
         if (!link) return;
         showSection(link.getAttribute('data-section'));
+        closeMobileNav();
       });
       document.querySelectorAll('[data-modal-close]').forEach(function (button) {
         button.addEventListener('click', function (event) {
@@ -2138,6 +2210,19 @@ const ADMIN_APP_HTML = `<!doctype html>
       document.addEventListener('keydown', function (event) { if (event.key === 'Escape') closeModal(); });
       document.getElementById('theme-toggle').addEventListener('click', toggleTheme);
       document.getElementById('refresh').addEventListener('click', loadAll);
+      var sidebarCollapse = document.getElementById('sidebar-collapse');
+      var mobileMenu = document.getElementById('mobile-menu');
+      var mobileBackdrop = document.getElementById('mobile-backdrop');
+      if (sidebarCollapse) sidebarCollapse.addEventListener('click', function () { document.getElementById('admin-layout').classList.toggle('collapsed'); });
+      if (mobileMenu) mobileMenu.addEventListener('click', openMobileNav);
+      if (mobileBackdrop) mobileBackdrop.addEventListener('click', closeMobileNav);
+      if (window.matchMedia) {
+        window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', function (event) {
+          if (localStorage.getItem('teaven_admin_theme')) return;
+          document.documentElement.setAttribute('data-theme', event.matches ? 'dark' : 'light');
+          setThemeToggleText(event.matches ? 'dark' : 'light');
+        });
+      }
       document.getElementById('open-upstream-modal').addEventListener('click', function () { resetUpstreamForm(); openModal('upstream-modal', 'upstream-modal-title', '添加上游'); });
       document.getElementById('open-model-modal').addEventListener('click', function () { resetModelForm(); openModal('model-modal', 'model-modal-title', '添加模型'); });
       document.getElementById('open-user-modal').addEventListener('click', function () { resetUserForm(); openModal('user-modal', 'user-modal-title', '添加用户'); });
@@ -2661,8 +2746,11 @@ const ADMIN_APP_HTML = `<!doctype html>
       function findConfigUpstream(id) { var upstreams = (state.config && state.config.config && state.config.config.upstreams) || []; return upstreams.find(function (item) { return item.id === id; }) || null; }
       function openModal(id, titleId, title) { var modal = document.getElementById(id); if (!modal) return; document.getElementById(titleId).textContent = title; modal.classList.add('open'); modal.setAttribute('aria-hidden', 'false'); document.body.classList.add('modal-open'); var firstField = modal.querySelector('.modal-form input:not([type="hidden"]), .modal-form select, .modal-form textarea'); if (firstField) firstField.focus(); }
       function closeModal(id) { var modals = id ? [document.getElementById(id)] : Array.prototype.slice.call(document.querySelectorAll('.modal.open')); modals.forEach(function (modal) { if (!modal) return; modal.classList.remove('open'); modal.setAttribute('aria-hidden', 'true'); }); if (!document.querySelector('.modal.open')) document.body.classList.remove('modal-open'); }
-      function showSection(section) { section = titles[section] ? section : 'dashboard'; document.querySelectorAll('.section').forEach(function (el) { el.classList.toggle('active', el.id === section); }); document.querySelectorAll('.nav a').forEach(function (el) { el.classList.toggle('active', el.getAttribute('data-section') === section); }); document.getElementById('page-title').textContent = titles[section]; }
-      function toggleTheme() { var next = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark'; document.documentElement.setAttribute('data-theme', next); localStorage.setItem('teaven_admin_theme', next); document.getElementById('theme-toggle').textContent = next === 'dark' ? '切换浅色' : '切换深色'; }
+      function showSection(section) { section = titles[section] ? section : 'dashboard'; document.querySelectorAll('.section').forEach(function (el) { el.classList.toggle('active', el.id === section); }); document.querySelectorAll('.nav a').forEach(function (el) { el.classList.toggle('active', el.getAttribute('data-section') === section); }); document.getElementById('page-title').textContent = titles[section]; var breadcrumb = document.getElementById('breadcrumb-section'); if (breadcrumb) breadcrumb.textContent = titles[section]; }
+      function toggleTheme() { var next = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark'; document.documentElement.setAttribute('data-theme', next); localStorage.setItem('teaven_admin_theme', next); setThemeToggleText(next); }
+      function setThemeToggleText(theme) { document.getElementById('theme-toggle').innerHTML = '<i class="ri-contrast-2-line"></i><span>' + (theme === 'dark' ? '切换浅色' : '切换深色') + '</span>'; }
+      function openMobileNav() { document.getElementById('sidebar').classList.add('open'); document.getElementById('mobile-backdrop').classList.add('open'); document.body.classList.add('drawer-open'); }
+      function closeMobileNav() { document.getElementById('sidebar').classList.remove('open'); document.getElementById('mobile-backdrop').classList.remove('open'); document.body.classList.remove('drawer-open'); }
       function stat(label, value) { return '<div class="stat"><strong>' + esc(value == null ? 0 : value) + '</strong><span>' + esc(label) + '</span></div>'; }
       function meta(label, value) { return '<div><span class="pill">' + esc(label) + '</span><strong>' + esc(value == null ? '' : value) + '</strong></div>'; }
       function renderExample(req) { if (!req) return '暂无示例'; var quote = String.fromCharCode(39); return 'curl -X ' + req.method + ' "' + location.origin + req.endpoint + '"\\n  -H "Authorization: Bearer <DEV_API_KEY>"\\n  -H "Content-Type: application/json"\\n  -d ' + quote + JSON.stringify(req.body, null, 2) + quote; }
