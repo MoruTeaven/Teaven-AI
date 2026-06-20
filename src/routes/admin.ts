@@ -1894,6 +1894,10 @@ const ADMIN_APP_HTML = `<!doctype html>
     .task-events-table { margin: 0; min-width: 760px; table-layout: fixed; }
     .task-events-table td { word-break: break-word; }
     .task-json-block { margin-top: 4px; padding: 10px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); font-size: 12px; max-height: 180px; overflow: auto; }
+    .image-preview-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px; }
+    .image-preview-card { overflow: hidden; border: 1px solid var(--line); border-radius: 16px; background: var(--panel); }
+    .image-preview-card img { display: block; width: 100%; aspect-ratio: 1; object-fit: cover; background: rgba(148, 163, 184, 0.08); }
+    .image-preview-card footer { display: flex; justify-content: space-between; gap: 8px; align-items: center; padding: 10px; font-size: 12px; color: var(--muted); }
     .time-cell { white-space: nowrap; }
     .break-all { word-break: break-all; }
     .actions { display: flex; gap: 7px; flex-wrap: wrap; }
@@ -2498,7 +2502,7 @@ const ADMIN_APP_HTML = `<!doctype html>
           renderTaskDiagnostics(task.diagnostics) +
           renderTaskEvents(task.events || []) +
           renderTaskJsonSection('输入参数', task.input, false) +
-          renderTaskJsonSection('输出结果', task.output, false) +
+          renderTaskOutputPreview(task) +
           renderTaskJsonSection('错误信息', task.error, true) +
           renderTaskJsonSection('元数据', task.metadata, false) +
         '</div>';
@@ -2536,6 +2540,37 @@ const ADMIN_APP_HTML = `<!doctype html>
         var content = typeof value === 'object' ? JSON.stringify(value, null, 2) : String(value);
         var style = danger ? ' style="border-color:var(--danger);color:var(--danger);background:rgba(251,113,133,0.05);"' : '';
         return '<div><span class="muted-label"' + (danger ? ' style="color:var(--danger);"' : '') + '>' + esc(label) + '</span><pre class="task-json-block"' + style + '>' + esc(content) + '</pre></div>';
+      }
+
+      function renderTaskOutputPreview(task) {
+        if (!task.output) return '';
+
+        var output = Array.isArray(task.output) ? task.output : [];
+        var images = output.filter(function (item) { return item && (item.url || item.b64_json); });
+
+        var html = '<div><span class="muted-label">输出结果</span>';
+
+        if (images.length > 0) {
+          html += '<div class="image-preview-grid" style="margin-top:4px;">' +
+            images.map(function (item, index) {
+              var src = imageOutputSrc(item);
+              var label = item.stored ? '已转存' : (item.source === 'upstream' ? '上游 URL' : '图片');
+              var openLink = item.url ? '<a href="' + esc(item.url) + '" target="_blank" rel="noreferrer">打开原图</a>' : '<span class="muted">Base64</span>';
+              return '<article class="image-preview-card"><img src="' + esc(src) + '" alt="生成图片 ' + (index + 1) + '" loading="lazy"><footer><span>' + esc(label) + ' #' + (index + 1) + '</span>' + openLink + '</footer></article>';
+            }).join('') +
+            '</div>';
+        }
+
+        var content = typeof task.output === 'object' ? JSON.stringify(task.output, null, 2) : String(task.output);
+        html += '<pre class="task-json-block" style="margin-top:' + (images.length > 0 ? '8' : '4') + 'px;">' + esc(content) + '</pre></div>';
+
+        return html;
+      }
+
+      function imageOutputSrc(item) {
+        if (item.url) return item.url;
+        var value = String(item.b64_json || '');
+        return value.startsWith('data:') ? value : 'data:image/png;base64,' + value;
       }
 
       function formatTaskEventSummary(event) {

@@ -2391,11 +2391,35 @@ Content-Type: application/json</code></pre></div>
           renderTaskDiagnostics(task.diagnostics) +
           renderTaskEvents(task.events || []) +
           (task.input ? '<div style="margin-top:12px;"><span class="muted" style="font-size:11px;font-weight:900;">输入参数</span><pre style="margin-top:4px;padding:10px;border:1px solid var(--line);border-radius:12px;background:var(--panel-strong);font-size:12px;max-height:150px;overflow:auto;">' + escapeHtml(JSON.stringify(task.input, null, 2)) + '</pre></div>' : '') +
-          (task.output ? '<div style="margin-top:12px;"><span class="muted" style="font-size:11px;font-weight:900;">输出结果</span><pre style="margin-top:4px;padding:10px;border:1px solid var(--line);border-radius:12px;background:var(--panel-strong);font-size:12px;max-height:150px;overflow:auto;">' + escapeHtml(JSON.stringify(task.output, null, 2)) + '</pre></div>' : '') +
+          renderTaskOutputPreview(task) +
           (task.error ? '<div style="margin-top:12px;"><span class="muted" style="font-size:11px;font-weight:900;color:var(--danger);">错误信息</span><pre style="margin-top:4px;padding:10px;border:1px solid var(--danger);border-radius:12px;background:rgba(251,113,133,0.05);color:var(--danger);font-size:12px;max-height:150px;overflow:auto;">' + escapeHtml(typeof task.error === 'object' ? JSON.stringify(task.error, null, 2) : String(task.error)) + '</pre></div>' : '') +
           (task.metadata ? '<div style="margin-top:12px;"><span class="muted" style="font-size:11px;font-weight:900;">元数据</span><pre style="margin-top:4px;padding:10px;border:1px solid var(--line);border-radius:12px;background:var(--panel-strong);font-size:12px;max-height:150px;overflow:auto;">' + escapeHtml(JSON.stringify(task.metadata, null, 2)) + '</pre></div>' : '') +
           '<div style="margin-top:12px;text-align:right;"><button class="compact secondary" type="button" data-task-modal-close>关闭</button></div>' +
           '</div>';
+    }
+
+    function renderTaskOutputPreview(task) {
+      if (!task.output) return '';
+
+      const output = Array.isArray(task.output) ? task.output : [];
+      const images = output.filter((item) => item && (item.url || item.b64_json));
+
+      let html = '<div style="margin-top:12px;"><span class="muted" style="font-size:11px;font-weight:900;">输出结果</span>';
+
+      if (images.length > 0) {
+        html += '<div style="margin-top:4px;"><div class="image-preview-grid">' +
+          images.map((item, index) => {
+            const src = imageOutputSrc(item);
+            const label = item.stored ? '已转存' : (item.source === 'upstream' ? '上游 URL' : '图片');
+            const openLink = item.url ? '<a href="' + escapeHtml(item.url) + '" target="_blank" rel="noreferrer">打开原图</a>' : '<span class="muted">Base64</span>';
+            return '<article class="image-preview-card"><img src="' + escapeHtml(src) + '" alt="生成图片 ' + (index + 1) + '" loading="lazy"><footer><span>' + escapeHtml(label) + ' #' + (index + 1) + '</span>' + openLink + '</footer></article>';
+          }).join('') +
+          '</div></div>';
+      }
+
+      html += '<div style="margin-top:' + (images.length > 0 ? '8' : '4') + 'px;"><pre style="padding:10px;border:1px solid var(--line);border-radius:12px;background:var(--panel-strong);font-size:12px;max-height:150px;overflow:auto;">' + escapeHtml(JSON.stringify(task.output, null, 2)) + '</pre></div></div>';
+
+      return html;
     }
 
     function activateSection(sectionId) {
