@@ -1564,6 +1564,18 @@ Content-Type: application/json</code></pre></div>
           </div>
 
           <div class="card span-12 doc-block">
+            <div class="card-head"><h3>模型列表</h3></div>
+            <p>获取当前 API Key 可访问的模型列表，支持按分类（<code>modality</code>）筛选：<code>text</code>（文本）、<code>image</code>（图片）、<code>video</code>（视频）、<code>file</code>（文件）。不传 <code>modality</code> 则返回全部模型。</p>
+            <div class="code-card"><pre><code id="listModelsExample"></code></pre></div>
+            <table>
+              <thead><tr><th>参数</th><th>类型</th><th>必填</th><th>说明</th></tr></thead>
+              <tbody>
+                <tr><td><code>modality</code></td><td>string</td><td>否</td><td>筛选模型分类：<code>text</code>、<code>image</code>、<code>video</code>、<code>file</code>。</td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div class="card span-12 doc-block">
             <h3>创建生图任务</h3>
             <div class="code-card"><pre><code id="imageTaskExample"></code></pre></div>
           </div>
@@ -2101,6 +2113,25 @@ Content-Type: application/json</code></pre></div>
       $('#videoTaskExample').textContent = ['POST ' + origin + '/v1/tasks', 'Authorization: Bearer YOUR_API_KEY', 'Content-Type: application/json', '', videoBody].join('\n');
       $('#getTaskExample').textContent = ['GET ' + origin + '/v1/tasks/task_xxx', 'Authorization: Bearer YOUR_API_KEY'].join('\n');
       $('#cancelTaskExample').textContent = ['POST ' + origin + '/v1/tasks/task_xxx/cancel', 'Authorization: Bearer YOUR_API_KEY'].join('\n');
+      $('#listModelsExample').textContent = [
+        'GET ' + origin + '/v1/models',
+        'Authorization: Bearer YOUR_API_KEY',
+        '',
+        '# 全部模型（不传 modality）',
+        'GET ' + origin + '/v1/models',
+        '',
+        '# 只返回图片模型',
+        'GET ' + origin + '/v1/models?modality=image',
+        '',
+        '# 响应示例（每条记录含 modality）：',
+        JSON.stringify({
+          object: 'list',
+          data: [
+            { id: 'gpt-4o-mini', object: 'model', owned_by: 'teaven', modality: 'text' },
+            { id: 'image-basic', object: 'model', owned_by: 'teaven', modality: 'image' }
+          ]
+        }, null, 2)
+      ].join('\n');
     }
 
     function findModelByModality(modality) {

@@ -928,6 +928,7 @@ function publicModel(model: ModelConfig, env: Env): Record<string, unknown> {
     modality: model.modality,
     supports_stream: model.supports_stream !== false,
     status: model.status || "active",
+    price: model.price || null,
     routes: model.routes.map((route) => ({
       upstream_id: route.upstream_id,
       upstream_name: route.upstream_name || null,
@@ -1044,7 +1045,8 @@ function normalizeModelInput(value: unknown): AdminModelMutation {
     supports_stream: input.supports_stream !== false,
     priority: optionalNumber(input.priority, "priority"),
     weight: optionalNumber(input.weight, "weight"),
-    status: normalizeModelStatus(input.status)
+    status: normalizeModelStatus(input.status),
+    price: typeof input.price === "string" ? input.price : undefined
   };
 
   return { upstream_id, model };
@@ -2141,6 +2143,7 @@ const ADMIN_APP_HTML = `<!doctype html>
           <label>模型状态<select id="model-status"><option value="active">启用</option><option value="hidden">隐藏</option><option value="disabled">停用</option></select></label>
           <label>流式<select id="model-stream"><option value="true">支持</option><option value="false">不支持</option></select></label>
           <label>优先级<input id="route-priority" type="number" value="1"></label>
+          <label>价格（元/1M Token）<input id="model-price" placeholder="例如: 0.5"></label>
           <label>所属上游<select id="model-upstream-select"></select></label>
         </div>
         <div class="actions" style="margin-top: 14px;"><button id="save-model-form" type="button">保存模型</button></div>
@@ -2363,6 +2366,7 @@ const ADMIN_APP_HTML = `<!doctype html>
             '<div class="entity-meta">' +
               '<div class="entity-row"><span>模态</span><strong>' + esc(modalityText(model.modality)) + '</strong></div>' +
               '<div class="entity-row"><span>流式</span><strong>' + (model.supports_stream !== false ? '支持' : '不支持') + '</strong></div>' +
+              '<div class="entity-row"><span>价格</span><strong>' + (model.price ? esc(model.price) + ' 元/1M Token' : '未设置') + '</strong></div>' +
               '<div class="entity-row"><span>路由</span><div>' + routes + '</div></div>' +
             '</div>' +
             '<div class="actions entity-actions"><button type="button" class="secondary compact" data-model-view="' + esc(model.alias) + '">查看</button><button type="button" class="secondary compact" data-model-edit="' + esc(model.alias) + '">编辑</button><button type="button" class="danger compact" data-model-delete="' + esc(model.alias) + '">删除</button></div>' +
@@ -2406,6 +2410,7 @@ const ADMIN_APP_HTML = `<!doctype html>
           '<div class="entity-row"><span>模态</span><strong>' + esc(modalityText(model.modality)) + '</strong></div>' +
           '<div class="entity-row"><span>状态</span><span class="pill ' + statusClass(model.status) + '">' + esc(statusText(model.status)) + '</span></div>' +
           '<div class="entity-row"><span>流式</span><strong>' + (model.supports_stream !== false ? '支持' : '不支持') + '</strong></div>' +
+          '<div class="entity-row"><span>价格</span><strong>' + (model.price ? esc(model.price) + ' 元/1M Token' : '未设置') + '</strong></div>' +
           '<div class="entity-row"><span>路由数</span><strong>' + esc((model.routes || []).length) + '</strong></div>' +
         '</div>' +
         '<div><h3>路由明细</h3><div class="table-wrap"><table><thead><tr><th>上游</th><th>上游模型</th><th>插件</th><th>API Key</th><th>状态</th><th>优先级</th><th>权重</th></tr></thead><tbody>' + routeRows + '</tbody></table></div></div>' +
@@ -2633,7 +2638,7 @@ const ADMIN_APP_HTML = `<!doctype html>
       async function saveModelFromForm() {
         var upstream_id = document.getElementById('model-upstream-select').value;
         if (!upstream_id) { setStatus('请先选择所属上游', 'error'); return; }
-        var model = { upstream_id: upstream_id, alias: value('model-alias'), provider_model: value('route-provider-model'), modality: value('model-modality'), supports_stream: value('model-stream') === 'true', status: value('model-status'), priority: Number(value('route-priority') || 1), weight: 100 };
+        var model = { upstream_id: upstream_id, alias: value('model-alias'), provider_model: value('route-provider-model'), modality: value('model-modality'), supports_stream: value('model-stream') === 'true', status: value('model-status'), priority: Number(value('route-priority') || 1), weight: 100, price: value('model-price') };
         await saveModel(model, state.editingModelAlias);
         closeModal('model-modal');
       }
@@ -2668,6 +2673,7 @@ const ADMIN_APP_HTML = `<!doctype html>
         document.getElementById('model-status').value = 'active';
         document.getElementById('model-stream').value = 'true';
         document.getElementById('route-priority').value = '1';
+        document.getElementById('model-price').value = '';
         populateUpstreamSelect();
         document.getElementById('model-upstream-select').value = '';
       }
@@ -2723,12 +2729,12 @@ const ADMIN_APP_HTML = `<!doctype html>
       async function handleKeyAction(event) { var viewBtn = event.target.closest('[data-key-view]'); var toggleBtn = event.target.closest('[data-key-toggle]'); if (viewBtn) { var keyId = viewBtn.getAttribute('data-key-view'); var key = state.apiKeys.find(function (item) { return item.id === keyId; }); if (!key) return; document.getElementById('key-reveal-title').textContent = '查看密钥：' + esc(key.name); document.getElementById('reveal-password').value = ''; document.getElementById('reveal-error').style.display = 'none'; document.getElementById('reveal-result').style.display = 'none'; document.getElementById('reveal-key-confirm').setAttribute('data-reveal-key-id', keyId); openModal('key-reveal-modal', 'key-reveal-title', '查看密钥：' + esc(key.name)); return; } if (!toggleBtn) return; var key = state.apiKeys.find(function (item) { return item.id === toggleBtn.getAttribute('data-key-toggle'); }); if (!key) return; await api('/admin/api/api-keys/' + encodeURIComponent(key.id), { method: 'PATCH', body: JSON.stringify({ status: key.status === 'active' ? 'disabled' : 'active' }) }); await loadAll(); }
       async function handleTaskAction(event) { var view = event.target.closest('[data-task-view]'); var cancel = event.target.closest('[data-task-cancel]'); if (view) { var detail = await api('/admin/api/tasks/' + encodeURIComponent(view.getAttribute('data-task-view'))); document.getElementById('task-detail').innerHTML = renderTaskDetail(detail.task); } if (cancel && confirm('确定取消任务？')) { await api('/admin/api/tasks/' + encodeURIComponent(cancel.getAttribute('data-task-cancel')) + '/cancel', { method: 'POST' }); await loadTasks(); } }
 
-      function fillModelEditor(alias, editing) { var model = state.models.find(function (item) { return item.alias === alias; }); if (!model) return; state.editingModelAlias = editing ? alias : null; var route = model.routes && model.routes[0] ? model.routes[0] : {}; document.getElementById('model-json').value = JSON.stringify(toModelInput(model), null, 2); document.getElementById('model-alias').value = model.alias; document.getElementById('model-modality').value = model.modality; document.getElementById('model-status').value = model.status; document.getElementById('model-stream').value = String(model.supports_stream !== false); var select = document.getElementById('model-upstream-select'); if (select.options.length > 1) { select.value = route.upstream_id || ''; } document.getElementById('route-provider-model').value = route.provider_model || ''; document.getElementById('route-priority').value = route.priority || 1; }
+      function fillModelEditor(alias, editing) { var model = state.models.find(function (item) { return item.alias === alias; }); if (!model) return; state.editingModelAlias = editing ? alias : null; var route = model.routes && model.routes[0] ? model.routes[0] : {}; document.getElementById('model-json').value = JSON.stringify(toModelInput(model), null, 2); document.getElementById('model-alias').value = model.alias; document.getElementById('model-modality').value = model.modality; document.getElementById('model-status').value = model.status; document.getElementById('model-stream').value = String(model.supports_stream !== false); var select = document.getElementById('model-upstream-select'); if (select.options.length > 1) { select.value = route.upstream_id || ''; } document.getElementById('route-provider-model').value = route.provider_model || ''; document.getElementById('route-priority').value = route.priority || 1; document.getElementById('model-price').value = model.price || ''; }
       function viewModel(alias) { state.selectedModelAlias = alias; renderModelDetail(); setStatus('正在查看模型：' + alias, 'ok'); }
-      function toModelInput(model) { var route = model.routes && model.routes[0] ? model.routes[0] : {}; return { original_alias: model.alias, upstream_id: route.upstream_id, alias: model.alias, provider_model: route.provider_model, modality: model.modality, supports_stream: model.supports_stream, status: model.status, priority: route.priority, weight: route.weight }; }
+      function toModelInput(model) { var route = model.routes && model.routes[0] ? model.routes[0] : {}; return { original_alias: model.alias, upstream_id: route.upstream_id, alias: model.alias, provider_model: route.provider_model, modality: model.modality, supports_stream: model.supports_stream, status: model.status, priority: route.priority, weight: route.weight, price: model.price || '' }; }
       function fillUpstreamEditor(id) { var upstreams = (state.overview && state.overview.upstreams) || []; var upstream = upstreams.find(function (item) { return item.id === id; }); if (!upstream) return; document.getElementById('upstream-admin-id').value = upstream.id || ''; document.getElementById('upstream-admin-name').value = upstream.name || ''; document.getElementById('upstream-admin-plugin').value = upstream.plugin_id || ''; document.getElementById('upstream-admin-base-url').value = upstream.base_url || ''; document.getElementById('upstream-admin-credential').value = upstream.credential_id || ''; document.getElementById('upstream-admin-status').value = upstream.status || 'active'; }
       function viewUpstream(id) { var upstream = findOverviewUpstream(id); if (!upstream) { setStatus('未找到上游：' + id, 'error'); return; } var raw = findConfigUpstream(id) || upstream; var name = upstream.name || upstream.id; document.getElementById('upstream-view-title').textContent = '查看上游：' + name; document.getElementById('upstream-view-content').innerHTML = renderUpstreamDetail(upstream, raw); document.getElementById('upstream-view-json').textContent = JSON.stringify(toUpstreamDetailJson(upstream, raw), null, 2); openModal('upstream-view-modal', 'upstream-view-title', '查看上游：' + name); }
-      function renderUpstreamDetail(upstream, raw) { var providers = (state.overview && state.overview.providers) || []; var plugin = findProvider(providers, upstream.plugin_id); var models = (raw && raw.models) || upstream.models || []; var modelRows = models.length ? models.map(function (model) { return '<tr><td><code>' + esc(model.alias) + '</code></td><td><code>' + esc(model.provider_model) + '</code></td><td>' + esc(modalityText(model.modality)) + '</td><td><span class="pill ' + statusClass(model.status || 'active') + '">' + esc(statusText(model.status || 'active')) + '</span></td><td>' + (model.supports_stream !== false ? '支持' : '不支持') + '</td><td>' + esc(model.priority == null ? '未设置' : model.priority) + '</td><td>' + esc(model.weight == null ? '未设置' : model.weight) + '</td></tr>'; }).join('') : '<tr><td colspan="7" class="empty">暂无模型。</td></tr>'; return '<div class="entity-meta">' +
+      function renderUpstreamDetail(upstream, raw) { var providers = (state.overview && state.overview.providers) || []; var plugin = findProvider(providers, upstream.plugin_id); var models = (raw && raw.models) || upstream.models || []; var modelRows = models.length ? models.map(function (model) { return '<tr><td><code>' + esc(model.alias) + '</code></td><td><code>' + esc(model.provider_model) + '</code></td><td>' + esc(modalityText(model.modality)) + '</td><td><span class="pill ' + statusClass(model.status || 'active') + '">' + esc(statusText(model.status || 'active')) + '</span></td><td>' + (model.supports_stream !== false ? '支持' : '不支持') + '</td><td>' + esc(model.priority == null ? '未设置' : model.priority) + '</td><td>' + esc(model.weight == null ? '未设置' : model.weight) + '</td><td>' + (model.price ? esc(model.price) + ' 元/1M' : '未设置') + '</td></tr>'; }).join('') : '<tr><td colspan="8" class="empty">暂无模型。</td></tr>'; return '<div class="entity-meta">' +
           '<div class="entity-row"><span>ID</span><code>' + esc(upstream.id) + '</code></div>' +
           '<div class="entity-row"><span>名称</span><strong>' + esc(upstream.name || upstream.id) + '</strong></div>' +
           '<div class="entity-row"><span>类型</span><strong>' + esc(plugin ? plugin.name : upstream.plugin_id) + '</strong></div>' +
@@ -2739,7 +2745,7 @@ const ADMIN_APP_HTML = `<!doctype html>
           '<div class="entity-row"><span>模型</span><strong>' + esc(upstream.models_active + '/' + upstream.models_total) + '</strong></div>' +
           '<div class="entity-row"><span>活跃路由</span><strong>' + esc(upstream.routes_active == null ? 0 : upstream.routes_active) + '</strong></div>' +
         '</div>' +
-        '<div><h3>模型明细</h3><div class="table-wrap"><table><thead><tr><th>别名</th><th>上游模型</th><th>模态</th><th>状态</th><th>流式</th><th>优先级</th><th>权重</th></tr></thead><tbody>' + modelRows + '</tbody></table></div></div>' +
+        '<div><h3>模型明细</h3><div class="table-wrap"><table><thead><tr><th>别名</th><th>上游模型</th><th>模态</th><th>状态</th><th>流式</th><th>优先级</th><th>权重</th><th>价格</th></tr></thead><tbody>' + modelRows + '</tbody></table></div></div>' +
         '<div class="status">下方 JSON 为当前上游完整配置。</div>'; }
       function toUpstreamDetailJson(upstream, raw) { return Object.assign({}, raw || {}, { credential_configured: upstream.credential_configured, models_total: upstream.models_total, models_active: upstream.models_active, routes_active: upstream.routes_active == null ? 0 : upstream.routes_active }); }
       function findOverviewUpstream(id) { var upstreams = (state.overview && state.overview.upstreams) || []; return upstreams.find(function (item) { return item.id === id; }) || null; }

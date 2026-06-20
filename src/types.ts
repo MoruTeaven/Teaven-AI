@@ -40,6 +40,7 @@ export interface UpstreamModelConfig {
   priority?: number;
   weight?: number;
   status?: UpstreamModelStatus;
+  price?: string;
 }
 
 export interface UpstreamConfig {
@@ -75,6 +76,7 @@ export interface ModelConfig {
   supports_stream?: boolean;
   supports_async?: boolean;
   status?: ModelStatus;
+  price?: string;
   routes: ProviderRouteConfig[];
 }
 
