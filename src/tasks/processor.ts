@@ -431,7 +431,7 @@ function getPollInterval(env: Env, pluginId: string, fallback: number): number {
   try {
     const registry = createProviderRegistry(env);
     const plugin = registry.get(pluginId);
-    const cap = plugin.manifest.capabilities["images.generations"];
+    const cap = plugin.manifest.capabilities["image"];
     return cap?.poll_interval_seconds || fallback;
   } catch {
     return fallback;
@@ -497,7 +497,7 @@ async function createUpstreamTask(env: Env, task: AsyncTaskRecord, processId: st
   const adapter = plugin.createAdapter(env);
 
   // 根据任务类型调用对应的创建方法
-  if (task.type === "image_generation" || task.type === "image.generation") {
+  if (task.type === "image") {
     if (!adapter.imageGenerations) {
       markFailed(task, { message: `Provider "${task.plugin_id}" does not support image generation` }, {
         stage: "task.failed",

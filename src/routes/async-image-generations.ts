@@ -84,7 +84,7 @@ export async function handleAsyncImageGenerations(
       object: "task",
       organization_id: auth.organization_id,
       api_key_id: auth.api_key_id,
-      type: "image_generation",
+      type: "image",
       model: modelName,
       upstream_id: route.upstream_id,
       plugin_id: route.plugin_id,
@@ -140,7 +140,7 @@ export async function handleAsyncImageGenerations(
       JSON.stringify({
         id: task.id,
         object: "task",
-        type: "image_generation",
+        type: "image",
         status: task.status,
         provider_task_id: task.provider_task_id,
         diagnostics: taskDiagnostics(task),

@@ -9,7 +9,7 @@ const MANIFEST: ProviderPluginManifest = {
   version: "1.0.0",
   runtime: "in_process",
   capabilities: {
-    "images.generations": {
+    "image": {
       execution_mode: "async_polling",
       result_delivery: "polling",
       poll_interval_seconds: 2,

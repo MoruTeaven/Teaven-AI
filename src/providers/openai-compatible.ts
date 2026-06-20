@@ -9,11 +9,11 @@ const MANIFEST: ProviderPluginManifest = {
   version: "1.0.0",
   runtime: "in_process",
   capabilities: {
-    "chat.completions": {
+    "chat": {
       execution_mode: "stream_or_sync",
       supports_stream: true
     },
-    "images.generations": {
+    "image": {
       execution_mode: "sync",
       parameters: [
         { name: "prompt", type: "string", required: true, description: "生图提示词", maps_to: "prompt" },

@@ -672,10 +672,10 @@ function normalizeTestStorageTtl(value: unknown): number {
 }
 
 function taskTypeForModality(modality: ModelConfig["modality"]): string {
-  if (modality === "image") return "image.generation";
-  if (modality === "video") return "video.generation";
-  if (modality === "file") return "file.processing";
-  return "chat.completions";
+  if (modality === "image") return "image";
+  if (modality === "video") return "video";
+  if (modality === "file") return "file";
+  return "chat";
 }
 
 function accountErrorMessage(err: unknown): string {
@@ -1459,7 +1459,7 @@ Content-Type: application/json</code></pre></div>
             <table>
               <thead><tr><th>字段</th><th>类型</th><th>说明</th></tr></thead>
               <tbody>
-                <tr><td><code>type</code></td><td>string</td><td>任务类型，例如 <code>image.generation</code>、<code>video.generation</code>。</td></tr>
+                <tr><td><code>type</code></td><td>string</td><td>任务类型，例如 <code>image</code>、<code>video</code>。</td></tr>
                 <tr><td><code>model</code></td><td>string</td><td>模型别名，建议从“可用模型”或本页媒体模型列表选择。</td></tr>
                 <tr><td><code>input</code></td><td>object</td><td>模型输入。图片模型推荐使用下方平台标准参数；视频、文件参数仍以具体模型和 Provider 支持为准。</td></tr>
                 <tr><td><code>store_output</code></td><td>boolean</td><td>是否把结果文件转存到平台存储，默认 <code>false</code>。</td></tr>
@@ -1811,8 +1811,8 @@ Content-Type: application/json</code></pre></div>
       const imageModel = findModelByModality('image') || 'image-basic';
       const videoModel = findModelByModality('video') || 'video-basic';
       const mediaModels = state.models.filter((model) => model.modality === 'image' || model.modality === 'video' || model.modality === 'file');
-      const imageBody = JSON.stringify({ type: 'image.generation', model: imageModel, input: { prompt: '一只猫坐在云端', size: '1024x1024', image_count: 1, steps: 30, guidance_scale: 1, negative_prompt: '低清晰度、畸形', seed: 123456, response_format: 'url' }, store_output: true, storage_ttl_seconds: 86400, callback_url: 'https://example.com/webhooks/ai-task', metadata: { biz_id: 'order_123' } }, null, 2);
-      const videoBody = JSON.stringify({ type: 'video.generation', model: videoModel, input: { prompt: '海面日出，电影感镜头推进', duration: 5, size: '1280x720', fps: 24 }, store_output: true, storage_ttl_seconds: 86400, metadata: { scene: 'landing-page' } }, null, 2);
+      const imageBody = JSON.stringify({ type: 'image', model: imageModel, input: { prompt: '一只猫坐在云端', size: '1024x1024', image_count: 1, steps: 30, guidance_scale: 1, negative_prompt: '低清晰度、畸形', seed: 123456, response_format: 'url' }, store_output: true, storage_ttl_seconds: 86400, callback_url: 'https://example.com/webhooks/ai-task', metadata: { biz_id: 'order_123' } }, null, 2);
+      const videoBody = JSON.stringify({ type: 'video', model: videoModel, input: { prompt: '海面日出，电影感镜头推进', duration: 5, size: '1280x720', fps: 24 }, store_output: true, storage_ttl_seconds: 86400, metadata: { scene: 'landing-page' } }, null, 2);
 
       $('#mediaModelDocs').innerHTML = mediaModels.length ? '<table><thead><tr><th>模型</th><th>类型</th><th>异步</th></tr></thead><tbody>' + mediaModels.map((model) => '<tr><td><code>' + escapeHtml(model.id) + '</code></td><td>' + escapeHtml(modalityText(model.modality)) + '</td><td>' + (model.supports_async ? '支持' : '未声明') + '</td></tr>').join('') + '</tbody></table>' : '<div class="notice">当前没有配置图片、视频或文件模型。可先在后台添加非文本模型，再按下方异步任务接口调用。</div>';
       $('#imageTaskExample').textContent = ['POST ' + origin + '/v1/tasks', 'Authorization: Bearer YOUR_API_KEY', 'Content-Type: application/json', 'Idempotency-Key: image-demo-001', '', imageBody].join('\n');
