@@ -22,7 +22,9 @@ export async function handleListModels(
       id: model.alias,
       object: "model",
       owned_by: "teaven",
-      modality: model.modality
+      modality: model.modality,
+      price: model.price || null,
+      price_unit: model.price_unit || null
     }));
 
   return jsonResponse(

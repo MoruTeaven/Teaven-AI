@@ -1565,12 +1565,24 @@ Content-Type: application/json</code></pre></div>
 
           <div class="card span-12 doc-block">
             <div class="card-head"><h3>模型列表</h3></div>
-            <p>获取当前 API Key 可访问的模型列表，支持按分类（<code>modality</code>）筛选：<code>text</code>（文本）、<code>image</code>（图片）、<code>video</code>（视频）、<code>file</code>（文件）。不传 <code>modality</code> 则返回全部模型。</p>
+            <p>获取当前 API Key 可访问的模型列表。返回每条模型的 <code>id</code>、<code>modality</code>（分类）、<code>price</code>（价格）、<code>price_unit</code>（计费单位）。支持按分类筛选：<code>text</code>（文本）、<code>image</code>（图片）、<code>video</code>（视频）、<code>file</code>（文件）。不传 <code>modality</code> 则返回全部模型。价格为 <code>null</code> 表示模型未设定价格。</p>
             <div class="code-card"><pre><code id="listModelsExample"></code></pre></div>
             <table>
               <thead><tr><th>参数</th><th>类型</th><th>必填</th><th>说明</th></tr></thead>
               <tbody>
                 <tr><td><code>modality</code></td><td>string</td><td>否</td><td>筛选模型分类：<code>text</code>、<code>image</code>、<code>video</code>、<code>file</code>。</td></tr>
+              </tbody>
+            </table>
+            <p style="margin-top:12px"><strong>响应字段：</strong></p>
+            <table>
+              <thead><tr><th>字段</th><th>类型</th><th>说明</th></tr></thead>
+              <tbody>
+                <tr><td><code>id</code></td><td>string</td><td>模型别名，用于调用时传入 <code>model</code> 参数。</td></tr>
+                <tr><td><code>object</code></td><td>string</td><td>固定为 <code>model</code>。</td></tr>
+                <tr><td><code>owned_by</code></td><td>string</td><td>固定为 <code>teaven</code>。</td></tr>
+                <tr><td><code>modality</code></td><td>string</td><td>模型分类：<code>text</code>、<code>image</code>、<code>video</code>、<code>file</code>。</td></tr>
+                <tr><td><code>price</code></td><td>string | null</td><td>价格数值，未设定时为 <code>null</code>。</td></tr>
+                <tr><td><code>price_unit</code></td><td>string | null</td><td>计费单位：<code>per_1m_tokens</code>（每百万 Token）或 <code>per_call</code>（每次调用），未设定时为 <code>null</code>。</td></tr>
               </tbody>
             </table>
           </div>
@@ -2123,12 +2135,12 @@ Content-Type: application/json</code></pre></div>
         '# 只返回图片模型',
         'GET ' + origin + '/v1/models?modality=image',
         '',
-        '# 响应示例（每条记录含 modality）：',
+        '# 响应示例（含 modality、price）：',
         JSON.stringify({
           object: 'list',
           data: [
-            { id: 'gpt-4o-mini', object: 'model', owned_by: 'teaven', modality: 'text' },
-            { id: 'image-basic', object: 'model', owned_by: 'teaven', modality: 'image' }
+            { id: 'gpt-4o-mini', object: 'model', owned_by: 'teaven', modality: 'text', price: '0.15', price_unit: 'per_1m_tokens' },
+            { id: 'image-basic', object: 'model', owned_by: 'teaven', modality: 'image', price: '0.02', price_unit: 'per_call' }
           ]
         }, null, 2)
       ].join('\n');
