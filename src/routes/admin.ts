@@ -1878,20 +1878,26 @@ const ADMIN_APP_HTML = `<!doctype html>
       top: 0;
       z-index: 35;
       display: flex;
-      justify-content: space-between;
-      gap: 16px;
+      gap: 12px;
       align-items: center;
       margin: -24px -32px 24px;
-      padding: 16px 32px;
+      padding: 12px 32px;
       border-bottom: 1px solid var(--line);
       background: var(--bg);
     }
+    .topbar-left { display: flex; align-items: center; gap: 12px; flex-shrink: 0; }
+    .topbar-info { flex: 1; min-width: 0; }
     .topbar h2 { margin: 0; font-size: 20px; letter-spacing: -0.02em; line-height: 1.2; font-weight: 600; }
     .subtitle { color: var(--muted); margin: 4px 0 0; font-size: 13px; line-height: 1.5; }
     .breadcrumb { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-bottom: 4px; color: var(--muted-2); font-size: 12px; font-weight: 500; }
     .breadcrumb strong { color: var(--text); }
-    .toolbar { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
-    .mobile-menu { display: none; }
+    .toolbar { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; flex-shrink: 0; }
+    .mobile-menu {
+      display: none;
+      width: 36px; min-width: 36px; height: 36px; padding: 0;
+      border-radius: var(--radius); font-size: 20px;
+      justify-content: center; align-items: center;
+    }
     .icon-button { width: 34px; min-width: 34px; padding: 0; }
     .grid { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 16px; }
     .card {
@@ -2038,22 +2044,55 @@ const ADMIN_APP_HTML = `<!doctype html>
     @media (max-width: 980px) {
       .layout { grid-template-columns: 1fr; }
       .layout.collapsed { grid-template-columns: 1fr; }
-      .sidebar { position: fixed; left: 0; width: 260px; transform: translateX(-105%); box-shadow: 4px 0 24px var(--shadow); }
-      .sidebar.open { transform: translateX(0); }
-      .layout.collapsed .brand-copy, .layout.collapsed .nav span, .layout.collapsed .sidebar-footer { display: block; }
-      .layout.collapsed .nav a { justify-content: flex-start; padding-inline: 10px; }
-      .content { padding: 16px 16px 36px; }
-      .topbar { display: grid; margin: -16px -16px 16px; padding: 12px 16px; }
-      .toolbar { justify-content: flex-start; }
+      .sidebar {
+        position: fixed;
+        left: 0;
+        top: 0;
+        width: 260px;
+        height: 100vh;
+        transform: translateX(-100%);
+        transition: transform 280ms var(--ease);
+        box-shadow: none;
+        z-index: 50;
+      }
+      .sidebar.open {
+        transform: translateX(0);
+        box-shadow: 4px 0 24px var(--shadow);
+      }
       .mobile-menu { display: inline-flex; }
       #sidebar-collapse { display: none; }
-      .stat-grid, .form-grid { grid-template-columns: 1fr; }
-      .card-head, .modal-head { display: grid; }
-      .card-head button, .modal-head button { width: 100%; }
+      .content { padding: 16px 16px 36px; }
+      .topbar { margin: -16px -16px 16px; padding: 10px 16px; }
+      .topbar h2 { font-size: 18px; }
+      .stat-grid { grid-template-columns: repeat(2, 1fr); }
+      .form-grid { grid-template-columns: 1fr; }
+      .card-head { display: grid; }
+      .card-head button { width: 100%; }
+      .modal-head { display: grid; }
+      .modal-head button { width: 100%; }
       .entity-row { grid-template-columns: 1fr; gap: 4px; }
       .modal { padding: 14px; }
       .modal-card { max-height: calc(100vh - 28px); padding: 16px; }
       .span-4, .span-5, .span-6, .span-7, .span-8, .span-12 { grid-column: span 12; }
+    }
+    @media (max-width: 640px) {
+      .content { padding: 12px 12px 32px; }
+      .topbar { margin: -12px -12px 12px; padding: 10px 12px; gap: 8px; }
+      .topbar-left { gap: 8px; }
+      .topbar h2 { font-size: 16px; }
+      .subtitle { font-size: 12px; }
+      .breadcrumb { font-size: 11px; gap: 4px; margin-bottom: 2px; }
+      .toolbar { gap: 6px; }
+      .grid { gap: 12px; }
+      .card { padding: 14px; }
+      .stat-grid { grid-template-columns: 1fr 1fr; gap: 8px; }
+      .stat { padding: 12px; }
+      .stat strong { font-size: 22px; }
+      .entity-grid { grid-template-columns: 1fr; }
+      .card h3 { font-size: 14px; }
+    }
+    @media (max-width: 400px) {
+      .stat-grid { grid-template-columns: 1fr; }
     }
   </style>
 </head>
@@ -2088,13 +2127,15 @@ const ADMIN_APP_HTML = `<!doctype html>
     </aside>
     <main class="content">
       <div class="topbar">
-        <div>
+        <div class="topbar-left">
+          <button id="mobile-menu" class="secondary mobile-menu" type="button" aria-label="打开导航"><i class="ri-menu-2-line"></i></button>
+        </div>
+        <div class="topbar-info">
           <div class="breadcrumb"><span>后台管理</span><i class="ri-arrow-right-s-line"></i><strong id="breadcrumb-section">仪表盘</strong><span>/admin</span></div>
           <h2 id="page-title">仪表盘</h2>
           <p id="status" class="subtitle">正在加载管理后台...</p>
         </div>
         <div class="toolbar">
-          <button id="mobile-menu" class="secondary icon-button mobile-menu" type="button" aria-label="打开导航"><i class="ri-menu-2-line"></i></button>
           <button id="sidebar-collapse" class="secondary icon-button" type="button" aria-label="折叠导航"><i class="ri-side-bar-line"></i></button>
           <button id="refresh" class="secondary" type="button"><i class="ri-refresh-line"></i>刷新全部</button>
         </div>
