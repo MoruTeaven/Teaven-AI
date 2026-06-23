@@ -1479,28 +1479,56 @@ function renderAdminLoginHtml(errorMessage = "", adminTokenConfigured = true): s
     : "";
 
   return `<!doctype html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-theme="light">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>登录 Teaven AI 管理后台</title>
+  <link rel="stylesheet" href="https://cdn.bootcdn.net/ajax/libs/remixicon/4.6.0/remixicon.css">
   <style>
     :root {
+      color-scheme: light;
+      --bg: #f7f5fb;
+      --panel: rgba(255, 255, 255, 0.86);
+      --panel-strong: #ffffff;
+      --panel-muted: #fbfaff;
+      --line: rgba(96, 72, 140, 0.14);
+      --line-strong: rgba(96, 72, 140, 0.22);
+      --text: #171421;
+      --muted: #6f687d;
+      --muted-2: #928aa0;
+      --accent: #6d28d9;
+      --accent-strong: #5b21b6;
+      --accent-soft: rgba(109, 40, 217, 0.1);
+      --accent-glow: rgba(109, 40, 217, 0.22);
+      --danger: #dc2626;
+      --danger-soft: rgba(220, 38, 38, 0.12);
+      --ok: #16a34a;
+      --ok-soft: rgba(22, 163, 74, 0.12);
+      --shadow: rgba(53, 38, 84, 0.11);
+      --radius: 22px;
+    }
+
+    html[data-theme="dark"] {
       color-scheme: dark;
-      --bg: #080b12;
-      --panel: #111827;
-      --line: #273244;
-      --text: #f6f8fb;
-      --muted: #9aa8bd;
-      --accent: #7dd3fc;
-      --accent-strong: #38bdf8;
-      --danger: #fb7185;
+      --bg: #0e0b14;
+      --panel: rgba(24, 19, 34, 0.84);
+      --panel-strong: #181322;
+      --panel-muted: #120f1b;
+      --line: rgba(194, 171, 255, 0.13);
+      --line-strong: rgba(194, 171, 255, 0.22);
+      --text: #f6f2ff;
+      --muted: #c8c0d8;
+      --muted-2: #8f86a3;
+      --accent: #a78bfa;
+      --accent-strong: #c4b5fd;
+      --accent-soft: rgba(167, 139, 250, 0.13);
+      --accent-glow: rgba(167, 139, 250, 0.18);
+      --shadow: rgba(0, 0, 0, 0.32);
     }
 
-    * {
-      box-sizing: border-box;
-    }
-
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
     body {
       margin: 0;
       min-height: 100vh;
@@ -1508,34 +1536,75 @@ function renderAdminLoginHtml(errorMessage = "", adminTokenConfigured = true): s
       place-items: center;
       padding: 24px;
       background:
-        radial-gradient(circle at 20% 15%, rgba(125, 211, 252, 0.2), transparent 26rem),
-        radial-gradient(circle at 80% 85%, rgba(56, 189, 248, 0.12), transparent 24rem),
-        linear-gradient(135deg, #070a10 0%, #0d1320 48%, #111827 100%);
+        radial-gradient(circle at 8% 4%, var(--accent-glow), transparent 34rem),
+        radial-gradient(circle at 92% 8%, rgba(109, 40, 217, 0.13), transparent 30rem),
+        var(--bg);
       color: var(--text);
-      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      transition: background 220ms ease, color 220ms ease;
     }
 
     .login-shell {
-      width: min(100%, 440px);
+      width: min(100%, 480px);
     }
 
-    .eyebrow {
-      color: var(--accent);
+    .top-link {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 18px;
+      padding: 8px 10px;
+      border-radius: 999px;
+      color: var(--muted-2);
       font-size: 12px;
       font-weight: 800;
-      letter-spacing: 0.22em;
-      margin-bottom: 12px;
-      text-transform: uppercase;
+      transition: background 160ms ease, color 160ms ease;
     }
 
+    .top-link i { font-size: 16px; }
+    .top-link:hover { color: var(--accent-strong); background: var(--accent-soft); }
+
     .card {
-      background: rgba(17, 24, 39, 0.84);
-      border: 1px solid rgba(125, 211, 252, 0.16);
-      border-radius: 26px;
-      box-shadow: 0 28px 90px rgba(0, 0, 0, 0.3);
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      box-shadow: 0 28px 80px var(--shadow);
       padding: 28px;
-      backdrop-filter: blur(18px);
+      backdrop-filter: blur(20px);
+      position: relative;
+      overflow: hidden;
     }
+
+    .card::before {
+      content: "";
+      position: absolute;
+      inset: 0 0 auto;
+      height: 1px;
+      background: linear-gradient(90deg, transparent, rgba(109, 40, 217, 0.34), transparent);
+      opacity: 0.85;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      margin-bottom: 22px;
+    }
+
+    .brand-mark {
+      display: grid;
+      width: 46px;
+      height: 46px;
+      place-items: center;
+      flex: 0 0 auto;
+      border-radius: 15px;
+      color: #fff;
+      background: var(--accent);
+      box-shadow: 0 14px 32px var(--accent-glow);
+    }
+
+    .brand-mark i { font-size: 22px; }
+    .brand-copy p { margin-top: 5px; color: var(--muted); font-size: 12px; line-height: 1.55; }
 
     h1,
     p {
@@ -1543,27 +1612,39 @@ function renderAdminLoginHtml(errorMessage = "", adminTokenConfigured = true): s
     }
 
     h1 {
-      font-size: clamp(34px, 9vw, 58px);
+      font-size: clamp(28px, 6vw, 42px);
       letter-spacing: -0.06em;
-      line-height: 0.95;
+      line-height: 1.06;
     }
 
     p {
       color: var(--muted);
       margin-top: 14px;
-      line-height: 1.65;
+      line-height: 1.7;
     }
 
-    form {
+    .form-grid {
       display: grid;
-      gap: 12px;
-      margin-top: 26px;
+      gap: 13px;
+      margin-top: 24px;
     }
 
     label {
+      display: grid;
+      gap: 8px;
+      color: var(--text);
+      font-size: 14px;
+      font-weight: 900;
+    }
+
+    .required {
+      color: var(--danger);
+    }
+
+    .help {
       color: var(--muted);
-      font-size: 13px;
-      font-weight: 700;
+      font-size: 12px;
+      line-height: 1.55;
     }
 
     input,
@@ -1574,78 +1655,171 @@ function renderAdminLoginHtml(errorMessage = "", adminTokenConfigured = true): s
 
     input {
       color: var(--text);
-      background: #0b1220;
+      background: var(--panel-strong);
       border: 1px solid var(--line);
-      border-radius: 16px;
+      border-radius: 14px;
       outline: none;
       padding: 13px 14px;
     }
 
     input:focus {
-      border-color: var(--accent-strong);
-      box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.12);
+      border-color: var(--accent);
+      box-shadow: 0 0 0 4px var(--accent-soft);
     }
 
     button {
-      border: 0;
-      border-radius: 999px;
-      color: #06111f;
+      margin-top: 4px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      border: 1px solid var(--accent);
+      border-radius: 14px;
+      color: #fff;
       background: var(--accent);
       cursor: pointer;
       font-weight: 900;
       padding: 13px 16px;
-      transition: transform 150ms ease, background 150ms ease;
+      transition: transform 150ms ease, box-shadow 150ms ease, background 150ms ease;
     }
 
-    button:hover {
-      background: var(--accent-strong);
-      transform: translateY(-1px);
-    }
+    button i { font-size: 18px; }
+    button:hover { background: var(--accent-strong); transform: translateY(-1px); box-shadow: 0 14px 32px var(--accent-glow); }
 
     .alert {
       margin-top: 16px;
-      border: 1px solid rgba(251, 113, 133, 0.35);
+      border: 1px solid color-mix(in srgb, var(--danger) 35%, transparent);
       border-radius: 16px;
-      background: rgba(251, 113, 133, 0.1);
-      color: #fecdd3;
+      background: var(--danger-soft);
+      color: var(--danger);
       padding: 12px 14px;
       font-size: 13px;
+      line-height: 1.6;
     }
 
     .notice {
       margin-top: 16px;
-      border: 1px solid rgba(125, 211, 252, 0.3);
+      border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
       border-radius: 16px;
-      background: rgba(125, 211, 252, 0.08);
-      color: #bae6fd;
+      background: var(--accent-soft);
+      color: var(--text);
       padding: 12px 14px;
       font-size: 13px;
       line-height: 1.7;
     }
 
+    .notice strong {
+      display: block;
+      margin-bottom: 6px;
+    }
+
     .notice code {
-      background: rgba(125, 211, 252, 0.15);
       padding: 2px 6px;
-      border-radius: 4px;
+      border-radius: 6px;
+      background: var(--panel-muted);
       font-size: 12px;
+    }
+
+    .meta {
+      margin-top: 18px;
+      color: var(--muted-2);
+      font-size: 12px;
+      line-height: 1.6;
+      text-align: center;
+    }
+
+    .theme-float {
+      position: fixed;
+      right: 18px;
+      bottom: 18px;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 0 12px;
+      height: 38px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      color: var(--text);
+      background: var(--panel);
+      cursor: pointer;
+      font-weight: 900;
+      transition: transform 160ms ease, border-color 160ms ease;
+    }
+
+    .theme-float:hover { transform: translateY(-1px); border-color: var(--line-strong); }
+    .theme-float i { font-size: 18px; }
+
+    @media (max-width: 480px) {
+      body { padding: 16px; }
+      .card { padding: 22px; }
+      button { padding: 12px 14px; }
     }
   </style>
 </head>
 <body>
   <main class="login-shell">
+    <a class="top-link" href="/"><i class="ri-arrow-left-line"></i>返回站点</a>
     <section class="card">
-      <div class="eyebrow">Teaven AI Gateway</div>
-      <h1>管理员登录</h1>
-      <p>登录成功后将自动进入管理后台。</p>
-      ${errorHtml}
-      ${noticeHtml}
-      <form action="/admin/login" method="post">
-        <label for="password">管理员密码</label>
-        <input id="password" name="password" type="password" autocomplete="current-password" autofocus required>
-        <button type="submit">登录后台</button>
+      <div class="brand">
+        <div class="brand-mark"><i class="ri-instance-line"></i></div>
+        <div class="brand-copy">
+          <h1>管理员登录</h1>
+          <p>验证管理员密码后进入 <span style="color:var(--accent-strong); font-weight:900;">Teaven AI Gateway</span> 后台。</p>
+        </div>
+      </div>
+      <div class="form-grid">
+        <label>管理员密码 <span class="required">*</span>
+          <input id="password" name="password" type="password" autocomplete="current-password" placeholder="请输入管理员密码" autofocus required>
+        </label>
+        <span class="help">登录成功后将自动进入管理后台。若密码错误，本页会提示重新输入。</span>
+        ${errorHtml}
+        ${noticeHtml}
+      </div>
+      <form action="/admin/login" method="post" style="margin-top: 18px;">
+        <input type="hidden" name="password" id="hidden-password">
+        <button type="submit"><i class="ri-login-box-line"></i>登录后台</button>
       </form>
+      <div class="meta">如果你还没有管理员密码，请先在 Cloudflare 配置 <code>ADMIN_TOKEN</code>。</div>
     </section>
+    <div class="meta">推荐使用现代浏览器访问后台，以获得更稳定的布局和交互体验。</div>
   </main>
+  <button class="theme-float" id="theme-toggle" type="button"><i class="ri-contrast-2-line"></i><span id="theme-label">切换深色</span></button>
+  <script>
+    (function () {
+      var stored = localStorage.getItem('teaven_admin_theme');
+      var theme = stored || (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+      applyTheme(theme);
+
+      var toggle = document.getElementById('theme-toggle');
+      if (toggle) toggle.addEventListener('click', function () {
+        var next = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+        applyTheme(next);
+        localStorage.setItem('teaven_admin_theme', next);
+      });
+
+      var form = document.querySelector('form[action="/admin/login"]');
+      var visible = document.getElementById('password');
+      var hidden = document.getElementById('hidden-password');
+      if (form && visible && hidden) {
+        form.addEventListener('submit', function () {
+          hidden.value = visible.value;
+        });
+      }
+
+      if (window.matchMedia) {
+        window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', function (event) {
+          if (localStorage.getItem('teaven_admin_theme')) return;
+          applyTheme(event.matches ? 'dark' : 'light');
+        });
+      }
+
+      function applyTheme(next) {
+        document.documentElement.setAttribute('data-theme', next);
+        var label = document.getElementById('theme-label');
+        if (label) label.textContent = next === 'dark' ? '切换浅色' : '切换深色';
+      }
+    })();
+  </script>
 </body>
 </html>`;
 }
