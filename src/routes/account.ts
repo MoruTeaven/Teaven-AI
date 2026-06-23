@@ -16,6 +16,7 @@ import {
   getAdminApiKey,
   listAdminApiKeys,
   listUsageRecords,
+  loadSiteSettings,
   revealAdminApiKeyToken,
   saveAdminApiKey,
   saveAdminUser,
@@ -396,7 +397,7 @@ async function handleGetAccountTask(
   }
 
   return jsonResponse(
-    { task: publicTaskFull(task, env, requestUrl) },
+    { task: await publicTaskFull(task, env, requestUrl) },
     {
       headers: { "X-Request-Id": requestId }
     }
@@ -476,7 +477,8 @@ async function handleGetAccountFile(
 
 function decodeAccountObjectKey(value: string, env: Env, requestUrl?: string): string {
   try {
-    const objectKey = normalizeStoredObjectKey(decodeURIComponent(value), env, requestUrl);
+    const effectiveBaseUrl = env.FILES_PUBLIC_BASE_URL;
+    const objectKey = normalizeStoredObjectKey(decodeURIComponent(value), effectiveBaseUrl, requestUrl);
     if (objectKey) {
       return objectKey;
     }
@@ -817,7 +819,7 @@ function publicTaskSummary(task: AsyncTaskRecord): Record<string, unknown> {
   };
 }
 
-function publicTaskFull(task: AsyncTaskRecord, env: Env, requestUrl?: string): Record<string, unknown> {
+async function publicTaskFull(task: AsyncTaskRecord, env: Env, requestUrl?: string): Promise<Record<string, unknown>> {
   return {
     id: task.id,
     object: task.object,
@@ -829,7 +831,7 @@ function publicTaskFull(task: AsyncTaskRecord, env: Env, requestUrl?: string): R
     provider_execution_mode: task.provider_execution_mode || null,
     provider_task_id: task.provider_task_id || null,
     input: task.input,
-    output: publicAccountTaskOutput(task.output, env, requestUrl) || null,
+    output: await publicAccountTaskOutput(task.output, env, requestUrl) || null,
     store_output: task.store_output,
     storage_ttl_seconds: task.storage_ttl_seconds,
     output_expires_at: task.output_expires_at || null,
@@ -844,22 +846,25 @@ function publicTaskFull(task: AsyncTaskRecord, env: Env, requestUrl?: string): R
   };
 }
 
-function publicAccountTaskOutput(
+async function publicAccountTaskOutput(
   output: AsyncTaskOutputItem[] | undefined,
   env: Env,
   requestUrl?: string
-): AsyncTaskOutputItem[] | undefined {
-  const items = publicTaskOutput(output, env, requestUrl);
+): Promise<AsyncTaskOutputItem[] | undefined> {
+  const items = await publicTaskOutput(output, env, requestUrl);
   if (!items) {
     return items;
   }
+
+  const settings = await loadSiteSettings(env);
+  const effectiveBaseUrl = settings.files_public_base_url || env.FILES_PUBLIC_BASE_URL;
 
   return items.map((item) => {
     if ((item.source !== "r2" && item.stored !== true) || typeof item.url !== "string") {
       return item;
     }
 
-    const objectKey = normalizeStoredObjectKey(item.url, env, requestUrl);
+    const objectKey = normalizeStoredObjectKey(item.url, effectiveBaseUrl, requestUrl);
     if (!objectKey) {
       return item;
     }
@@ -884,11 +889,12 @@ function buildAccountFileUrl(objectKey: string, requestUrl?: string): string {
 }
 
 function taskReferencesAccountObjectKey(task: AsyncTaskRecord, objectKey: string, env: Env, requestUrl?: string): boolean {
+  const effectiveBaseUrl = env.FILES_PUBLIC_BASE_URL;
   return (task.output || []).some((item) => {
     if ((item.source !== "r2" && item.stored !== true) || typeof item.url !== "string") {
       return false;
     }
-    return normalizeStoredObjectKey(item.url, env, requestUrl) === objectKey;
+    return normalizeStoredObjectKey(item.url, effectiveBaseUrl, requestUrl) === objectKey;
   });
 }
 

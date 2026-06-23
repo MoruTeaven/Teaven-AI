@@ -88,7 +88,7 @@ export async function handleCreateTask(request: Request, env: Env, auth: AuthCon
 
   await recordTaskUsage(env, task, 202, Date.now() - startedAt);
 
-  return jsonResponse(publicTask(task, env, request.url), {
+  return jsonResponse(await publicTask(task, env, request.url), {
     status: 202,
     headers: {
       "X-Request-Id": requestId
@@ -112,7 +112,7 @@ export async function handleListTasks(request: Request, env: Env, auth: AuthCont
     const result = slice.slice(0, limit);
     return jsonResponse({
       object: "list",
-      data: result.map((task) => publicTask(task, env, request.url, false)),
+      data: await Promise.all(result.map((task) => publicTask(task, env, request.url, false))),
       has_more: hasMore,
       first_id: result[0]?.id || null,
       last_id: result[result.length - 1]?.id || null
@@ -123,7 +123,7 @@ export async function handleListTasks(request: Request, env: Env, auth: AuthCont
   const result = myTasks.slice(0, limit);
   return jsonResponse({
     object: "list",
-    data: result.map((task) => publicTask(task, env, request.url, false)),
+    data: await Promise.all(result.map((task) => publicTask(task, env, request.url, false))),
     has_more: hasMore,
     first_id: result[0]?.id || null,
     last_id: result[result.length - 1]?.id || null
@@ -142,7 +142,7 @@ export async function handleGetTask(
     throw notFound("Task not found");
   }
 
-  return jsonResponse(publicTask(task, env, requestUrl), {
+  return jsonResponse(await publicTask(task, env, requestUrl), {
     headers: {
       "X-Request-Id": requestId
     }
@@ -179,7 +179,7 @@ export async function handleCancelTask(
   });
   await saveTask(env, task);
 
-  return jsonResponse(publicTask(task, env, requestUrl), {
+  return jsonResponse(await publicTask(task, env, requestUrl), {
     headers: {
       "X-Request-Id": requestId
     }
@@ -235,7 +235,7 @@ async function enqueueCreatedTask(env: Env, task: AsyncTaskRecord): Promise<void
   }
 }
 
-function publicTask(task: AsyncTaskRecord, env: Env, requestUrl?: string, includeEvents = true): Record<string, unknown> {
+async function publicTask(task: AsyncTaskRecord, env: Env, requestUrl?: string, includeEvents = true): Promise<Record<string, unknown>> {
   const payload: Record<string, unknown> = {
     id: task.id,
     object: task.object,
@@ -246,7 +246,7 @@ function publicTask(task: AsyncTaskRecord, env: Env, requestUrl?: string, includ
     plugin_id: task.plugin_id || null,
     provider_execution_mode: task.provider_execution_mode || null,
     provider_task_id: task.provider_task_id || null,
-    output: publicTaskOutput(task.output, env, requestUrl),
+    output: await publicTaskOutput(task.output, env, requestUrl),
     usage: undefined,
     store_output: task.store_output,
     storage_ttl_seconds: task.storage_ttl_seconds,

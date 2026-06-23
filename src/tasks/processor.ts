@@ -722,7 +722,7 @@ async function deliverCallback(env: Env, task: AsyncTaskRecord, processId: strin
       type: task.type,
       model: task.model,
       status: task.status,
-      output: publicTaskOutput(task.output, env),
+      output: await publicTaskOutput(task.output, env),
       error: task.error,
       metadata: task.metadata,
       diagnostics: taskDiagnostics(task),

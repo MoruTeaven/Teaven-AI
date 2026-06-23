@@ -22,9 +22,11 @@ import {
   getAdminUser,
   listAdminApiKeys,
   listAdminUsers,
+  loadSiteSettings,
   revealAdminApiKeyToken,
   saveAdminApiKey,
   saveAdminUser,
+  saveSiteSettings,
   summarizeUsage
 } from "../admin/store";
 import { createProviderRegistry, resolveProviderCredential } from "../providers/registry";
@@ -211,6 +213,14 @@ export async function handleAdminRequest(
   const providerHealthMatch = pathname.match(/^\/admin\/api\/providers\/([^/]+)\/health$/);
   if (request.method === "GET" && providerHealthMatch) {
     return handleProviderHealth(decodeURIComponent(providerHealthMatch[1]), env, requestId);
+  }
+
+  if (request.method === "GET" && pathname === "/admin/api/settings") {
+    return handleGetSettings(env, requestId);
+  }
+
+  if (request.method === "PUT" && pathname === "/admin/api/settings") {
+    return handleUpdateSettings(request, env, requestId);
   }
 
   throw notFound("接口不存在");
@@ -796,7 +806,7 @@ async function handleGetAdminTask(taskId: string, env: Env, requestId: string, r
     {
       task: {
         ...task,
-        output: publicTaskOutput(task.output, env, requestUrl)
+        output: await publicTaskOutput(task.output, env, requestUrl)
       }
     },
     {
@@ -871,6 +881,58 @@ async function handleProviderHealth(pluginId: string, env: Env, requestId: strin
   return jsonResponse(
     {
       provider: health
+    },
+    {
+      headers: {
+        "X-Request-Id": requestId
+      }
+    }
+  );
+}
+
+async function handleGetSettings(env: Env, requestId: string): Promise<Response> {
+  const settings = await loadSiteSettings(env);
+  return jsonResponse(
+    {
+      settings: {
+        files_public_base_url: settings.files_public_base_url || null,
+        env_files_public_base_url: env.FILES_PUBLIC_BASE_URL || null
+      }
+    },
+    {
+      headers: {
+        "X-Request-Id": requestId
+      }
+    }
+  );
+}
+
+async function handleUpdateSettings(request: Request, env: Env, requestId: string): Promise<Response> {
+  const body = await readJsonObject(request);
+  const settings = await loadSiteSettings(env);
+
+  if (body.files_public_base_url !== undefined) {
+    if (body.files_public_base_url === null || body.files_public_base_url === "") {
+      settings.files_public_base_url = undefined;
+    } else {
+      const url = requireString(body.files_public_base_url, "files_public_base_url");
+      try {
+        new URL(url);
+      } catch {
+        throw invalidRequest("files_public_base_url 必须是有效的 URL", "files_public_base_url");
+      }
+      settings.files_public_base_url = url;
+    }
+  }
+
+  await saveSiteSettings(env, settings);
+
+  return jsonResponse(
+    {
+      settings: {
+        files_public_base_url: settings.files_public_base_url || null,
+        env_files_public_base_url: env.FILES_PUBLIC_BASE_URL || null
+      }
     },
     {
       headers: {
@@ -2057,7 +2119,7 @@ const ADMIN_APP_HTML = `<!doctype html>
     .json-view { max-height: 360px; overflow: auto; padding: 14px; background: var(--panel-strong); border: 1px solid var(--line); border-radius: 16px; color: var(--text); font-size: 12px; }
     .table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 16px; }
     .tasks-table { min-width: 760px; table-layout: fixed; }
-    .task-detail-panel { max-height: 520px; overflow: auto; padding: 14px; background: var(--panel-strong); border: 1px solid var(--line); border-radius: 16px; color: var(--text); font-size: 13px; }
+    .task-detail-panel { padding: 14px; background: var(--panel-strong); border: 1px solid var(--line); border-radius: 16px; color: var(--text); font-size: 13px; }
     .task-detail-card { display: grid; gap: 12px; }
     .task-detail-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
     .task-detail-grid > div { min-width: 0; }
@@ -2149,6 +2211,7 @@ const ADMIN_APP_HTML = `<!doctype html>
         <a href="#usage" data-section="usage"><i class="ri-bar-chart-box-line"></i><span>模型用量</span></a>
         <a href="#tasks" data-section="tasks"><i class="ri-time-line"></i><span>任务管理</span></a>
         <a href="#config" data-section="config"><i class="ri-settings-4-line"></i><span>配置工具</span></a>
+        <a href="#settings" data-section="settings"><i class="ri-global-line"></i><span>站点设置</span></a>
         <a href="/account" target="_blank" rel="noreferrer"><i class="ri-account-circle-line"></i><span>用户中心</span></a>
       </nav>
       <div class="sidebar-footer">
@@ -2258,7 +2321,7 @@ const ADMIN_APP_HTML = `<!doctype html>
             <div class="actions" style="margin-top: 12px;"><button id="load-tasks" type="button">加载任务</button></div>
             <div class="table-wrap"><table class="tasks-table"><colgroup><col style="width:31%"><col style="width:12%"><col style="width:20%"><col style="width:10%"><col style="width:15%"><col style="width:12%"></colgroup><thead><tr><th>ID</th><th>类型</th><th>模型</th><th>状态</th><th>创建时间</th><th>操作</th></tr></thead><tbody id="tasks-table"></tbody></table></div>
           </div>
-          <div class="card span-12"><h3>任务详情</h3><div id="task-detail" class="task-detail-panel">选择任务后显示详情。</div></div>
+
         </div>
       </section>
 
@@ -2267,6 +2330,20 @@ const ADMIN_APP_HTML = `<!doctype html>
           <div class="card span-6"><h3>当前网关配置</h3><pre id="current-config" class="json-view">正在加载...</pre></div>
           <div class="card span-6"><h3>接口调用示例</h3><pre id="example-request" class="json-view">正在加载...</pre></div>
           <div class="card span-12"><h3>模型配置 JSON 校验器</h3><textarea id="config-json" spellcheck="false"></textarea><div class="actions" style="margin-top: 12px;"><button id="fill-current-config" class="secondary" type="button">填入当前配置</button><button id="validate-config" type="button">校验</button></div><pre id="config-output" class="json-view" style="margin-top: 12px;">尚未执行校验。</pre></div>
+        </div>
+      </section>
+      <section id="settings" class="section">
+        <div class="grid">
+          <div class="card span-12">
+            <h3>文件域名设置</h3>
+            <p style="color: var(--muted); margin: 8px 0 16px;">设置异步任务输出文件的公共访问域名。留空则使用环境变量 <code>FILES_PUBLIC_BASE_URL</code>，若都未设置则通过 Worker 代理访问。</p>
+            <div style="display: grid; gap: 12px;">
+              <label>环境变量 FILES_PUBLIC_BASE_URL（只读）<input id="settings-env-base-url" readonly placeholder="未设置" style="opacity: 0.6;"></label>
+              <label>自定义文件域名<input id="settings-files-base-url" placeholder="https://pub-xxx.r2.dev 或 https://files.example.com"></label>
+              <div class="actions" style="margin-top: 4px;"><button id="save-settings" type="button">保存设置</button><button id="clear-settings" class="secondary danger" type="button">清除自定义域名</button></div>
+              <pre id="settings-output" class="json-view" style="margin-top: 8px;">尚未保存。</pre>
+            </div>
+          </div>
         </div>
       </section>
     </main>
@@ -2303,6 +2380,19 @@ const ADMIN_APP_HTML = `<!doctype html>
         </div>
         <div id="upstream-view-content" class="stack"></div>
         <pre id="upstream-view-json" class="json-view" style="margin-top: 14px;"></pre>
+      </section>
+    </div>
+    <div id="task-detail-modal" class="modal" aria-hidden="true">
+      <div class="modal-backdrop" data-modal-close></div>
+      <section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="task-detail-title">
+        <div class="modal-head">
+          <div>
+            <div class="eyebrow">任务详情</div>
+            <h3 id="task-detail-title">查看任务</h3>
+          </div>
+          <button class="secondary compact" type="button" data-modal-close>关闭</button>
+        </div>
+        <div id="task-detail" class="task-detail-panel"></div>
       </section>
     </div>
     <div id="model-modal" class="modal" aria-hidden="true">
@@ -2949,6 +3039,8 @@ const ADMIN_APP_HTML = `<!doctype html>
           try {
             var detail = await api('/admin/api/tasks/' + encodeURIComponent(taskId));
             document.getElementById('task-detail').innerHTML = renderTaskDetail(detail.task);
+            document.getElementById('task-detail-title').textContent = '任务 ' + taskId;
+            openModal('task-detail-modal', 'task-detail-title', '任务 ' + taskId);
             setStatus('任务详情已加载', 'ok');
           } catch (error) {
             setStatus('加载任务详情失败: ' + (error.message || String(error)), 'error');
@@ -3598,10 +3690,13 @@ const ADMIN_HTML = `<!doctype html>
       document.getElementById('reload-tasks').addEventListener('click', loadTasks);
       document.getElementById('load-current-config').addEventListener('click', fillCurrentConfig);
       document.getElementById('validate-config').addEventListener('click', validateConfig);
+      document.getElementById('save-settings').addEventListener('click', saveSettings);
+      document.getElementById('clear-settings').addEventListener('click', clearSettings);
       providersEl.addEventListener('click', handleProviderAction);
       tasksEl.addEventListener('click', handleTaskAction);
 
       loadAll();
+      loadSettings();
 
       async function api(path, options) {
         options = options || {};
@@ -3725,6 +3820,49 @@ const ADMIN_HTML = `<!doctype html>
       function fillCurrentConfig() {
         configJsonEl.value = currentConfigJson;
         configOutputEl.textContent = '已填入当前配置，可直接校验或复制到 MODEL_CONFIG_JSON。';
+      }
+
+      async function loadSettings() {
+        try {
+          var data = await api('/admin/api/settings');
+          document.getElementById('settings-env-base-url').value = data.settings.env_files_public_base_url || '';
+          document.getElementById('settings-files-base-url').value = data.settings.files_public_base_url || '';
+          document.getElementById('settings-output').textContent = JSON.stringify(data.settings, null, 2);
+        } catch (error) {
+          document.getElementById('settings-output').textContent = '加载失败：' + (error.message || String(error));
+        }
+      }
+
+      async function saveSettings() {
+        var baseUrl = document.getElementById('settings-files-base-url').value.trim();
+        try {
+          var data = await api('/admin/api/settings', {
+            method: 'PUT',
+            body: JSON.stringify({ files_public_base_url: baseUrl || null })
+          });
+          document.getElementById('settings-env-base-url').value = data.settings.env_files_public_base_url || '';
+          document.getElementById('settings-files-base-url').value = data.settings.files_public_base_url || '';
+          document.getElementById('settings-output').textContent = JSON.stringify(data.settings, null, 2);
+          setStatus('站点设置已保存。', 'ok');
+        } catch (error) {
+          document.getElementById('settings-output').textContent = '保存失败：' + (error.message || String(error));
+          setStatus('保存站点设置失败：' + (error.message || String(error)), 'error');
+        }
+      }
+
+      async function clearSettings() {
+        try {
+          var data = await api('/admin/api/settings', {
+            method: 'PUT',
+            body: JSON.stringify({ files_public_base_url: null })
+          });
+          document.getElementById('settings-files-base-url').value = '';
+          document.getElementById('settings-output').textContent = JSON.stringify(data.settings, null, 2);
+          setStatus('自定义域名已清除。', 'ok');
+        } catch (error) {
+          document.getElementById('settings-output').textContent = '清除失败：' + (error.message || String(error));
+          setStatus('清除自定义域名失败：' + (error.message || String(error)), 'error');
+        }
       }
 
       async function handleProviderAction(event) {

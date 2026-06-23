@@ -1,36 +1,40 @@
+import { loadSiteSettings } from "../admin/store";
 import type { AsyncTaskOutputItem, Env } from "../types";
 
 export const STORED_FILE_ROUTE_PREFIX = "/v1/files/";
 
-export function publicTaskOutput(
+export async function publicTaskOutput(
   output: AsyncTaskOutputItem[] | undefined,
   env: Env,
   requestUrl?: string
-): AsyncTaskOutputItem[] | undefined {
+): Promise<AsyncTaskOutputItem[] | undefined> {
   if (!output) {
     return output;
   }
+
+  const settings = await loadSiteSettings(env);
+  const effectiveBaseUrl = settings.files_public_base_url || env.FILES_PUBLIC_BASE_URL;
 
   return output.map((item) => {
     if ((item.source !== "r2" && item.stored !== true) || typeof item.url !== "string") {
       return item;
     }
 
-    const objectKey = normalizeStoredObjectKey(item.url, env, requestUrl);
+    const objectKey = normalizeStoredObjectKey(item.url, effectiveBaseUrl, requestUrl);
     if (!objectKey) {
       return item;
     }
 
     return {
       ...item,
-      url: buildStoredFileUrl(objectKey, env, requestUrl)
+      url: buildStoredFileUrl(objectKey, effectiveBaseUrl, requestUrl)
     };
   });
 }
 
-export function buildStoredFileUrl(objectKey: string, env: Env, requestUrl?: string): string {
+export function buildStoredFileUrl(objectKey: string, filesPublicBaseUrl: string | undefined, requestUrl?: string): string {
   const normalizedKey = normalizeObjectKey(objectKey);
-  const publicBaseUrl = normalizeBaseUrl(env.FILES_PUBLIC_BASE_URL);
+  const publicBaseUrl = normalizeBaseUrl(filesPublicBaseUrl);
   if (publicBaseUrl) {
     return joinUrl(publicBaseUrl, encodeObjectKey(normalizedKey));
   }
@@ -43,13 +47,13 @@ export function buildStoredFileUrl(objectKey: string, env: Env, requestUrl?: str
   return normalizedKey;
 }
 
-export function normalizeStoredObjectKey(value: string, env: Env, requestUrl?: string): string | undefined {
+export function normalizeStoredObjectKey(value: string, filesPublicBaseUrl: string | undefined, requestUrl?: string): string | undefined {
   const trimmed = value.trim();
   if (!trimmed) {
     return undefined;
   }
 
-  const publicBaseUrl = normalizeBaseUrl(env.FILES_PUBLIC_BASE_URL);
+  const publicBaseUrl = normalizeBaseUrl(filesPublicBaseUrl);
   const keyFromPublicBase = readObjectKeyFromBaseUrl(trimmed, publicBaseUrl);
   if (keyFromPublicBase) {
     return keyFromPublicBase;

@@ -2,21 +2,29 @@ import type { AsyncTaskRecord, Env, GatewayConfig, ProviderRouteConfig } from ".
 import { createId } from "../utils/ids";
 
 const GATEWAY_CONFIG_KEY = "admin:gateway_config";
+const SETTINGS_KEY = "admin:settings";
 const USER_PREFIX = "admin:user:";
 const API_KEY_PREFIX = "admin:api_key:";
 const API_KEY_HASH_PREFIX = "admin:api_key_hash:";
 const USAGE_PREFIX = "admin:usage:";
 const MAX_LIST_LIMIT = 200;
 const D1_GATEWAY_CONFIG_KEY = "default";
+const D1_SETTINGS_KEY = "default";
 type D1Row = Record<string, unknown>;
 
 const MEMORY = {
   gatewayConfig: undefined as GatewayConfig | undefined,
+  settings: undefined as SiteSettings | undefined,
   users: new Map<string, AdminUser>(),
   apiKeys: new Map<string, AdminApiKey>(),
   apiKeyHashes: new Map<string, string>(),
   usage: new Map<string, UsageRecord>()
 };
+
+export interface SiteSettings {
+  files_public_base_url?: string;
+  updated_at?: string;
+}
 
 export interface AdminUser {
   id: string;
@@ -156,6 +164,57 @@ export async function clearManagedGatewayConfig(env: Env): Promise<void> {
 
   if (env.AI_GATEWAY_KV) {
     await env.AI_GATEWAY_KV.delete(GATEWAY_CONFIG_KEY);
+  }
+}
+
+export async function loadSiteSettings(env: Env): Promise<SiteSettings> {
+  if (env.DB) {
+    try {
+      const row = await env.DB.prepare("SELECT settings_json FROM site_settings WHERE key = ?").bind(D1_SETTINGS_KEY).first<D1Row>();
+      if (typeof row?.settings_json === "string") {
+        return JSON.parse(row.settings_json) as SiteSettings;
+      }
+    } catch (error) {
+      if (!isMissingD1TableError(error, "site_settings")) {
+        throw error;
+      }
+    }
+  }
+
+  if (env.AI_GATEWAY_KV) {
+    const stored = await env.AI_GATEWAY_KV.get(SETTINGS_KEY, "json");
+    if (stored && typeof stored === "object") {
+      return stored as SiteSettings;
+    }
+  }
+
+  return MEMORY.settings || {};
+}
+
+export async function saveSiteSettings(env: Env, settings: SiteSettings): Promise<void> {
+  settings.updated_at = new Date().toISOString();
+
+  if (env.DB) {
+    try {
+      await env.DB.prepare(`
+        INSERT INTO site_settings (key, settings_json, updated_at)
+        VALUES (?, ?, ?)
+        ON CONFLICT(key) DO UPDATE SET
+          settings_json = excluded.settings_json,
+          updated_at = excluded.updated_at
+      `).bind(D1_SETTINGS_KEY, JSON.stringify(settings), settings.updated_at).run();
+      return;
+    } catch (error) {
+      if (!isMissingD1TableError(error, "site_settings")) {
+        throw error;
+      }
+    }
+  }
+
+  MEMORY.settings = settings;
+
+  if (env.AI_GATEWAY_KV) {
+    await env.AI_GATEWAY_KV.put(SETTINGS_KEY, JSON.stringify(settings));
   }
 }
 
