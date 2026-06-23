@@ -2461,7 +2461,7 @@ const ADMIN_APP_HTML = `<!doctype html>
   <script>
     (function () {
       var state = { overview: null, config: null, models: [], selectedModelAlias: null, editingModelAlias: null, users: [], apiKeys: [], usage: null, tasks: [] };
-      var titles = { dashboard: '仪表盘', upstreams: '上游管理', models: '模型管理', users: '用户管理', usage: '模型用量', tasks: '任务管理', config: '配置工具' };
+      var titles = { dashboard: '仪表盘', upstreams: '上游管理', models: '模型管理', users: '用户管理', usage: '模型用量', tasks: '任务管理', config: '配置工具', settings: '站点设置' };
       var statusEl = document.getElementById('status');
       var lastAutoRefreshAt = Date.now();
       var savedTheme = localStorage.getItem('teaven_admin_theme');
