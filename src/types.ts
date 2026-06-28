@@ -100,6 +100,45 @@ export interface ModelConfig {
 
 export interface GatewayConfig {
   upstreams: UpstreamConfig[];
+  /**
+   * 模型分组（虚拟模型）。
+   * 用户可以像调用普通模型一样调用组别名，
+   * 网关按成员权重加权随机挑选一个真实模型执行。
+   */
+  model_groups?: ModelGroup[];
+}
+
+/**
+ * 模型分组级别。
+ * - advanced: 高级模型
+ * - standard: 中级模型
+ * - basic:    低级模型
+ * - custom:   管理员自定义组
+ */
+export type ModelGroupLevel = "advanced" | "standard" | "basic" | "custom";
+
+export interface ModelGroupMember {
+  /** 引用现有模型别名，必须已在 upstreams 中定义 */
+  alias: string;
+  /** 权重，默认 1，>0 才参与抽取 */
+  weight?: number;
+}
+
+export interface ModelGroup {
+  /** 用户调用时填写的组别名，不可与现有模型 alias 冲突 */
+  alias: string;
+  /** 显示名 */
+  name?: string;
+  /** 分组级别 */
+  level: ModelGroupLevel;
+  /** 描述 */
+  description?: string;
+  /** 组模态，决定能被哪个接口调用 */
+  modality: Modality;
+  status?: "active" | "disabled";
+  /** 失败回退成员别名，必须存在于 members 中 */
+  fallback_member_alias?: string;
+  members: ModelGroupMember[];
 }
 
 export interface ChatCompletionRequest {
@@ -179,6 +218,8 @@ export interface AsyncTaskRecord {
   api_key_id: string;
   type: string;
   model: string;
+  /** 用户请求里的原始 model 字段（可能是组别名）。对外展示用，内部处理使用 model。 */
+  requested_model?: string;
   upstream_id?: string;
   plugin_id?: string;
   provider_execution_mode?: string;

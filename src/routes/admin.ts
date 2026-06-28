@@ -10,7 +10,7 @@ import {
   ACCOUNT_SESSION_TTL_SECONDS,
   createAccountSession
 } from "../auth/account";
-import { listModels, listProviderRoutes, loadGatewayConfig, resetGatewayConfig, saveGatewayConfig, validateGatewayConfig } from "../config";
+import { listModelGroups, listModels, listProviderRoutes, loadGatewayConfig, resetGatewayConfig, saveGatewayConfig, validateGatewayConfig } from "../config";
 import { conflict, invalidRequest, notFound } from "../http/errors";
 import { jsonResponse } from "../http/response";
 // eslint-disable-next-line import/no-cycle -- admin.ts and account.ts share serialization helper
@@ -40,6 +40,10 @@ import type {
   Env,
   GatewayConfig,
   ModelConfig,
+  ModelGroup,
+  ModelGroupLevel,
+  ModelGroupMember,
+  Modality,
   ProviderRouteConfig,
   UpstreamConfig,
   UpstreamModelConfig
@@ -157,6 +161,30 @@ export async function handleAdminRequest(
     }
     if (request.method === "DELETE") {
       return handleDeleteAdminModel(alias, env, requestId);
+    }
+  }
+
+  // ── 模型分组管理 ──
+  if (request.method === "GET" && pathname === "/admin/api/model-groups") {
+    return handleListAdminModelGroups(env, requestId);
+  }
+
+  if (request.method === "POST" && pathname === "/admin/api/model-groups") {
+    return handleUpsertAdminModelGroup(request, env, requestId);
+  }
+
+  if (request.method === "POST" && pathname === "/admin/api/model-groups/init-defaults") {
+    return handleInitDefaultModelGroups(env, requestId);
+  }
+
+  const modelGroupMatch = pathname.match(/^\/admin\/api\/model-groups\/([^/]+)$/);
+  if (modelGroupMatch) {
+    const alias = decodeURIComponent(modelGroupMatch[1]);
+    if (request.method === "PUT") {
+      return handleUpsertAdminModelGroup(request, env, requestId, alias);
+    }
+    if (request.method === "DELETE") {
+      return handleDeleteAdminModelGroup(alias, env, requestId);
     }
   }
 
@@ -567,6 +595,152 @@ async function handleResetAdminModels(env: Env, requestId: string): Promise<Resp
       reset: true,
       config,
       config_json: JSON.stringify(config, null, 2)
+    },
+    {
+      headers: {
+        "X-Request-Id": requestId
+      }
+    }
+  );
+}
+
+async function handleListAdminModelGroups(env: Env, requestId: string): Promise<Response> {
+  const config = await loadGatewayConfig(env);
+  const models = listModels(config);
+  return jsonResponse(
+    {
+      object: "list",
+      data: listModelGroups(config).map((group) => publicModelGroup(group, models))
+    },
+    {
+      headers: {
+        "X-Request-Id": requestId
+      }
+    }
+  );
+}
+
+async function handleUpsertAdminModelGroup(
+  request: Request,
+  env: Env,
+  requestId: string,
+  expectedAlias?: string
+): Promise<Response> {
+  const body = await readJsonObject(request);
+  const input = normalizeModelGroupInput(body.group ?? body);
+
+  const config = await loadGatewayConfig(env);
+  const groups = Array.isArray(config.model_groups) ? [...config.model_groups] : [];
+
+  if (expectedAlias) {
+    const existingIndex = groups.findIndex((group) => group.alias === expectedAlias);
+    if (existingIndex === -1) {
+      throw notFound("模型分组不存在");
+    }
+    // 修改 alias 时校验新 alias 不与其他组冲突
+    if (input.alias !== expectedAlias && groups.some((group) => group.alias === input.alias)) {
+      throw conflict("组别名已存在");
+    }
+    groups.splice(existingIndex, 1);
+  } else if (groups.some((group) => group.alias === input.alias)) {
+    throw conflict("组别名已存在");
+  }
+
+  groups.push(input);
+  groups.sort((left, right) => left.alias.localeCompare(right.alias));
+
+  const nextConfig: GatewayConfig = { ...config, model_groups: groups };
+  await saveGatewayConfig(env, nextConfig); // 内部会调用 validateGatewayConfig 校验组成员引用
+
+  const models = listModels(nextConfig);
+  const saved = models; // 仅用于 publicModelGroup 查找成员详情
+  return jsonResponse(
+    {
+      group: publicModelGroup(input, saved),
+      config_source: env.DB ? "D1" : env.AI_GATEWAY_KV ? "AI_GATEWAY_KV" : "memory"
+    },
+    {
+      headers: {
+        "X-Request-Id": requestId
+      }
+    }
+  );
+}
+
+async function handleDeleteAdminModelGroup(alias: string, env: Env, requestId: string): Promise<Response> {
+  const config = await loadGatewayConfig(env);
+  const groups = Array.isArray(config.model_groups) ? config.model_groups : [];
+  const nextGroups = groups.filter((group) => group.alias !== alias);
+  if (nextGroups.length === groups.length) {
+    throw notFound("模型分组不存在");
+  }
+
+  const nextConfig: GatewayConfig = { ...config, model_groups: nextGroups };
+  await saveGatewayConfig(env, nextConfig);
+
+  return jsonResponse(
+    {
+      deleted: true,
+      alias
+    },
+    {
+      headers: {
+        "X-Request-Id": requestId
+      }
+    }
+  );
+}
+
+/**
+ * 一键初始化默认三组（tier:advanced / tier:standard / tier:basic）。
+ * - 已存在的默认组跳过
+ * - 没有可用 text 模型时报错（提示先添加模型）
+ * - 默认把所有 text 模型作为成员填入各组（weight=1），fallback 取第一个成员
+ *   用户后续可自行调整权重和成员
+ */
+async function handleInitDefaultModelGroups(env: Env, requestId: string): Promise<Response> {
+  const config = await loadGatewayConfig(env);
+  const groups = Array.isArray(config.model_groups) ? [...config.model_groups] : [];
+  const reservedAliases: ModelGroupLevel[] = ["advanced", "standard", "basic"];
+  const textModels = listModels(config).filter((model) => model.modality === "text");
+  if (textModels.length === 0) {
+    throw invalidRequest("请先添加至少一个 text 模型后再初始化默认分组", "models");
+  }
+
+  const defaultMembers: ModelGroupMember[] = textModels.map((model) => ({ alias: model.alias, weight: 1 }));
+  const fallbackAlias = defaultMembers[0].alias;
+  const created: string[] = [];
+  const skipped: string[] = [];
+
+  for (const level of reservedAliases) {
+    const alias = `tier:${level}`;
+    if (groups.some((group) => group.alias === alias)) {
+      skipped.push(alias);
+      continue;
+    }
+    groups.push({
+      alias,
+      name: alias,
+      level,
+      modality: "text",
+      description: level === "advanced" ? "高级模型组" : level === "standard" ? "标准模型组" : "基础模型组",
+      status: "active",
+      fallback_member_alias: fallbackAlias,
+      members: defaultMembers
+    });
+    created.push(alias);
+  }
+
+  groups.sort((left, right) => left.alias.localeCompare(right.alias));
+  const nextConfig: GatewayConfig = { ...config, model_groups: groups };
+  await saveGatewayConfig(env, nextConfig);
+
+  const models = listModels(nextConfig);
+  return jsonResponse(
+    {
+      created,
+      skipped,
+      groups: listModelGroups(nextConfig).map((group) => publicModelGroup(group, models))
     },
     {
       headers: {
@@ -1040,6 +1214,37 @@ function publicUpstream(upstream: UpstreamConfig, config: GatewayConfig, env: En
   };
 }
 
+/**
+ * 序列化模型分组为对外 JSON。
+ * `models` 用于补全成员的展示信息（modality/status/provider_model 等），便于前端一次性渲染。
+ */
+function publicModelGroup(group: ModelGroup, models: ModelConfig[]): Record<string, unknown> {
+  const modelMap = new Map(models.map((model) => [model.alias, model]));
+  const reservedAliases = new Set(["tier:advanced", "tier:standard", "tier:basic"]);
+  return {
+    alias: group.alias,
+    name: group.name || null,
+    level: group.level,
+    is_default: reservedAliases.has(group.alias),
+    description: group.description || null,
+    modality: group.modality,
+    status: group.status || "active",
+    fallback_member_alias: group.fallback_member_alias || null,
+    members_count: group.members.length,
+    members: group.members.map((member) => {
+      const model = modelMap.get(member.alias);
+      return {
+        alias: member.alias,
+        weight: member.weight ?? 1,
+        modality: model?.modality || null,
+        provider_model: model?.routes[0]?.provider_model || null,
+        status: model?.status || null,
+        available: Boolean(model)
+      };
+    })
+  };
+}
+
 function publicProvider(manifest: ProviderPluginManifest, config: GatewayConfig, env: Env): Record<string, unknown> {
   return buildProviderHealth(manifest, config, env);
 }
@@ -1118,6 +1323,73 @@ function normalizeModelInput(value: unknown): AdminModelMutation {
   };
 
   return { upstream_id, model };
+}
+
+/** 校验并规范化模型分组输入。成员引用合法性在 saveGatewayConfig → validateModelGroups 中再校验。 */
+function normalizeModelGroupInput(value: unknown): ModelGroup {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw invalidRequest("group 必须是对象", "group");
+  }
+
+  const input = value as Record<string, unknown>;
+  const alias = requireString(input.alias, "alias");
+  const levelRaw = requireString(input.level, "level");
+  if (!["advanced", "standard", "basic", "custom"].includes(levelRaw)) {
+    throw invalidRequest("level 必须是 advanced、standard、basic 或 custom", "level");
+  }
+  const modalityRaw = requireString(input.modality, "modality");
+  if (!["text", "image", "video", "file"].includes(modalityRaw)) {
+    throw invalidRequest("modality 必须是 text、image、video 或 file", "modality");
+  }
+
+  if (!Array.isArray(input.members) || input.members.length === 0) {
+    throw invalidRequest("members 必须是非空数组", "members");
+  }
+
+  const memberAliases = new Set<string>();
+  const members: ModelGroupMember[] = input.members.map((raw, index) => {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+      throw invalidRequest(`members[${index}] 必须是对象`, "members");
+    }
+    const memberInput = raw as Record<string, unknown>;
+    const memberAlias = requireString(memberInput.alias, `members[${index}].alias`);
+    if (memberAliases.has(memberAlias)) {
+      throw invalidRequest(`members[${index}].alias 重复：${memberAlias}`, "members");
+    }
+    memberAliases.add(memberAlias);
+
+    const weight = optionalNumber(memberInput.weight, `members[${index}].weight`);
+    if (weight !== undefined && weight < 0) {
+      throw invalidRequest(`members[${index}].weight 必须是非负数`, "members");
+    }
+
+    return { alias: memberAlias, weight };
+  });
+
+  const fallback = optionalBodyString(input.fallback_member_alias, "fallback_member_alias");
+  if (fallback && !memberAliases.has(fallback)) {
+    throw invalidRequest("fallback_member_alias 必须存在于 members 中", "fallback_member_alias");
+  }
+
+  const status: ModelGroup["status"] =
+    input.status === undefined || input.status === null || input.status === ""
+      ? "active"
+      : input.status === "active" || input.status === "disabled"
+        ? input.status
+        : (() => {
+            throw invalidRequest("status 必须是 active 或 disabled", "status");
+          })();
+
+  return {
+    alias,
+    name: optionalBodyString(input.name, "name"),
+    level: levelRaw as ModelGroupLevel,
+    description: optionalBodyString(input.description, "description"),
+    modality: modalityRaw as Modality,
+    status,
+    fallback_member_alias: fallback,
+    members
+  };
 }
 
 function readUpstreamInput(input: Record<string, unknown>): Omit<UpstreamConfig, "models"> {
@@ -2116,6 +2388,8 @@ const ADMIN_APP_HTML = `<!doctype html>
     .entity-row > span:first-child { color: var(--muted); font-size: 12px; font-weight: 900; }
     .entity-row code { word-break: break-all; }
     .entity-actions { padding-top: 2px; }
+    .meta-row { display: flex; flex-wrap: wrap; gap: 6px 8px; align-items: center; font-size: 12px; }
+    .meta-row .muted-label { display: inline; margin: 0; }
     .section { display: none; }
     .section.active { display: block; }
     .stat-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
@@ -2234,6 +2508,7 @@ const ADMIN_APP_HTML = `<!doctype html>
         <a href="#dashboard" data-section="dashboard"><i class="ri-dashboard-3-line"></i><span>仪表盘</span></a>
         <a href="#upstreams" data-section="upstreams"><i class="ri-plug-line"></i><span>上游管理</span></a>
         <a href="#models" data-section="models"><i class="ri-route-line"></i><span>模型管理</span></a>
+        <a href="#model-groups" data-section="model-groups"><i class="ri-stack-line"></i><span>模型分组</span></a>
         <a href="#users" data-section="users"><i class="ri-user-settings-line"></i><span>用户管理</span></a>
         <a href="#usage" data-section="usage"><i class="ri-bar-chart-box-line"></i><span>模型用量</span></a>
         <a href="#tasks" data-section="tasks"><i class="ri-time-line"></i><span>任务管理</span></a>
@@ -2308,6 +2583,24 @@ const ADMIN_APP_HTML = `<!doctype html>
             <h3>模型详情</h3>
             <div id="model-detail-content" class="stack"><div class="empty">点击模型列表中的“查看”显示模型信息。</div></div>
             <pre id="model-detail-json" class="json-view" style="margin-top: 14px; display: none;"></pre>
+          </div>
+        </div>
+      </section>
+
+      <section id="model-groups" class="section">
+        <div class="grid">
+          <div class="card span-12">
+            <div class="card-head">
+              <div>
+                <h3>模型分组</h3>
+                <p class="subtitle">把多个模型组合成一个别名，调用时按权重随机挑选；失败自动回退到指定成员。用户使用组别名调用，响应里也返回组别名，但用量记录会保留实际模型，便于通过 request_id 排查。</p>
+              </div>
+              <div class="actions" style="gap: 8px;">
+                <button id="init-default-groups" class="secondary" type="button">初始化默认三组</button>
+                <button id="open-group-modal" type="button">添加分组</button>
+              </div>
+            </div>
+            <div id="model-groups-list" class="entity-grid"></div>
           </div>
         </div>
       </section>
@@ -2449,6 +2742,39 @@ const ADMIN_APP_HTML = `<!doctype html>
         <div class="actions" style="margin-top: 14px;"><button id="save-model-form" type="button">保存模型</button></div>
       </section>
     </div>
+    <div id="model-group-modal" class="modal" aria-hidden="true">
+      <div class="modal-backdrop" data-modal-close></div>
+      <section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="model-group-modal-title">
+        <div class="modal-head">
+          <div>
+            <div class="eyebrow">模型分组</div>
+            <h3 id="model-group-modal-title">添加分组</h3>
+            <p class="subtitle">组别名不可与现有模型别名冲突；成员必须为同一模态。</p>
+          </div>
+          <button class="secondary compact" type="button" data-modal-close>关闭</button>
+        </div>
+        <div class="form-grid modal-form">
+          <label>组别名<input id="group-alias" placeholder="tier:advanced 或自定义组名"></label>
+          <label>显示名<input id="group-name" placeholder="高级模型组（可选）"></label>
+          <label>分组级别<select id="group-level"><option value="advanced">advanced（高级）</option><option value="standard">standard（标准）</option><option value="basic">basic（基础）</option><option value="custom">custom（自定义）</option></select></label>
+          <label>模态<select id="group-modality"><option value="text">文本</option><option value="image">图片</option><option value="video">视频</option><option value="file">文件</option></select></label>
+          <label>状态<select id="group-status"><option value="active">启用</option><option value="disabled">停用</option></select></label>
+          <label>回退成员<select id="group-fallback"><option value="">不指定</option></select></label>
+        </div>
+        <div style="margin-top: 14px;">
+          <label>描述<input id="group-description" placeholder="分组说明（可选）"></label>
+        </div>
+        <div style="margin-top: 14px;">
+          <div style="display:flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+            <strong>成员列表</strong>
+            <button id="group-add-member" class="secondary compact" type="button">+ 添加成员</button>
+          </div>
+          <div id="group-members" class="stack"></div>
+          <p class="subtitle" style="margin-top: 6px;">权重默认为 1，越大被选中概率越高；填 0 则跳过该成员。</p>
+        </div>
+        <div class="actions" style="margin-top: 14px;"><button id="save-group-form" type="button">保存分组</button></div>
+      </section>
+    </div>
     <div id="user-modal" class="modal" aria-hidden="true">
       <div class="modal-backdrop" data-modal-close></div>
       <section class="modal-card narrow" role="dialog" aria-modal="true" aria-labelledby="user-modal-title">
@@ -2489,8 +2815,8 @@ const ADMIN_APP_HTML = `<!doctype html>
   </div>
   <script>
     (function () {
-      var state = { overview: null, config: null, models: [], selectedModelAlias: null, editingModelAlias: null, users: [], apiKeys: [], usage: null, tasks: [] };
-      var titles = { dashboard: '仪表盘', upstreams: '上游管理', models: '模型管理', users: '用户管理', usage: '模型用量', tasks: '任务管理', config: '配置工具', settings: '站点设置' };
+      var state = { overview: null, config: null, models: [], selectedModelAlias: null, editingModelAlias: null, modelGroups: [], editingGroupAlias: null, users: [], apiKeys: [], usage: null, tasks: [] };
+      var titles = { dashboard: '仪表盘', upstreams: '上游管理', models: '模型管理', 'model-groups': '模型分组', users: '用户管理', usage: '模型用量', tasks: '任务管理', config: '配置工具', settings: '站点设置' };
       var statusEl = document.getElementById('status');
       var lastAutoRefreshAt = Date.now();
       var savedTheme = localStorage.getItem('teaven_admin_theme');
@@ -2533,6 +2859,19 @@ const ADMIN_APP_HTML = `<!doctype html>
       document.getElementById('model-modality').addEventListener('change', function () { toggleImageModeField(this.value); });
       document.getElementById('save-model-json').addEventListener('click', saveModelFromJson);
       document.getElementById('reset-models').addEventListener('click', resetModels);
+      document.getElementById('open-group-modal').addEventListener('click', function () { resetGroupForm(); openModal('model-group-modal', 'model-group-modal-title', '添加分组'); });
+      document.getElementById('init-default-groups').addEventListener('click', initDefaultGroups);
+      document.getElementById('save-group-form').addEventListener('click', saveGroupFromForm);
+      document.getElementById('group-add-member').addEventListener('click', function () { appendGroupMemberRow({ alias: '', weight: 1 }); refreshGroupFallbackOptions(); });
+      document.getElementById('group-modality').addEventListener('change', function () { refreshGroupMemberOptions(); refreshGroupFallbackOptions(); });
+      document.getElementById('model-groups-list').addEventListener('click', handleGroupAction);
+      document.getElementById('group-members').addEventListener('click', function (event) {
+        var remove = event.target.closest('[data-group-member-remove]');
+        if (!remove) return;
+        var row = remove.closest('[data-group-member-row]');
+        if (row) row.remove();
+        refreshGroupFallbackOptions();
+      });
       document.getElementById('save-upstream-form').addEventListener('click', saveUpstreamFromForm);
       document.getElementById('reset-upstream-form').addEventListener('click', resetUpstreamForm);
       document.getElementById('create-user').addEventListener('click', createUser);
@@ -2573,7 +2912,7 @@ const ADMIN_APP_HTML = `<!doctype html>
       async function loadAll() {
         try {
           setStatus('正在刷新...', '');
-          var results = await Promise.all([api('/admin/api/overview'), api('/admin/api/config'), api('/admin/api/models'), api('/admin/api/users'), api('/admin/api/usage'), api('/admin/api/tasks?limit=50')]);
+          var results = await Promise.all([api('/admin/api/overview'), api('/admin/api/config'), api('/admin/api/models'), api('/admin/api/users'), api('/admin/api/usage'), api('/admin/api/tasks?limit=50'), api('/admin/api/model-groups')]);
           state.overview = results[0];
           state.config = results[1];
           state.models = results[2].data || [];
@@ -2581,6 +2920,7 @@ const ADMIN_APP_HTML = `<!doctype html>
           state.apiKeys = results[3].api_keys || [];
           state.usage = results[4].usage;
           state.tasks = results[5].data || [];
+          state.modelGroups = results[6].data || [];
           renderAll();
           setStatus('已刷新：' + new Date().toLocaleString(), 'ok');
         } catch (error) {
@@ -2600,6 +2940,7 @@ const ADMIN_APP_HTML = `<!doctype html>
         renderDashboard();
         renderUpstreamManagement();
         renderModels();
+        renderModelGroups();
         renderUsers();
         renderUsage();
         renderTasks(state.tasks);
@@ -2983,6 +3324,203 @@ const ADMIN_APP_HTML = `<!doctype html>
       async function saveModelFromJson() { var model = JSON.parse(document.getElementById('model-json').value); await saveModel(model, model.original_alias || state.editingModelAlias || null); }
       async function saveModel(model, originalAlias) { var path = originalAlias ? '/admin/api/models/' + encodeURIComponent(originalAlias) : '/admin/api/models'; var method = originalAlias ? 'PUT' : 'POST'; await api(path, { method: method, body: JSON.stringify({ model: model }) }); state.editingModelAlias = null; await loadAll(); setStatus('模型已保存：' + model.alias, 'ok'); }
       async function resetModels() { if (!confirm('确定重置模型配置？')) return; await api('/admin/api/models/reset', { method: 'POST' }); document.getElementById('model-json').value = ''; await loadAll(); setStatus('模型配置已重置。', 'ok'); }
+
+      // ── 模型分组 ──
+      function levelText(level) {
+        return level === 'advanced' ? '高级' : level === 'standard' ? '标准' : level === 'basic' ? '基础' : '自定义';
+      }
+      function levelPillClass(level) {
+        return level === 'advanced' ? 'ok' : level === 'standard' ? 'warn' : level === 'basic' ? 'muted' : '';
+      }
+      function renderModelGroups() {
+        var list = document.getElementById('model-groups-list');
+        var groups = state.modelGroups || [];
+        if (!groups.length) {
+          list.innerHTML = '<div class="empty">尚未配置模型分组。点击「初始化默认三组」可一键创建高级/标准/基础三组骨架。</div>';
+          return;
+        }
+        list.innerHTML = groups.map(function (group) {
+          var memberBadges = group.members.map(function (m) {
+            var weightText = m.weight !== undefined && m.weight !== 1 ? ' ×' + esc(String(m.weight)) : '';
+            var unavailable = m.available === false ? ' style="opacity:0.5; text-decoration: line-through;" title="模型不存在或已禁用"' : '';
+            return '<span class="pill"' + unavailable + '>' + esc(m.alias) + weightText + '</span>';
+          }).join('');
+          var fallbackText = group.fallback_member_alias ? '回退 ' + esc(group.fallback_member_alias) : '无回退';
+          return '<article class="entity-card">' +
+            '<header><div><div class="eyebrow">' + esc(group.alias) + '</div>' +
+            '<h4>' + esc(group.name || group.alias) + '</h4>' +
+            '<p class="subtitle">' + esc(group.description || '') + '</p></div>' +
+            '<div class="actions"><button class="secondary compact" data-group-edit="' + esc(group.alias) + '">编辑</button>' +
+            '<button class="danger compact" data-group-delete="' + esc(group.alias) + '">删除</button></div></header>' +
+            '<div class="meta-row">' +
+              '<span class="pill ' + levelPillClass(group.level) + '">' + levelText(group.level) + '</span>' +
+              '<span class="pill">' + esc(group.modality) + '</span>' +
+              '<span class="pill ' + (group.status === 'active' ? 'ok' : 'muted') + '">' + (group.status === 'active' ? '启用' : '停用') + '</span>' +
+              '<span class="muted-label">成员 ' + group.members_count + ' · ' + fallbackText + '</span>' +
+            '</div>' +
+            '<div class="meta-row">' + (memberBadges || '<span class="muted-label">无成员</span>') + '</div>' +
+          '</article>';
+        }).join('');
+      }
+
+      function resetGroupForm() {
+        state.editingGroupAlias = null;
+        document.getElementById('group-alias').value = '';
+        document.getElementById('group-alias').disabled = false;
+        document.getElementById('group-name').value = '';
+        document.getElementById('group-level').value = 'advanced';
+        document.getElementById('group-modality').value = 'text';
+        document.getElementById('group-status').value = 'active';
+        document.getElementById('group-description').value = '';
+        document.getElementById('group-members').innerHTML = '';
+        refreshGroupMemberOptions();
+        refreshGroupFallbackOptions();
+      }
+
+      function fillGroupForm(group) {
+        state.editingGroupAlias = group.alias;
+        document.getElementById('group-alias').value = group.alias;
+        document.getElementById('group-alias').disabled = false;
+        document.getElementById('group-name').value = group.name || '';
+        document.getElementById('group-level').value = group.level;
+        document.getElementById('group-modality').value = group.modality;
+        document.getElementById('group-status').value = group.status || 'active';
+        document.getElementById('group-description').value = group.description || '';
+        var container = document.getElementById('group-members');
+        container.innerHTML = '';
+        (group.members || []).forEach(function (m) { appendGroupMemberRow(m); });
+        refreshGroupMemberOptions();
+        refreshGroupFallbackOptions();
+      }
+
+      function appendGroupMemberRow(member) {
+        var container = document.getElementById('group-members');
+        var row = document.createElement('div');
+        row.setAttribute('data-group-member-row', '');
+        row.className = 'form-grid';
+        row.style.gridTemplateColumns = '1fr 120px auto';
+        row.innerHTML =
+          '<label>成员别名<select class="group-member-alias"></select></label>' +
+          '<label>权重<input type="number" class="group-member-weight" min="0" step="1" value="' + esc(String(member.weight !== undefined ? member.weight : 1)) + '"></label>' +
+          '<button class="danger compact" type="button" data-group-member-remove>移除</button>';
+        container.appendChild(row);
+        var aliasSelect = row.querySelector('.group-member-alias');
+        var modality = document.getElementById('group-modality').value;
+        var candidates = (state.models || []).filter(function (m) { return m.modality === modality; });
+        var current = member.alias || '';
+        aliasSelect.innerHTML = candidates.map(function (m) {
+          var selected = m.alias === current ? ' selected' : '';
+          return '<option value="' + esc(m.alias) + '"' + selected + '>' + esc(m.alias) + '</option>';
+        }).join('');
+        if (current && !candidates.some(function (m) { return m.alias === current; })) {
+          aliasSelect.innerHTML = '<option value="' + esc(current) + '" selected>' + esc(current) + '（不在可选列表）</option>' + aliasSelect.innerHTML;
+        }
+        aliasSelect.addEventListener('change', refreshGroupFallbackOptions);
+      }
+
+      function refreshGroupMemberOptions() {
+        var modality = document.getElementById('group-modality').value;
+        var candidates = (state.models || []).filter(function (m) { return m.modality === modality; });
+        document.querySelectorAll('#group-members .group-member-alias').forEach(function (sel) {
+          var current = sel.value;
+          sel.innerHTML = candidates.map(function (m) {
+            var selected = m.alias === current ? ' selected' : '';
+            return '<option value="' + esc(m.alias) + '"' + selected + '>' + esc(m.alias) + '</option>';
+          }).join('');
+          if (current && !candidates.some(function (m) { return m.alias === current; })) {
+            sel.innerHTML = '<option value="' + esc(current) + '" selected>' + esc(current) + '（不在可选列表）</option>' + sel.innerHTML;
+          }
+        });
+      }
+
+      function refreshGroupFallbackOptions() {
+        var select = document.getElementById('group-fallback');
+        var current = select.value;
+        var aliases = collectGroupMemberAliases();
+        select.innerHTML = '<option value="">不指定</option>' + aliases.map(function (alias) {
+          return '<option value="' + esc(alias) + '"' + (alias === current ? ' selected' : '') + '>' + esc(alias) + '</option>';
+        }).join('');
+      }
+
+      function collectGroupMemberAliases() {
+        return Array.from(document.querySelectorAll('#group-members .group-member-alias')).map(function (sel) { return sel.value; }).filter(Boolean);
+      }
+
+      function collectGroupMembers() {
+        var rows = document.querySelectorAll('#group-members [data-group-member-row]');
+        var members = [];
+        rows.forEach(function (row) {
+          var alias = row.querySelector('.group-member-alias').value;
+          var weightRaw = row.querySelector('.group-member-weight').value;
+          if (!alias) return;
+          var weight = weightRaw === '' ? undefined : Number(weightRaw);
+          members.push({ alias: alias, weight: weight });
+        });
+        return members;
+      }
+
+      async function saveGroupFromForm() {
+        var alias = document.getElementById('group-alias').value.trim();
+        if (!alias) { setStatus('组别名不能为空', 'error'); return; }
+        var group = {
+          alias: alias,
+          name: document.getElementById('group-name').value.trim() || undefined,
+          level: document.getElementById('group-level').value,
+          modality: document.getElementById('group-modality').value,
+          status: document.getElementById('group-status').value,
+          description: document.getElementById('group-description').value.trim() || undefined,
+          fallback_member_alias: document.getElementById('group-fallback').value || undefined,
+          members: collectGroupMembers()
+        };
+        if (!group.members.length) { setStatus('至少需要一个成员', 'error'); return; }
+        try {
+          var path = state.editingGroupAlias ? '/admin/api/model-groups/' + encodeURIComponent(state.editingGroupAlias) : '/admin/api/model-groups';
+          var method = state.editingGroupAlias ? 'PUT' : 'POST';
+          await api(path, { method: method, body: JSON.stringify({ group: group }) });
+          state.editingGroupAlias = null;
+          await loadAll();
+          setStatus('分组已保存：' + group.alias, 'ok');
+          closeModal('model-group-modal');
+        } catch (error) {
+          setStatus(error.message || String(error), 'error');
+        }
+      }
+
+      async function initDefaultGroups() {
+        if (!confirm('初始化默认三组（tier:advanced / tier:standard / tier:basic）？已存在的默认组将被跳过，未存在的会用所有同模态模型作为初始成员创建。')) return;
+        try {
+          var data = await api('/admin/api/model-groups/init-defaults', { method: 'POST' });
+          await loadAll();
+          var msg = '已创建：' + (data.created && data.created.length ? data.created.join(', ') : '无') + '；跳过：' + (data.skipped && data.skipped.length ? data.skipped.join(', ') : '无');
+          setStatus(msg, 'ok');
+        } catch (error) {
+          setStatus(error.message || String(error), 'error');
+        }
+      }
+
+      async function handleGroupAction(event) {
+        var editBtn = event.target.closest('[data-group-edit]');
+        if (editBtn) {
+          var alias = editBtn.getAttribute('data-group-edit');
+          var group = (state.modelGroups || []).find(function (g) { return g.alias === alias; });
+          if (!group) return;
+          fillGroupForm(group);
+          openModal('model-group-modal', 'model-group-modal-title', '编辑分组');
+          return;
+        }
+        var delBtn = event.target.closest('[data-group-delete]');
+        if (delBtn) {
+          var delAlias = delBtn.getAttribute('data-group-delete');
+          if (!confirm('确定删除分组 ' + delAlias + '？')) return;
+          try {
+            await api('/admin/api/model-groups/' + encodeURIComponent(delAlias), { method: 'DELETE' });
+            await loadAll();
+            setStatus('分组已删除：' + delAlias, 'ok');
+          } catch (error) {
+            setStatus(error.message || String(error), 'error');
+          }
+        }
+      }
 
       async function saveUpstreamFromForm() {
         var existingId = value('upstream-admin-id');

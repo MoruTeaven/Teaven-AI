@@ -93,6 +93,7 @@ Teaven AI Gateway 是一个多租户 AI API 网关，计划部署在 Cloudflare 
 | Provider Credential | 平台访问上游的密钥或凭证引用。 |
 | Model Alias | 对外暴露的模型名，例如 `deepseek-chat`。 |
 | Upstream Model | 添加到某个上游实例下的模型条目，包含平台别名、上游真实模型名和模型能力，不包含密钥和域名。 |
+| Model Group | 模型分组，把多个同模态的 Model Alias 组合成一个对外别名（如 `tier:advanced`），调用时按权重随机挑选成员；失败自动回退到指定成员。组别名不可与已有 Model Alias 冲突。 |
 | Model Route | 运行时从 Upstream Model 归一化得到的路由目标。 |
 | Request Log | API 请求记录，用于审计、排障和用量归因。 |
 | Usage Record | 标准化后的用量记录，用于计费和配额扣减。 |
@@ -817,7 +818,8 @@ Remote Plugin 必须遵循同一输入输出协议，并由平台做超时、重
 | id | 用量记录 ID。 |
 | request_id | 请求 ID 或任务 ID。 |
 | organization_id | 组织 ID。 |
-| model | 对外模型名。 |
+| model | 实际命中的对外模型名（命中分组时为成员别名）。 |
+| requested_model | 用户请求里原始的 model 字段（命中分组时为组别名，如 `tier:advanced`），便于通过 request_id 反查。 |
 | upstream_id | 实际上游实例。 |
 | plugin_id | Provider Plugin ID。 |
 | prompt_tokens | 输入 token。 |
@@ -836,7 +838,8 @@ Remote Plugin 必须遵循同一输入输出协议，并由平台做超时、重
 | organization_id | 组织 ID。 |
 | api_key_id | API Key ID。 |
 | type | 任务类型。 |
-| model | 对外模型名。 |
+| model | 实际命中的对外模型名（命中分组时为成员别名，供 processor 内部使用）。 |
+| requested_model | 用户请求里原始的 model 字段（命中分组时为组别名），对外展示和回调时优先返回此字段。 |
 | upstream_id | 实际上游实例。 |
 | plugin_id | Provider Plugin ID。 |
 | provider_execution_mode | 上游执行模式，例如 sync、async_polling、async_webhook。 |
@@ -1031,6 +1034,42 @@ Remote Plugin 必须遵循同一输入输出协议，并由平台做超时、重
   ]
 }
 ```
+
+### 14.1 模型分组（model_groups）
+
+模型分组把多个同模态的 Model Alias 组合成一个对外别名，调用时按权重随机挑选一个成员执行；成员调用失败（5xx / 429 / 网络错误）时自动回退到 `fallback_member_alias` 指定的成员。响应里的 `model` 字段返回组别名，但 `usage_records.model` 和 `async_tasks.model` 字段记录实际命中的成员别名，并通过 `requested_model` 字段保留组别名，便于通过 `request_id` 反查实际调用链。
+
+默认三组别名 `tier:advanced` / `tier:standard` / `tier:basic` 保留（各只能存在一个），也可添加任意自定义组别名。组别名不可与已有 Model Alias 冲突。
+
+```json
+{
+  "upstreams": [ /* ... */ ],
+  "model_groups": [
+    {
+      "alias": "tier:advanced",
+      "name": "高级模型组",
+      "level": "advanced",
+      "modality": "text",
+      "status": "active",
+      "fallback_member_alias": "deepseek-chat",
+      "members": [
+        { "alias": "deepseek-chat", "weight": 3 },
+        { "alias": "qwen-max", "weight": 1 }
+      ]
+    }
+  ]
+}
+```
+
+后台管理 API：
+
+| Method | Path | 用途 |
+| --- | --- | --- |
+| GET | `/admin/api/model-groups` | 列出所有分组（含成员详情） |
+| POST | `/admin/api/model-groups` | 创建分组（upsert by alias） |
+| PUT | `/admin/api/model-groups/:alias` | 更新指定分组 |
+| DELETE | `/admin/api/model-groups/:alias` | 删除分组 |
+| POST | `/admin/api/model-groups/init-defaults` | 一键初始化默认三组骨架 |
 
 配置来源优先级：
 

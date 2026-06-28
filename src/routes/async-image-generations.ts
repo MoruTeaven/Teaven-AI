@@ -1,12 +1,19 @@
-import { findModel, loadGatewayConfig, selectRoute } from "../config";
+import { findModel, loadGatewayConfig, resolveModelAlias, selectRoute } from "../config";
 import { invalidRequest, permissionDenied, providerUnavailable } from "../http/errors";
 import { createProviderRegistry, resolveProviderCredential } from "../providers/registry";
 import { recordChatUsage } from "../admin/store";
 import { appendTaskEvent, taskDiagnostics } from "../tasks/events";
 import { saveTask } from "../tasks/store";
-import type { AuthContext, AsyncTaskRecord, Env, ImageGenerationRequest } from "../types";
+import type { AuthContext, AsyncTaskRecord, Env, GatewayConfig, ImageGenerationRequest, ProviderRouteConfig } from "../types";
 import { createId } from "../utils/ids";
 import { readJsonObject, requireString, resolveImageInputs, resolveImageInput } from "../utils/request";
+import { rewriteModelInJsonResponse } from "../utils/model-rewrite";
+
+interface UpstreamCallResult {
+  response: Response;
+  route: ProviderRouteConfig;
+  usedAlias: string;
+}
 
 export async function handleAsyncImageGenerations(
   request: Request,
@@ -16,7 +23,7 @@ export async function handleAsyncImageGenerations(
 ): Promise<Response> {
   const startedAt = Date.now();
   const body = await readJsonObject(request);
-  const modelName = requireString(body.model, "model");
+  const requestedModelName = requireString(body.model, "model");
   const prompt = requireString(body.prompt, "prompt");
 
   if (body.n !== undefined && (typeof body.n !== "number" || body.n < 1 || body.n > 10)) {
@@ -40,28 +47,32 @@ export async function handleAsyncImageGenerations(
     }
   }
 
-  if (auth.allowed_models && !auth.allowed_models.includes(modelName)) {
-    throw permissionDenied(`API key cannot access model: ${modelName}`);
+  // 权限校验：检查用户请求的原始 model 字段（可能是组别名）
+  if (auth.allowed_models && !auth.allowed_models.includes(requestedModelName)) {
+    throw permissionDenied(`API key cannot access model: ${requestedModelName}`);
   }
 
   const config = await loadGatewayConfig(env);
-  const model = findModel(config, modelName);
+  const resolved = resolveModelAlias(config, requestedModelName);
+
+  // 校验主候选模型
+  const model = findModel(config, resolved.resolvedAlias);
   if (!model) {
-    throw invalidRequest(`Unknown model: ${modelName}`, "model", "model_not_found");
+    throw invalidRequest(`Unknown model: ${requestedModelName}`, "model", "model_not_found");
   }
 
   if (model.modality !== "image") {
     throw invalidRequest(
-      `Model is not an image model: ${modelName}. Use /v1/chat/completions for text models.`,
+      `Model is not an image model: ${requestedModelName}. Use /v1/chat/completions for text models.`,
       "model"
     );
   }
 
   // 检查模型是否支持图生图
-  const hasImageInput = body.image || body.mask;
+  const hasImageInput = Boolean(body.image || body.mask);
   if (hasImageInput && model.image_mode === "text-to-image") {
     throw invalidRequest(
-      `Model does not support image-to-image: ${modelName}`,
+      `Model does not support image-to-image: ${requestedModelName}`,
       "image",
       "unsupported_image_input"
     );
@@ -69,43 +80,29 @@ export async function handleAsyncImageGenerations(
 
   const route = selectRoute(model, false);
   if (!route) {
-    throw providerUnavailable(`No active provider route for model: ${modelName}`);
+    throw providerUnavailable(`No active provider route for model: ${requestedModelName}`);
   }
 
-  const registry = createProviderRegistry(env);
-  const plugin = registry.get(route.plugin_id);
-  const adapter = plugin.createAdapter(env);
-  
-  if (!adapter.imageGenerations) {
-    throw providerUnavailable(`Provider plugin does not support image generation: ${route.plugin_id}`);
-  }
-
-  // 检查 Provider 是否支持图生图
-  if (hasImageInput) {
-    const imageCap = plugin.manifest.capabilities["image"];
-    if (imageCap && imageCap.supports_image_input === false) {
-      throw invalidRequest(
-        `Provider plugin does not support image-to-image: ${route.plugin_id}`,
-        "image",
-        "unsupported_image_input"
-      );
-    }
-  }
-
-  const credential = resolveProviderCredential(env, route);
-  
-  // 调用上游异步接口
-  const upstreamResponse = await adapter.imageGenerations(body as ImageGenerationRequest, {
+  // 调用上游（含 fallback 重试）
+  const callResult = await callUpstreamWithFallback({
     env,
-    request_id: requestId,
-    route,
-    credential,
-    signal: request.signal
+    request,
+    requestId,
+    config,
+    primaryAlias: resolved.resolvedAlias,
+    primaryRoute: route,
+    fallbackAlias: resolved.fallbackAlias,
+    body,
+    hasImageInput
   });
+
+  const upstreamResponse = callResult.response;
+  const usedRoute = callResult.route;
+  const usedAlias = callResult.usedAlias;
 
   // 解析上游响应
   const upstreamData = await upstreamResponse.json() as Record<string, unknown>;
-  
+
   // 如果上游返回202异步响应，创建本地任务记录
   if (upstreamResponse.status === 202) {
     const providerTaskId = firstString(upstreamData.id, upstreamData.provider_task_id, upstreamData.task_id);
@@ -120,20 +117,23 @@ export async function handleAsyncImageGenerations(
       organization_id: auth.organization_id,
       api_key_id: auth.api_key_id,
       type: "image",
-      model: modelName,
-      upstream_id: route.upstream_id,
-      plugin_id: route.plugin_id,
+      // 内部存储实际命中的模型别名，便于 consumer 处理
+      model: usedAlias,
+      // 对外展示用组别名（若用户请求的是组）
+      requested_model: resolved.group ? requestedModelName : undefined,
+      upstream_id: usedRoute.upstream_id,
+      plugin_id: usedRoute.plugin_id,
       provider_execution_mode: "async_polling",
       provider_task_id: providerTaskId,
       provider_context: {
-        upstream_model: route.provider_model,
+        upstream_model: usedRoute.provider_model,
         request_id: requestId,
-        base_url: route.base_url,
-        credential_id: route.credential_id,
-        config: route.config
+        base_url: usedRoute.base_url,
+        credential_id: usedRoute.credential_id,
+        config: usedRoute.config
       },
       status: "queued",
-      input: body as Record<string, unknown>,
+      input: { ...body, model: usedAlias },
       store_output: true,
       storage_ttl_seconds: 24 * 60 * 60,
       output_expires_at: null,
@@ -162,20 +162,23 @@ export async function handleAsyncImageGenerations(
       organization_id: auth.organization_id,
       api_key_id: auth.api_key_id,
       endpoint: "/v1/async/images/generations",
-      model: modelName,
-      route,
+      model: usedAlias,
+      requested_model: requestedModelName,
+      route: usedRoute,
       status_code: 202,
       latency_ms: Date.now() - startedAt,
       stream: false,
       usage: undefined
     });
 
-    // 返回任务ID给客户端
+    // 返回任务ID给客户端。对外展示用组别名（若有）
+    const responseModel = resolved.group ? requestedModelName : usedAlias;
     return new Response(
       JSON.stringify({
         id: task.id,
         object: "task",
         type: "image",
+        model: responseModel,
         status: task.status,
         provider_task_id: task.provider_task_id,
         diagnostics: taskDiagnostics(task),
@@ -199,21 +202,126 @@ export async function handleAsyncImageGenerations(
     organization_id: auth.organization_id,
     api_key_id: auth.api_key_id,
     endpoint: "/v1/async/images/generations",
-    model: modelName,
-    route,
+    model: usedAlias,
+    requested_model: requestedModelName,
+    route: usedRoute,
     status_code: upstreamResponse.status,
     latency_ms: Date.now() - startedAt,
     stream: false,
     usage: undefined
   });
 
-  return new Response(JSON.stringify(upstreamData), {
+  // 命中分组时，把响应里的 model 字段重写回组别名
+  const response = new Response(JSON.stringify(upstreamData), {
     status: upstreamResponse.status,
     headers: {
       "Content-Type": "application/json",
       "X-Request-Id": requestId
     }
   });
+  if (resolved.group) {
+    return rewriteModelInJsonResponse(response, requestedModelName);
+  }
+  return response;
+}
+
+/** 调用上游接口，主候选失败（5xx/429/网络错误）时按 fallback 重试 */
+async function callUpstreamWithFallback(params: {
+  env: Env;
+  request: Request;
+  requestId: string;
+  config: GatewayConfig;
+  primaryAlias: string;
+  primaryRoute: ProviderRouteConfig;
+  fallbackAlias?: string;
+  body: Record<string, unknown>;
+  hasImageInput: boolean;
+}): Promise<UpstreamCallResult> {
+  const candidates: Array<{ alias: string; route: ProviderRouteConfig }> = [
+    { alias: params.primaryAlias, route: params.primaryRoute }
+  ];
+  if (params.fallbackAlias && params.fallbackAlias !== params.primaryAlias) {
+    const fallbackRoute = selectRouteForImageAlias(params.config, params.fallbackAlias);
+    if (fallbackRoute) {
+      candidates.push({ alias: params.fallbackAlias, route: fallbackRoute });
+    }
+  }
+
+  let primaryError: unknown;
+  for (let index = 0; index < candidates.length; index++) {
+    const candidate = candidates[index];
+    const isLast = index === candidates.length - 1;
+
+    try {
+      const registry = createProviderRegistry(params.env);
+      const plugin = registry.get(candidate.route.plugin_id);
+      const adapter = plugin.createAdapter(params.env);
+
+      if (!adapter.imageGenerations) {
+        if (isLast) {
+          throw providerUnavailable(`Provider plugin does not support image generation: ${candidate.route.plugin_id}`);
+        }
+        continue;
+      }
+
+      // 检查 Provider 是否支持图生图
+      if (params.hasImageInput) {
+        const imageCap = plugin.manifest.capabilities["image"];
+        if (imageCap && imageCap.supports_image_input === false) {
+          if (isLast) {
+            throw invalidRequest(
+              `Provider plugin does not support image-to-image: ${candidate.route.plugin_id}`,
+              "image",
+              "unsupported_image_input"
+            );
+          }
+          continue;
+        }
+      }
+
+      const credential = resolveProviderCredential(params.env, candidate.route);
+      const requestBody = { ...params.body, model: candidate.alias };
+
+      const response = await adapter.imageGenerations(
+        requestBody as ImageGenerationRequest,
+        {
+          env: params.env,
+          request_id: params.requestId,
+          route: candidate.route,
+          credential,
+          signal: params.request.signal
+        }
+      );
+
+      // 服务端错误或限流，且有后续候选 → 丢弃当前响应，尝试下一个
+      if ((response.status >= 500 || response.status === 429) && !isLast) {
+        try { await response.body?.cancel(); } catch { /* ignore */ }
+        continue;
+      }
+
+      return { response, route: candidate.route, usedAlias: candidate.alias };
+    } catch (err) {
+      primaryError = primaryError ?? err;
+      if (isLast) {
+        throw err;
+      }
+    }
+  }
+
+  if (primaryError) throw primaryError;
+  throw providerUnavailable("No upstream candidate succeeded");
+}
+
+/** 为指定 alias 解析可用于图片生成的路由 */
+function selectRouteForImageAlias(
+  config: GatewayConfig,
+  alias: string
+): ProviderRouteConfig | undefined {
+  const model = findModel(config, alias);
+  if (!model || model.modality !== "image") {
+    return undefined;
+  }
+  return selectRoute(model, false);
 }
 
 async function enqueueCreatedTask(env: Env, task: AsyncTaskRecord): Promise<void> {

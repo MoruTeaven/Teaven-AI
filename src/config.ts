@@ -1,7 +1,16 @@
 import { invalidRequest } from "./http/errors";
 import { clearManagedGatewayConfig, loadManagedGatewayConfig, saveManagedGatewayConfig } from "./admin/store";
 import { createId } from "./utils/ids";
-import type { Env, GatewayConfig, ModelConfig, ProviderRouteConfig, UpstreamConfig, UpstreamModelConfig } from "./types";
+import type {
+  Env,
+  GatewayConfig,
+  ModelConfig,
+  ModelGroup,
+  ModelGroupMember,
+  ProviderRouteConfig,
+  UpstreamConfig,
+  UpstreamModelConfig
+} from "./types";
 
 export async function loadGatewayConfig(env: Env): Promise<GatewayConfig> {
   const managedConfig = await loadManagedGatewayConfig(env);
@@ -49,6 +58,83 @@ export function findModel(config: GatewayConfig, alias: string): ModelConfig | u
   return listModels(config).find((model) => model.alias === alias && model.status !== "disabled");
 }
 
+/** 按别名查找模型分组 */
+export function findModelGroup(config: GatewayConfig, alias: string): ModelGroup | undefined {
+  return config.model_groups?.find((group) => group.alias === alias && group.status !== "disabled");
+}
+
+/**
+ * 加权随机挑选一个组成员。
+ * 仅参与 weight > 0 或未设置 weight 的成员；若全部不可用返回 undefined。
+ */
+export function pickWeightedMember(members: ModelGroupMember[]): ModelGroupMember | undefined {
+  const candidates = members.filter((member) => member.weight === undefined || member.weight > 0);
+  if (candidates.length === 0) {
+    return undefined;
+  }
+
+  const totalWeight = candidates.reduce((sum, member) => sum + (member.weight ?? 1), 0);
+  if (totalWeight <= 0) {
+    return undefined;
+  }
+
+  let remaining = Math.random() * totalWeight;
+  for (const member of candidates) {
+    remaining -= (member.weight ?? 1);
+    if (remaining < 0) {
+      return member;
+    }
+  }
+  return candidates[candidates.length - 1];
+}
+
+/**
+ * 模型别名解析结果。
+ * - `requestedAlias`: 用户原始请求的 model 字段
+ * - `resolvedAlias`: 实际用于路由的别名（命中组时为成员别名，否则与 requestedAlias 相同）
+ * - `group`: 命中的分组（未命中时为 undefined）
+ * - `fallbackAlias`: 组配置的回退成员别名（未配置或不可用时为 undefined）
+ */
+export interface ResolvedModel {
+  requestedAlias: string;
+  resolvedAlias: string;
+  group?: ModelGroup;
+  fallbackAlias?: string;
+}
+
+/**
+ * 解析用户传入的 model 字段。
+ * 若命中模型分组，按权重随机挑选一个成员 alias 返回。
+ * 若未命中组或组不可用，原样返回 alias。
+ */
+export function resolveModelAlias(config: GatewayConfig, alias: string): ResolvedModel {
+  const group = findModelGroup(config, alias);
+  if (!group) {
+    return { requestedAlias: alias, resolvedAlias: alias };
+  }
+
+  const member = pickWeightedMember(group.members);
+  if (!member) {
+    // 组内没有可用成员时，回落到 fallback（若配置且 fallback 本身不在已剔除外）
+    if (group.fallback_member_alias) {
+      return {
+        requestedAlias: alias,
+        resolvedAlias: group.fallback_member_alias,
+        group,
+        fallbackAlias: group.fallback_member_alias
+      };
+    }
+    return { requestedAlias: alias, resolvedAlias: alias, group };
+  }
+
+  return {
+    requestedAlias: alias,
+    resolvedAlias: member.alias,
+    group,
+    fallbackAlias: group.fallback_member_alias
+  };
+}
+
 export function listModels(config: GatewayConfig): ModelConfig[] {
   const models = new Map<string, ModelConfig>();
 
@@ -92,6 +178,11 @@ export function listModels(config: GatewayConfig): ModelConfig[] {
 
 export function listProviderRoutes(config: GatewayConfig): ProviderRouteConfig[] {
   return listModels(config).flatMap((model) => model.routes);
+}
+
+/** 列出所有可用的模型分组（status 非 disabled） */
+export function listModelGroups(config: GatewayConfig): ModelGroup[] {
+  return (config.model_groups || []).filter((group) => group.status !== "disabled");
 }
 
 export function selectRoute(model: ModelConfig, stream = false): ProviderRouteConfig | undefined {
@@ -147,6 +238,97 @@ export function validateGatewayConfig(config: GatewayConfig): void {
       if (!existing) {
         aliases.set(model.alias, { modality: model.modality, supports_stream: supportsStream });
       }
+    }
+  }
+
+  validateModelGroups(config, aliases);
+}
+
+function validateModelGroups(
+  config: GatewayConfig,
+  aliases: Map<string, { modality: string; supports_stream: boolean }>
+): void {
+  const groups = config.model_groups;
+  if (!groups) {
+    return;
+  }
+  if (!Array.isArray(groups)) {
+    throw new Error("model_groups 必须是数组");
+  }
+
+  const groupAliases = new Set<string>();
+  const reservedDefaultAliases = new Set(["tier:advanced", "tier:standard", "tier:basic"]);
+
+  for (const group of groups) {
+    if (typeof group.alias !== "string" || group.alias.length === 0) {
+      throw new Error("model group alias 不能为空");
+    }
+    if (groupAliases.has(group.alias)) {
+      throw new Error(`model group alias 重复：${group.alias}`);
+    }
+    groupAliases.add(group.alias);
+
+    if (aliases.has(group.alias)) {
+      throw new Error(`model group alias 与已有模型 alias 冲突：${group.alias}`);
+    }
+
+    if (!["advanced", "standard", "basic", "custom"].includes(group.level)) {
+      throw new Error(`model group ${group.alias} 的 level 无效`);
+    }
+
+    if (!["text", "image", "video", "file"].includes(group.modality)) {
+      throw new Error(`model group ${group.alias} 的 modality 无效`);
+    }
+
+    if (group.status !== undefined && !["active", "disabled"].includes(group.status)) {
+      throw new Error(`model group ${group.alias} 的 status 无效`);
+    }
+
+    if (!Array.isArray(group.members) || group.members.length === 0) {
+      throw new Error(`model group ${group.alias} 必须至少有一个成员`);
+    }
+
+    const memberAliases = new Set<string>();
+    for (const member of group.members) {
+      if (typeof member.alias !== "string" || member.alias.length === 0) {
+        throw new Error(`model group ${group.alias} 的 member alias 不能为空`);
+      }
+      if (memberAliases.has(member.alias)) {
+        throw new Error(`model group ${group.alias} 的 member alias 重复：${member.alias}`);
+      }
+      memberAliases.add(member.alias);
+
+      const memberModel = aliases.get(member.alias);
+      if (!memberModel) {
+        throw new Error(`model group ${group.alias} 引用了不存在的模型：${member.alias}`);
+      }
+      if (memberModel.modality !== group.modality) {
+        throw new Error(
+          `model group ${group.alias} 的 modality(${group.modality}) 与成员 ${member.alias} 的 modality(${memberModel.modality}) 不一致`
+        );
+      }
+
+      if (member.weight !== undefined) {
+        if (typeof member.weight !== "number" || !Number.isFinite(member.weight) || member.weight < 0) {
+          throw new Error(`model group ${group.alias} 的 member ${member.alias} weight 必须是非负数`);
+        }
+      }
+    }
+
+    if (group.fallback_member_alias) {
+      if (!memberAliases.has(group.fallback_member_alias)) {
+        throw new Error(
+          `model group ${group.alias} 的 fallback_member_alias ${group.fallback_member_alias} 不在 members 中`
+        );
+      }
+    }
+  }
+
+  // 默认三组别名只能各存在一个
+  for (const reserved of reservedDefaultAliases) {
+    const matches = groups.filter((group) => group.alias === reserved);
+    if (matches.length > 1) {
+      throw new Error(`默认组别名 ${reserved} 重复`);
     }
   }
 }

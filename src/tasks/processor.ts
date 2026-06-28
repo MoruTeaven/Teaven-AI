@@ -361,9 +361,15 @@ async function persistTask(env: Env, task: AsyncTaskRecord, startedAt: number): 
   task.updated_at = new Date().toISOString();
   await saveTask(env, task);
 
-  // 记录用量（终态时）
+  // 记录用量（终态时），requested_model 便于通过 request_id 反查组别名
   if (isTerminal(task.status)) {
-    await recordTaskUsage(env, task, task.status === "succeeded" ? 200 : 500, Date.now() - startedAt);
+    await recordTaskUsage(
+      env,
+      task,
+      task.status === "succeeded" ? 200 : 500,
+      Date.now() - startedAt,
+      task.requested_model
+    );
   }
 }
 
@@ -720,7 +726,8 @@ async function deliverCallback(env: Env, task: AsyncTaskRecord, processId: strin
       id: task.id,
       object: task.object,
       type: task.type,
-      model: task.model,
+      // 对外展示用组别名（若用户请求的是组），否则用实际模型
+      model: task.requested_model || task.model,
       status: task.status,
       output: await publicTaskOutput(task.output, env),
       error: task.error,

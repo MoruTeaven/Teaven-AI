@@ -66,6 +66,8 @@ export interface UsageRecord {
   api_key_id: string;
   endpoint: string;
   model: string;
+  /** 用户请求里的原始 model 字段（可能是组别名，如 tier:advanced） */
+  requested_model?: string;
   upstream_id?: string;
   plugin_id?: string;
   provider_model?: string;
@@ -524,6 +526,7 @@ export async function recordChatUsage(
     api_key_id: string;
     endpoint: string;
     model: string;
+    requested_model?: string;
     route?: ProviderRouteConfig;
     status_code: number;
     latency_ms: number;
@@ -539,6 +542,7 @@ export async function recordChatUsage(
     api_key_id: input.api_key_id,
     endpoint: input.endpoint,
     model: input.model,
+    requested_model: input.requested_model,
     upstream_id: input.route?.upstream_id,
     plugin_id: input.route?.plugin_id,
     provider_model: input.route?.provider_model,
@@ -556,7 +560,13 @@ export async function recordChatUsage(
   await saveUsageRecord(env, record);
 }
 
-export async function recordTaskUsage(env: Env, task: AsyncTaskRecord, statusCode: number, latencyMs: number): Promise<void> {
+export async function recordTaskUsage(
+  env: Env,
+  task: AsyncTaskRecord,
+  statusCode: number,
+  latencyMs: number,
+  requestedModel?: string
+): Promise<void> {
   await saveUsageRecord(env, {
     id: createId("usage"),
     request_id: task.id,
@@ -564,6 +574,7 @@ export async function recordTaskUsage(env: Env, task: AsyncTaskRecord, statusCod
     api_key_id: task.api_key_id,
     endpoint: "/v1/tasks",
     model: task.model,
+    requested_model: requestedModel,
     upstream_id: task.upstream_id,
     plugin_id: task.plugin_id,
     provider_model: task.provider_task_id,
@@ -718,13 +729,18 @@ function emptyUsageSummary(): UsageSummary {
 async function saveUsageRecord(env: Env, record: UsageRecord): Promise<void> {
   if (env.DB) {
     try {
-      await insertUsageRecord(env.DB, record, true);
+      await insertUsageRecord(env.DB, record, { includeCost: true, includeRequestedModel: true });
     } catch (error) {
       if (isMissingUsageTableError(error)) {
         return;
       }
-      if (isMissingD1ColumnError(error, "cost")) {
-        await insertUsageRecord(env.DB, record, false);
+      const missingCost = isMissingD1ColumnError(error, "cost");
+      const missingRequestedModel = isMissingD1ColumnError(error, "requested_model");
+      if (missingCost || missingRequestedModel) {
+        await insertUsageRecord(env.DB, record, {
+          includeCost: !missingCost,
+          includeRequestedModel: !missingRequestedModel
+        });
         return;
       }
       throw error;
@@ -739,9 +755,29 @@ async function saveUsageRecord(env: Env, record: UsageRecord): Promise<void> {
   }
 }
 
-async function insertUsageRecord(db: D1Database, record: UsageRecord, includeCost: boolean): Promise<void> {
-  const costColumn = includeCost ? ",\n        cost" : "";
-  const costPlaceholder = includeCost ? ", ?" : "";
+async function insertUsageRecord(
+  db: D1Database,
+  record: UsageRecord,
+  options: { includeCost: boolean; includeRequestedModel: boolean }
+): Promise<void> {
+  const extraColumns: string[] = [];
+  const extraPlaceholders: string[] = [];
+  const extraValues: unknown[] = [];
+
+  if (options.includeRequestedModel) {
+    extraColumns.push("requested_model");
+    extraPlaceholders.push("?");
+    extraValues.push(record.requested_model || null);
+  }
+  if (options.includeCost) {
+    extraColumns.push("cost");
+    extraPlaceholders.push("?");
+    extraValues.push(record.cost);
+  }
+
+  const extraColumnSql = extraColumns.length > 0 ? ",\n        " + extraColumns.join(",\n        ") : "";
+  const extraPlaceholderSql = extraPlaceholders.length > 0 ? ", " + extraPlaceholders.join(", ") : "";
+
   const bindValues = [
     record.id,
     record.request_id,
@@ -759,7 +795,7 @@ async function insertUsageRecord(db: D1Database, record: UsageRecord, includeCos
     record.completion_tokens,
     record.total_tokens,
     record.media_count,
-    ...(includeCost ? [record.cost] : []),
+    ...extraValues,
     record.created_at
   ];
 
@@ -780,9 +816,9 @@ async function insertUsageRecord(db: D1Database, record: UsageRecord, includeCos
       prompt_tokens,
       completion_tokens,
       total_tokens,
-      media_count${costColumn},
+      media_count${extraColumnSql},
       created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?${costPlaceholder}, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?${extraPlaceholderSql}, ?)
   `).bind(...bindValues).run();
 }
 
@@ -856,6 +892,7 @@ function usageRecordFromRow(row: D1Row): UsageRecord {
     api_key_id: stringValue(row.api_key_id),
     endpoint: stringValue(row.endpoint),
     model: stringValue(row.model),
+    requested_model: optionalString(row.requested_model),
     upstream_id: optionalString(row.upstream_id),
     plugin_id: optionalString(row.plugin_id),
     provider_model: optionalString(row.provider_model),

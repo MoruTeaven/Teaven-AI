@@ -1,5 +1,5 @@
-import { findModel, loadGatewayConfig, selectRoute } from "../config";
-import { conflict, invalidRequest, notFound } from "../http/errors";
+import { findModel, loadGatewayConfig, resolveModelAlias, selectRoute } from "../config";
+import { conflict, invalidRequest, notFound, permissionDenied } from "../http/errors";
 import { jsonResponse } from "../http/response";
 import { recordTaskUsage } from "../admin/store";
 import { appendTaskEvent, taskDiagnostics } from "../tasks/events";
@@ -15,7 +15,7 @@ export async function handleCreateTask(request: Request, env: Env, auth: AuthCon
   const startedAt = Date.now();
   const body = await readJsonObject(request);
   const type = requireString(body.type, "type");
-  const model = requireString(body.model, "model");
+  const requestedModelName = requireString(body.model, "model");
   const input = requireObject(body.input, "input");
   const callbackUrl = optionalString(body.callback_url, "callback_url");
   const metadata = body.metadata === undefined ? undefined : requireObject(body.metadata, "metadata");
@@ -31,10 +31,16 @@ export async function handleCreateTask(request: Request, env: Env, auth: AuthCon
   let upstreamId: string | undefined;
   let pluginId: string | undefined;
   let providerContext: Record<string, unknown> | undefined;
+  let resolvedModel = requestedModelName;
+  let hitGroup = false;
 
   try {
     const config = await loadGatewayConfig(env);
-    const modelCfg = findModel(config, model);
+    const resolved = resolveModelAlias(config, requestedModelName);
+    resolvedModel = resolved.resolvedAlias;
+    hitGroup = Boolean(resolved.group);
+
+    const modelCfg = findModel(config, resolvedModel);
     if (modelCfg) {
       const route = selectRoute(modelCfg, false);
       if (route) {
@@ -53,18 +59,26 @@ export async function handleCreateTask(request: Request, env: Env, auth: AuthCon
     // 配置加载失败不阻塞任务创建，consumer 会跳过无法处理的任务
   }
 
+  // 权限校验：检查用户请求的原始 model 字段（可能是组别名）
+  if (auth.allowed_models && !auth.allowed_models.includes(requestedModelName)) {
+    throw permissionDenied(`API key cannot access model: ${requestedModelName}`);
+  }
+
   const task: AsyncTaskRecord = {
     id: createId("task"),
     object: "task",
     organization_id: auth.organization_id,
     api_key_id: auth.api_key_id,
     type,
-    model,
+    // 内部存储实际命中的模型别名，便于 consumer 处理
+    model: resolvedModel,
+    // 对外展示用组别名（若用户请求的是组）
+    requested_model: hitGroup ? requestedModelName : undefined,
     upstream_id: upstreamId,
     plugin_id: pluginId,
     provider_context: providerContext,
     status: "queued",
-    input,
+    input: { ...input, model: resolvedModel },
     store_output: storeOutput,
     storage_ttl_seconds: storageTtlSeconds,
     output_expires_at: null,
@@ -86,7 +100,7 @@ export async function handleCreateTask(request: Request, env: Env, auth: AuthCon
 
   await enqueueCreatedTask(env, task);
 
-  await recordTaskUsage(env, task, 202, Date.now() - startedAt);
+  await recordTaskUsage(env, task, 202, Date.now() - startedAt, hitGroup ? requestedModelName : undefined);
 
   return jsonResponse(await publicTask(task, env, request.url), {
     status: 202,
@@ -241,7 +255,8 @@ async function publicTask(task: AsyncTaskRecord, env: Env, requestUrl?: string, 
     object: task.object,
     type: task.type,
     status: task.status,
-    model: task.model,
+    // 对外展示用组别名（若用户请求的是组），否则用实际模型
+    model: task.requested_model || task.model,
     upstream_id: task.upstream_id || null,
     plugin_id: task.plugin_id || null,
     provider_execution_mode: task.provider_execution_mode || null,

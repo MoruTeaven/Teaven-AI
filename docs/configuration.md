@@ -245,6 +245,54 @@ OPENAI_COMPATIBLE_DEFAULT_MODEL = "gpt-4o-mini"
 }
 ```
 
+### 模型分组（model_groups）
+
+`MODEL_CONFIG_JSON` 还支持 `model_groups` 字段，把多个同模态的模型别名组合成一个对外别名。用户调用时填组别名，平台按权重随机挑选一个成员执行；成员调用失败（5xx / 429 / 网络错误）时自动回退到 `fallback_member_alias`。
+
+响应里的 `model` 字段返回组别名；但 `usage_records.model` / `async_tasks.model` 字段记录实际命中的成员别名，并通过 `requested_model` 字段保留组别名，便于通过 `request_id` 反查。
+
+| 字段 | 含义 |
+| --- | --- |
+| `alias` | 用户调用时填写的组别名，不可与已有模型别名冲突。 |
+| `name` | 显示名（可选）。 |
+| `level` | 分组级别：`advanced` / `standard` / `basic` / `custom`。 |
+| `modality` | 组模态，所有成员必须同模态。 |
+| `status` | `active` / `disabled`，未设置视为 active。 |
+| `description` | 分组说明（可选）。 |
+| `fallback_member_alias` | 失败回退成员别名，必须存在于 `members` 中（可选）。 |
+| `members` | 成员数组，每个成员含 `alias`（必须已存在）和 `weight`（默认 1，>0 才参与抽取）。 |
+
+默认三组别名 `tier:advanced` / `tier:standard` / `tier:basic` 各只能存在一个；也支持任意自定义组别名。推荐通过管理后台「模型分组」Tab 可视化维护，或调用 `/admin/api/model-groups` 系列接口管理。
+
+```json
+{
+  "upstreams": [ /* ... */ ],
+  "model_groups": [
+    {
+      "alias": "tier:advanced",
+      "name": "高级模型组",
+      "level": "advanced",
+      "modality": "text",
+      "status": "active",
+      "fallback_member_alias": "fast-chat",
+      "members": [
+        { "alias": "fast-chat", "weight": 3 },
+        { "alias": "deep-chat", "weight": 1 }
+      ]
+    }
+  ]
+}
+```
+
+调用示例（model 字段填组别名）：
+
+```json
+{
+  "model": "tier:advanced",
+  "messages": [{ "role": "user", "content": "hello" }]
+}
+```
+
 ## Cloudflare 绑定
 
 这些不是普通 `[vars]`，而是 Cloudflare Worker 绑定。当前代码会识别以下绑定名称：

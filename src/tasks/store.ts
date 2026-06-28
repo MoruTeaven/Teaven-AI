@@ -7,11 +7,16 @@ type TaskRow = Record<string, unknown>;
 export async function saveTask(env: Env, task: AsyncTaskRecord): Promise<void> {
   if (env.DB) {
     try {
-      await saveTaskToD1(env.DB, task, true);
+      await saveTaskToD1(env.DB, task, { includeEvents: true, includeRequestedModel: true });
       return;
     } catch (error) {
-      if (isMissingD1ColumnError(error, "events")) {
-        await saveTaskToD1(env.DB, task, false);
+      const missingEvents = isMissingD1ColumnError(error, "events");
+      const missingRequestedModel = isMissingD1ColumnError(error, "requested_model");
+      if (missingEvents || missingRequestedModel) {
+        await saveTaskToD1(env.DB, task, {
+          includeEvents: !missingEvents,
+          includeRequestedModel: !missingRequestedModel
+        });
         return;
       }
       if (!isMissingD1TableError(error, "async_tasks")) {
@@ -81,10 +86,33 @@ function taskKey(taskId: string): string {
   return `task:${taskId}`;
 }
 
-async function saveTaskToD1(db: D1Database, task: AsyncTaskRecord, includeEvents: boolean): Promise<void> {
-  const eventsColumn = includeEvents ? ",\n      events" : "";
-  const eventsPlaceholder = includeEvents ? ", ?" : "";
-  const eventsUpdate = includeEvents ? ",\n      events = excluded.events" : "";
+async function saveTaskToD1(
+  db: D1Database,
+  task: AsyncTaskRecord,
+  options: { includeEvents: boolean; includeRequestedModel: boolean }
+): Promise<void> {
+  const extraColumns: string[] = [];
+  const extraPlaceholders: string[] = [];
+  const extraValues: unknown[] = [];
+  const extraUpdates: string[] = [];
+
+  if (options.includeRequestedModel) {
+    extraColumns.push("requested_model");
+    extraPlaceholders.push("?");
+    extraValues.push(task.requested_model || null);
+    extraUpdates.push("requested_model = excluded.requested_model");
+  }
+  if (options.includeEvents) {
+    extraColumns.push("events");
+    extraPlaceholders.push("?");
+    extraValues.push(jsonOrNull(task.events));
+    extraUpdates.push("events = excluded.events");
+  }
+
+  const extraColumnSql = extraColumns.length > 0 ? ",\n      " + extraColumns.join(",\n      ") : "";
+  const extraPlaceholderSql = extraPlaceholders.length > 0 ? ", " + extraPlaceholders.join(", ") : "";
+  const extraUpdateSql = extraUpdates.length > 0 ? ",\n      " + extraUpdates.join(",\n      ") : "";
+
   const bindValues = [
     task.id,
     task.organization_id,
@@ -110,7 +138,7 @@ async function saveTaskToD1(db: D1Database, task: AsyncTaskRecord, includeEvents
     task.created_at,
     task.updated_at,
     task.completed_at || null,
-    ...(includeEvents ? [jsonOrNull(task.events)] : [])
+    ...extraValues
   ];
 
   await db.prepare(`
@@ -138,8 +166,8 @@ async function saveTaskToD1(db: D1Database, task: AsyncTaskRecord, includeEvents
       next_poll_at,
       created_at,
       updated_at,
-      completed_at${eventsColumn}
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?${eventsPlaceholder})
+      completed_at${extraColumnSql}
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?${extraPlaceholderSql})
     ON CONFLICT(id) DO UPDATE SET
       organization_id = excluded.organization_id,
       api_key_id = excluded.api_key_id,
@@ -162,7 +190,7 @@ async function saveTaskToD1(db: D1Database, task: AsyncTaskRecord, includeEvents
       idempotency_key = excluded.idempotency_key,
       next_poll_at = excluded.next_poll_at,
       updated_at = excluded.updated_at,
-      completed_at = excluded.completed_at${eventsUpdate}
+      completed_at = excluded.completed_at${extraUpdateSql}
   `).bind(...bindValues).run();
 }
 
@@ -174,6 +202,7 @@ function taskFromRow(row: TaskRow): AsyncTaskRecord {
     api_key_id: stringValue(row.api_key_id),
     type: stringValue(row.type),
     model: stringValue(row.model),
+    requested_model: optionalString(row.requested_model),
     upstream_id: optionalString(row.upstream_id),
     plugin_id: optionalString(row.plugin_id),
     provider_execution_mode: optionalString(row.provider_execution_mode),

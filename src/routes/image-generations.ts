@@ -1,9 +1,10 @@
-import { findModel, loadGatewayConfig, selectRoute } from "../config";
+import { findModel, loadGatewayConfig, resolveModelAlias, selectRoute } from "../config";
 import { invalidRequest, permissionDenied, providerUnavailable } from "../http/errors";
 import { createProviderRegistry, resolveProviderCredential } from "../providers/registry";
 import { recordChatUsage } from "../admin/store";
-import type { AuthContext, Env, ImageGenerationRequest } from "../types";
+import type { AuthContext, Env, GatewayConfig, ImageGenerationRequest, ProviderRouteConfig } from "../types";
 import { readJsonObject, requireString, resolveImageInputs, resolveImageInput } from "../utils/request";
+import { rewriteModelInJsonResponse } from "../utils/model-rewrite";
 
 export async function handleImageGenerations(
   request: Request,
@@ -13,7 +14,7 @@ export async function handleImageGenerations(
 ): Promise<Response> {
   const startedAt = Date.now();
   const body = await readJsonObject(request);
-  const modelName = requireString(body.model, "model");
+  const requestedModelName = requireString(body.model, "model");
   const prompt = requireString(body.prompt, "prompt");
 
   if (body.n !== undefined && (typeof body.n !== "number" || body.n < 1 || body.n > 10)) {
@@ -37,19 +38,23 @@ export async function handleImageGenerations(
     }
   }
 
-  if (auth.allowed_models && !auth.allowed_models.includes(modelName)) {
-    throw permissionDenied(`API key cannot access model: ${modelName}`);
+  // 权限校验：检查用户请求的原始 model 字段（可能是组别名）
+  if (auth.allowed_models && !auth.allowed_models.includes(requestedModelName)) {
+    throw permissionDenied(`API key cannot access model: ${requestedModelName}`);
   }
 
   const config = await loadGatewayConfig(env);
-  const model = findModel(config, modelName);
+  const resolved = resolveModelAlias(config, requestedModelName);
+
+  // 校验主候选模型
+  const model = findModel(config, resolved.resolvedAlias);
   if (!model) {
-    throw invalidRequest(`Unknown model: ${modelName}`, "model", "model_not_found");
+    throw invalidRequest(`Unknown model: ${requestedModelName}`, "model", "model_not_found");
   }
 
   if (model.modality !== "image") {
     throw invalidRequest(
-      `Model is not an image model: ${modelName}. Use /v1/chat/completions for text models.`,
+      `Model is not an image model: ${requestedModelName}. Use /v1/chat/completions for text models.`,
       "model"
     );
   }
@@ -58,7 +63,7 @@ export async function handleImageGenerations(
   const hasImageInput = body.image || body.mask;
   if (hasImageInput && model.image_mode === "text-to-image") {
     throw invalidRequest(
-      `Model does not support image-to-image: ${modelName}`,
+      `Model does not support image-to-image: ${requestedModelName}`,
       "image",
       "unsupported_image_input"
     );
@@ -66,49 +71,131 @@ export async function handleImageGenerations(
 
   const route = selectRoute(model, false);
   if (!route) {
-    throw providerUnavailable(`No active provider route for model: ${modelName}`);
+    throw providerUnavailable(`No active provider route for model: ${requestedModelName}`);
   }
 
-  const registry = createProviderRegistry(env);
-  const plugin = registry.get(route.plugin_id);
-  const adapter = plugin.createAdapter(env);
-  if (!adapter.imageGenerations) {
-    throw providerUnavailable(`Provider plugin does not support image generation: ${route.plugin_id}`);
-  }
+  // 构造调用候选列表：主候选 + 可选 fallback
+  const candidates = buildCandidates(resolved.resolvedAlias, resolved.fallbackAlias);
 
-  // 检查 Provider 是否支持图生图
-  if (hasImageInput) {
-    const imageCap = plugin.manifest.capabilities["image"];
-    if (imageCap && imageCap.supports_image_input === false) {
-      throw invalidRequest(
-        `Provider plugin does not support image-to-image: ${route.plugin_id}`,
-        "image",
-        "unsupported_image_input"
+  let response: Response | undefined;
+  let usedRoute: ProviderRouteConfig = route;
+  let usedAlias = resolved.resolvedAlias;
+  let primaryError: unknown;
+
+  for (let index = 0; index < candidates.length; index++) {
+    const candidate = candidates[index];
+    const isLast = index === candidates.length - 1;
+
+    try {
+      const candidateRoute = index === 0
+        ? route
+        : selectRouteForImageAlias(config, candidate);
+      if (!candidateRoute) {
+        if (isLast) break;
+        continue;
+      }
+
+      const registry = createProviderRegistry(env);
+      const plugin = registry.get(candidateRoute.plugin_id);
+      const adapter = plugin.createAdapter(env);
+      if (!adapter.imageGenerations) {
+        if (isLast) {
+          throw providerUnavailable(`Provider plugin does not support image generation: ${candidateRoute.plugin_id}`);
+        }
+        continue;
+      }
+
+      // 检查 Provider 是否支持图生图
+      if (hasImageInput) {
+        const imageCap = plugin.manifest.capabilities["image"];
+        if (imageCap && imageCap.supports_image_input === false) {
+          if (isLast) {
+            throw invalidRequest(
+              `Provider plugin does not support image-to-image: ${candidateRoute.plugin_id}`,
+              "image",
+              "unsupported_image_input"
+            );
+          }
+          continue;
+        }
+      }
+
+      const credential = resolveProviderCredential(env, candidateRoute);
+      const requestBody = { ...body, model: candidate };
+
+      const candidateResponse = await adapter.imageGenerations(
+        requestBody as ImageGenerationRequest,
+        {
+          env,
+          request_id: requestId,
+          route: candidateRoute,
+          credential,
+          signal: request.signal
+        }
       );
+
+      // 服务端错误或限流，且有后续候选 → 丢弃当前响应，尝试下一个
+      if ((candidateResponse.status >= 500 || candidateResponse.status === 429) && !isLast) {
+        try { await candidateResponse.body?.cancel(); } catch { /* ignore */ }
+        continue;
+      }
+
+      response = candidateResponse;
+      usedRoute = candidateRoute;
+      usedAlias = candidate;
+      break;
+    } catch (err) {
+      primaryError = primaryError ?? err;
+      if (isLast) {
+        throw err;
+      }
     }
   }
 
-  const credential = resolveProviderCredential(env, route);
-  const response = await adapter.imageGenerations(body as ImageGenerationRequest, {
-    env,
-    request_id: requestId,
-    route,
-    credential,
-    signal: request.signal
-  });
+  if (!response) {
+    if (primaryError) throw primaryError;
+    throw providerUnavailable(`No active provider route for model: ${requestedModelName}`);
+  }
 
   await recordChatUsage(env, {
     request_id: requestId,
     organization_id: auth.organization_id,
     api_key_id: auth.api_key_id,
     endpoint: "/v1/images/generations",
-    model: modelName,
-    route,
+    model: usedAlias,
+    requested_model: requestedModelName,
+    route: usedRoute,
     status_code: response.status,
     latency_ms: Date.now() - startedAt,
     stream: false,
-    usage: response.ok ? undefined : undefined
+    usage: undefined
   });
 
+  // 命中分组时，把响应里的 model 字段重写回组别名
+  if (resolved.group) {
+    return rewriteModelInJsonResponse(response, requestedModelName);
+  }
+
   return response;
+}
+
+/** 构造按优先级排列的候选 alias 列表（主候选 + 可选 fallback） */
+function buildCandidates(primaryAlias: string, fallbackAlias?: string): string[] {
+  const candidates = [primaryAlias];
+  if (fallbackAlias && fallbackAlias !== primaryAlias) {
+    candidates.push(fallbackAlias);
+  }
+  return candidates;
+}
+
+/** 为指定 alias 解析可用于图片生成的路由 */
+function selectRouteForImageAlias(
+  config: GatewayConfig,
+  alias: string
+): ProviderRouteConfig | undefined {
+  const model = findModel(config, alias);
+  if (!model || model.modality !== "image") {
+    return undefined;
+  }
+  return selectRoute(model, false);
 }
