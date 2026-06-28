@@ -197,7 +197,8 @@ OPENAI_COMPATIBLE_DEFAULT_MODEL = "gpt-4o-mini"
 | `name` | upstream | 管理后台展示名。 |
 | `plugin_id` | upstream | Provider Plugin ID。不同的插件处理不同的上游协议（如 OpenAI 兼容、异步轮询、webhook 等）。 |
 | `base_url` | upstream | 上游 API Base URL。 |
-| `credential_id` | upstream | 上游凭证位置或凭证记录 ID。 |
+| `credential_id` | upstream | 上游凭证位置或凭证记录 ID（默认凭证，凭证池为空时使用）。 |
+| `credentials` | upstream | 多凭证池数组（可选）。配置后调用时按权重随机挑选可用 key，超额自动跳过。详见下方「多凭证池与配额上限」章节。 |
 | `config` | upstream | 协议相关的非密钥配置，例如 region、api_version、poll_interval_seconds。 |
 | `models` | upstream | 添加到该上游实例下的模型条目数组。 |
 | `alias` | upstream model | 对用户暴露的模型名。 |
@@ -244,6 +245,110 @@ OPENAI_COMPATIBLE_DEFAULT_MODEL = "gpt-4o-mini"
   "messages": [{ "role": "user", "content": "hello" }]
 }
 ```
+
+### 多凭证池与配额上限
+
+`MODEL_CONFIG_JSON` 的 upstream 还支持 `credentials` 字段，可为同一个上游配置多个 API key。配置后：
+
+- 调用时按 `weight` 加权随机挑选一个 `status: "active"` 的凭证
+- 每次调用前先检查该凭证在当前窗口的累计用量是否超额，超额则跳过该凭证
+- 若所有凭证都超额或不可用，请求失败并返回 `No available credential`
+- 凭证池为空（未配置 `credentials`）时回退到上游的默认 `credential_id`，保持向后兼容
+
+`credential_ref` 字段（格式为 `<upstream_id>:<credential.id>`）会写入用量记录和异步任务事件，便于通过 `request_id` / `task_id` 反查实际使用的 key。**注意**：`credential_ref` 只包含 tracking ID，不包含真实密钥，可安全出现在日志中。
+
+#### 凭证字段
+
+| 字段 | 含义 |
+| --- | --- |
+| `id` | 凭证跟踪 ID（非密钥），用于 `credential_ref` 拼接和日志定位。同一 upstream 内不能重复。缺失时自动按索引生成 `key1` / `key2` ... |
+| `label` | 备注名（可选），例如「主账号」「免费额度」。仅用于管理后台展示。 |
+| `credential_id` | 真实凭证引用，与 upstream 的 `credential_id` 字段格式一致：`env:SECRET_NAME` 或直接填 `sk-...`。 |
+| `weight` | 加权随机的权重，默认 1。设为 0 或负数等价于不参与抽取。 |
+| `status` | `active` / `disabled`，未设置视为 active。 |
+| `limits` | 配额上限数组（可选）。每个元素描述一个时间窗口的请求数或 Token 数上限。 |
+
+#### 配额上限字段
+
+每个 `limits[]` 元素支持以下字段：
+
+| 字段 | 含义 |
+| --- | --- |
+| `window` | 时间窗口类型：`hour`（整点重置）/ `day`（每日 00:00 重置）/ `week`（ISO 周一 00:00 重置）/ `month`（每月 1 日 00:00 重置）。同一凭证内同窗口不能重复。 |
+| `max_requests` | 该窗口内最大请求数（可选，非负整数）。 |
+| `max_tokens` | 该窗口内最大 Token 数（可选，非负整数）。 |
+
+`max_requests` 和 `max_tokens` 至少配置一个。配额计数使用固定窗口算法（非滑动窗口）：
+
+- `hour`：按整点重置（例如 14:23 的请求计入 `14` 窗口，15:00 后归零）
+- `day` / `week` / `month`：按本地服务器时间（UTC）的日 / ISO 周 / 月边界重置
+
+配额计数存储在 D1 的 `credential_usage_counters` 表（PK: `credential_ref + window_type + window_key`），每次调用 O(1) 累加。配额检查失败（如 D1 不可用）不会阻断请求，凭证会被当作「可用」处理，避免计量基础设施故障引发服务中断。
+
+#### 配置示例
+
+为 OpenAI 上游配置 3 个 key：主账号高权重无限制、备用账号低权重日限 1000 次、免费额度账号小时限 100 次：
+
+```json
+{
+  "upstreams": [
+    {
+      "id": "openai-main",
+      "name": "OpenAI 多账号池",
+      "plugin_id": "openai-compatible",
+      "base_url": "https://api.openai.com/v1",
+      "credential_id": "env:OPENAI_COMPATIBLE_API_KEY",
+      "credentials": [
+        {
+          "id": "primary",
+          "label": "主账号（无限额）",
+          "credential_id": "env:OPENAI_PRIMARY_KEY",
+          "weight": 10,
+          "status": "active"
+        },
+        {
+          "id": "backup",
+          "label": "备用账号（日限 1000 次）",
+          "credential_id": "env:OPENAI_BACKUP_KEY",
+          "weight": 3,
+          "limits": [
+            { "window": "day", "max_requests": 1000 }
+          ]
+        },
+        {
+          "id": "free",
+          "label": "免费额度（小时 100 次 + 月 5 万 Token）",
+          "credential_id": "env:OPENAI_FREE_KEY",
+          "weight": 1,
+          "limits": [
+            { "window": "hour", "max_requests": 100 },
+            { "window": "month", "max_tokens": 50000 }
+          ]
+        }
+      ],
+      "models": [
+        {
+          "alias": "fast-chat",
+          "provider_model": "gpt-4o-mini",
+          "modality": "text",
+          "status": "active"
+        }
+      ]
+    }
+  ]
+}
+```
+
+#### 调用链中的 credential_ref 排错
+
+每次请求实际命中某个凭证后，`credential_ref` 会出现在以下位置：
+
+1. **`usage_records.credential_ref`**：通过 `request_id` 关联到具体凭证
+2. **`async_tasks.credential_ref`**：异步任务记录顶层字段
+3. **`async_tasks.provider_context.credential_ref`**：consumer 轮询时复用同一个 key
+4. **任务事件 `task.created` / `poll.started` / `upstream.create.started`** 的 `credential_ref` 字段：可在 `GET /v1/tasks/:id` 返回的 events 数组中查看
+
+排错示例：用户反馈某次请求 5xx，从请求日志拿到 `request_id` 后，在管理后台「用量」Tab 或 D1 中查询 `SELECT * FROM usage_records WHERE request_id = ?`，即可看到 `credential_ref` 字段，定位到具体哪个 key 出问题。
 
 ### 模型分组（model_groups）
 

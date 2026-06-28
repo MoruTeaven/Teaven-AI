@@ -3029,6 +3029,8 @@ const ADMIN_APP_HTML = `<!doctype html>
       });
       document.getElementById('save-upstream-form').addEventListener('click', saveUpstreamFromForm);
       document.getElementById('reset-upstream-form').addEventListener('click', resetUpstreamForm);
+      document.getElementById('add-credential-btn').addEventListener('click', addCredential);
+      document.getElementById('upstream-credentials-list').addEventListener('click', handleCredentialsListClick);
       document.getElementById('create-user').addEventListener('click', createUser);
       document.getElementById('reveal-key-confirm').addEventListener('click', revealApiKey);
       document.getElementById('load-tasks').addEventListener('click', loadTasks);
@@ -3679,7 +3681,7 @@ const ADMIN_APP_HTML = `<!doctype html>
 
       async function saveUpstreamFromForm() {
         var existingId = value('upstream-admin-id');
-        var upstream = { upstream_id: existingId || undefined, id: existingId || undefined, name: value('upstream-admin-name'), plugin_id: value('upstream-admin-plugin'), base_url: value('upstream-admin-base-url'), credential_id: value('upstream-admin-credential'), status: value('upstream-admin-status') };
+        var upstream = { upstream_id: existingId || undefined, id: existingId || undefined, name: value('upstream-admin-name'), plugin_id: value('upstream-admin-plugin'), base_url: value('upstream-admin-base-url'), credential_id: value('upstream-admin-credential'), status: value('upstream-admin-status'), credentials: collectCredentialsFromForm() };
         await api('/admin/api/upstreams', { method: 'POST', body: JSON.stringify({ upstream: upstream }) });
         await loadAll();
         setStatus('上游已保存：' + upstream.name, 'ok');
@@ -3694,6 +3696,141 @@ const ADMIN_APP_HTML = `<!doctype html>
         document.getElementById('upstream-admin-base-url').value = '';
         document.getElementById('upstream-admin-credential').value = '';
         document.getElementById('upstream-admin-status').value = 'active';
+        renderCredentialsList([]);
+      }
+
+      // ── 多凭证池编辑器 ──
+      // 凭证状态保存在内存中，saveUpstreamFromForm 时统一收集提交
+      var editingCredentials = [];
+
+      function renderCredentialsList(credentials) {
+        editingCredentials = (credentials || []).map(function (cred) {
+          return {
+            id: cred.id || ('key' + (Math.random().toString(36).slice(2, 6))),
+            label: cred.label || '',
+            credential_id: cred.credential_id || '',
+            weight: cred.weight == null ? 1 : cred.weight,
+            status: cred.status || 'active',
+            limits: Array.isArray(cred.limits) ? cred.limits.map(function (limit) {
+              return { window: limit.window, max_requests: limit.max_requests == null ? '' : limit.max_requests, max_tokens: limit.max_tokens == null ? '' : limit.max_tokens };
+            }) : []
+          };
+        });
+        var container = document.getElementById('upstream-credentials-list');
+        var empty = document.getElementById('upstream-credentials-empty');
+        if (!editingCredentials.length) {
+          container.innerHTML = '';
+          empty.style.display = 'block';
+          return;
+        }
+        empty.style.display = 'none';
+        container.innerHTML = editingCredentials.map(function (cred, index) {
+          return renderCredentialRow(cred, index);
+        }).join('');
+      }
+
+      function renderCredentialRow(cred, index) {
+        var limitsHtml = cred.limits.map(function (limit, lIdx) {
+          return '<div class="cred-limit-row" style="display:grid; grid-template-columns: 90px 1fr 1fr auto; gap:6px; align-items:center;">' +
+            '<select class="cred-limit-window" data-cred="' + index + '" data-limit="' + lIdx + '">' +
+              ['hour', 'day', 'week', 'month'].map(function (w) {
+                return '<option value="' + w + '"' + (w === limit.window ? ' selected' : '') + '>' + windowText(w) + '</option>';
+              }).join('') +
+            '</select>' +
+            '<input class="cred-limit-reqs" data-cred="' + index + '" data-limit="' + lIdx + '" type="number" min="0" step="1" placeholder="请求数上限" value="' + esc(limit.max_requests) + '">' +
+            '<input class="cred-limit-tokens" data-cred="' + index + '" data-limit="' + lIdx + '" type="number" min="0" step="1" placeholder="Token 上限" value="' + esc(limit.max_tokens) + '">' +
+            '<button class="compact danger" type="button" data-cred-limit-remove="' + index + '" data-limit-idx="' + lIdx + '">删除</button>' +
+          '</div>';
+        }).join('');
+        return '<div class="credential-row" data-cred-row="' + index + '" style="border:1px solid var(--border, #ddd); border-radius:6px; padding:10px; margin-bottom:10px;">' +
+          '<div style="display:grid; grid-template-columns: 1fr 2fr 80px 100px auto; gap:6px; align-items:end;">' +
+            '<div><label style="font-size:11px;">跟踪 ID<input class="cred-id" data-cred="' + index + '" value="' + esc(cred.id) + '" placeholder="key1"></label></div>' +
+            '<div><label style="font-size:11px;">API Key（env:NAME 或 sk-...）<input class="cred-secret" data-cred="' + index + '" value="' + esc(cred.credential_id) + '" placeholder="env:OPENAI_COMPATIBLE_API_KEY"></label></div>' +
+            '<div><label style="font-size:11px;">权重<input class="cred-weight" data-cred="' + index + '" type="number" min="0" step="1" value="' + esc(cred.weight) + '"></label></div>' +
+            '<div><label style="font-size:11px;">状态<select class="cred-status" data-cred="' + index + '"><option value="active"' + (cred.status === 'active' ? ' selected' : '') + '>启用</option><option value="disabled"' + (cred.status === 'disabled' ? ' selected' : '') + '>停用</option></select></label></div>' +
+            '<div><button class="compact danger" type="button" data-cred-remove="' + index + '">删除凭证</button></div>' +
+          '</div>' +
+          '<div style="margin-top:8px;"><label style="font-size:11px;">备注（可选）<input class="cred-label" data-cred="' + index + '" value="' + esc(cred.label) + '" placeholder="例如：主账号 / 备用账号 / 免费额度"></label></div>' +
+          '<div style="margin-top:10px;">' +
+            '<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;"><span style="font-size:11px; color: var(--muted);">配额上限（按窗口滚动刷新，可多选）</span><button class="compact" type="button" data-cred-limit-add="' + index + '">+ 添加窗口</button></div>' +
+            '<div class="cred-limits-list">' + (limitsHtml || '<div class="muted" style="font-size:12px;">无配额限制（不限量调用）</div>') + '</div>' +
+          '</div>' +
+        '</div>';
+      }
+
+      function windowText(w) {
+        return { hour: '小时（整点重置）', day: '天（每日重置）', week: '周（每周重置）', month: '月（每月重置）' }[w] || w;
+      }
+
+      function addCredential() {
+        editingCredentials.push({ id: 'key' + (editingCredentials.length + 1), label: '', credential_id: '', weight: 1, status: 'active', limits: [] });
+        renderCredentialsList(editingCredentials);
+      }
+
+      function removeCredential(index) {
+        editingCredentials.splice(index, 1);
+        renderCredentialsList(editingCredentials);
+      }
+
+      function addLimit(index) {
+        // 同步当前编辑值后追加新窗口
+        syncEditingCredentials();
+        editingCredentials[index].limits.push({ window: 'hour', max_requests: '', max_tokens: '' });
+        renderCredentialsList(editingCredentials);
+      }
+
+      function removeLimit(index, limitIdx) {
+        editingCredentials[index].limits.splice(limitIdx, 1);
+        renderCredentialsList(editingCredentials);
+      }
+
+      // 把 DOM 中的当前值同步回 editingCredentials，便于保存前不丢失输入
+      function syncEditingCredentials() {
+        if (!editingCredentials.length) return;
+        var rows = document.querySelectorAll('[data-cred-row]');
+        rows.forEach(function (row) {
+          var index = parseInt(row.getAttribute('data-cred-row'), 10);
+          if (!editingCredentials[index]) return;
+          var cred = editingCredentials[index];
+          cred.id = (row.querySelector('.cred-id') || {}).value || cred.id;
+          cred.credential_id = (row.querySelector('.cred-secret') || {}).value || '';
+          cred.label = (row.querySelector('.cred-label') || {}).value || '';
+          cred.weight = Number((row.querySelector('.cred-weight') || {}).value || 1);
+          cred.status = (row.querySelector('.cred-status') || {}).value || 'active';
+          var limitRows = row.querySelectorAll('.cred-limit-row');
+          var limits = [];
+          limitRows.forEach(function (limitRow) {
+            var windowSel = limitRow.querySelector('.cred-limit-window');
+            var reqsInput = limitRow.querySelector('.cred-limit-reqs');
+            var tokensInput = limitRow.querySelector('.cred-limit-tokens');
+            if (!windowSel) return;
+            var maxReqs = reqsInput && reqsInput.value !== '' ? parseInt(reqsInput.value, 10) : null;
+            var maxTokens = tokensInput && tokensInput.value !== '' ? parseInt(tokensInput.value, 10) : null;
+            // 至少一个字段有值才算一条 limit
+            if (maxReqs === null && maxTokens === null) return;
+            limits.push({ window: windowSel.value, max_requests: maxReqs, max_tokens: maxTokens });
+          });
+          cred.limits = limits;
+        });
+      }
+
+      function collectCredentialsFromForm() {
+        syncEditingCredentials();
+        // 过滤掉 credential_id 为空的（用户可能点了添加又没填）
+        var filtered = editingCredentials.filter(function (cred) { return cred.credential_id && cred.credential_id.trim(); });
+        return filtered.length > 0 ? filtered : undefined;
+      }
+
+      function handleCredentialsListClick(event) {
+        var addBtn = event.target.closest('[data-cred-limit-add]');
+        var removeLimitBtn = event.target.closest('[data-cred-limit-remove]');
+        var removeCredBtn = event.target.closest('[data-cred-remove]');
+        if (addBtn) { addLimit(parseInt(addBtn.getAttribute('data-cred-limit-add'), 10)); return; }
+        if (removeLimitBtn) {
+          removeLimit(parseInt(removeLimitBtn.getAttribute('data-cred-limit-remove'), 10), parseInt(removeLimitBtn.getAttribute('data-limit-idx'), 10));
+          return;
+        }
+        if (removeCredBtn) { removeCredential(parseInt(removeCredBtn.getAttribute('data-cred-remove'), 10)); return; }
       }
 
       function resetModelForm() {
@@ -3843,22 +3980,24 @@ const ADMIN_APP_HTML = `<!doctype html>
       function fillModelEditor(alias, editing) { var model = state.models.find(function (item) { return item.alias === alias; }); if (!model) return; state.editingModelAlias = editing ? alias : null; var route = model.routes && model.routes[0] ? model.routes[0] : {}; document.getElementById('model-json').value = JSON.stringify(toModelInput(model), null, 2); document.getElementById('model-alias').value = model.alias; document.getElementById('model-modality').value = model.modality; toggleImageModeField(model.modality); document.getElementById('model-image-mode').value = model.image_mode || 'text-to-image'; document.getElementById('model-status').value = model.status; document.getElementById('model-stream').value = String(model.supports_stream !== false); var select = document.getElementById('model-upstream-select'); if (select.options.length > 1) { select.value = route.upstream_id || ''; } document.getElementById('route-provider-model').value = route.provider_model || ''; document.getElementById('route-priority').value = route.priority || 1; document.getElementById('model-price').value = model.price || ''; document.getElementById('model-price-unit').value = model.price_unit || 'per_1m_tokens'; }
       function viewModel(alias) { state.selectedModelAlias = alias; renderModelDetail(); setStatus('正在查看模型：' + alias, 'ok'); }
       function toModelInput(model) { var route = model.routes && model.routes[0] ? model.routes[0] : {}; return { original_alias: model.alias, upstream_id: route.upstream_id, alias: model.alias, provider_model: route.provider_model, modality: model.modality, supports_stream: model.supports_stream, image_mode: model.image_mode || null, status: model.status, priority: route.priority, weight: route.weight, price: model.price || '', price_unit: model.price_unit || '' }; }
-      function fillUpstreamEditor(id) { var upstreams = (state.overview && state.overview.upstreams) || []; var upstream = upstreams.find(function (item) { return item.id === id; }); if (!upstream) return; document.getElementById('upstream-admin-id').value = upstream.id || ''; document.getElementById('upstream-admin-name').value = upstream.name || ''; document.getElementById('upstream-admin-plugin').value = upstream.plugin_id || ''; document.getElementById('upstream-admin-base-url').value = upstream.base_url || ''; document.getElementById('upstream-admin-credential').value = upstream.credential_id || ''; document.getElementById('upstream-admin-status').value = upstream.status || 'active'; }
+      function fillUpstreamEditor(id) { var upstreams = (state.overview && state.overview.upstreams) || []; var upstream = upstreams.find(function (item) { return item.id === id; }); if (!upstream) return; document.getElementById('upstream-admin-id').value = upstream.id || ''; document.getElementById('upstream-admin-name').value = upstream.name || ''; document.getElementById('upstream-admin-plugin').value = upstream.plugin_id || ''; document.getElementById('upstream-admin-base-url').value = upstream.base_url || ''; document.getElementById('upstream-admin-credential').value = upstream.credential_id || ''; document.getElementById('upstream-admin-status').value = upstream.status || 'active'; renderCredentialsList(upstream.credentials || []); }
       function viewUpstream(id) { var upstream = findOverviewUpstream(id); if (!upstream) { setStatus('未找到上游：' + id, 'error'); return; } var raw = findConfigUpstream(id) || upstream; var name = upstream.name || upstream.id; document.getElementById('upstream-view-title').textContent = '查看上游：' + name; document.getElementById('upstream-view-content').innerHTML = renderUpstreamDetail(upstream, raw); document.getElementById('upstream-view-json').textContent = JSON.stringify(toUpstreamDetailJson(upstream, raw), null, 2); openModal('upstream-view-modal', 'upstream-view-title', '查看上游：' + name); }
-      function renderUpstreamDetail(upstream, raw) { var providers = (state.overview && state.overview.providers) || []; var plugin = findProvider(providers, upstream.plugin_id); var models = (raw && raw.models) || upstream.models || []; var modelRows = models.length ? models.map(function (model) { return '<tr><td><code>' + esc(model.alias) + '</code></td><td><code>' + esc(model.provider_model) + '</code></td><td>' + esc(modalityText(model.modality)) + '</td><td>' + (model.modality === 'image' ? esc(imageModeText(model.image_mode)) : '-') + '</td><td><span class="pill ' + statusClass(model.status || 'active') + '">' + esc(statusText(model.status || 'active')) + '</span></td><td>' + (model.supports_stream !== false ? '支持' : '不支持') + '</td><td>' + esc(model.priority == null ? '未设置' : model.priority) + '</td><td>' + esc(model.weight == null ? '未设置' : model.weight) + '</td><td>' + priceText(model.price, model.price_unit) + '</td></tr>'; }).join('') : '<tr><td colspan="9" class="empty">暂无模型。</td></tr>'; return '<div class="entity-meta">' +
+      function renderUpstreamDetail(upstream, raw) { var providers = (state.overview && state.overview.providers) || []; var plugin = findProvider(providers, upstream.plugin_id); var models = (raw && raw.models) || upstream.models || []; var modelRows = models.length ? models.map(function (model) { return '<tr><td><code>' + esc(model.alias) + '</code></td><td><code>' + esc(model.provider_model) + '</code></td><td>' + esc(modalityText(model.modality)) + '</td><td>' + (model.modality === 'image' ? esc(imageModeText(model.image_mode)) : '-') + '</td><td><span class="pill ' + statusClass(model.status || 'active') + '">' + esc(statusText(model.status || 'active')) + '</span></td><td>' + (model.supports_stream !== false ? '支持' : '不支持') + '</td><td>' + esc(model.priority == null ? '未设置' : model.priority) + '</td><td>' + esc(model.weight == null ? '未设置' : model.weight) + '</td><td>' + priceText(model.price, model.price_unit) + '</td></tr>'; }).join('') : '<tr><td colspan="9" class="empty">暂无模型。</td></tr>'; var credentials = upstream.credentials || []; var credRows = credentials.length ? credentials.map(function (cred) { var limits = Array.isArray(cred.limits) ? cred.limits : []; var limitText = limits.length ? limits.map(function (l) { return windowText(l.window) + '：' + (l.max_requests == null ? '∞ req' : (l.max_requests + ' req')) + ' / ' + (l.max_tokens == null ? '∞ tok' : (l.max_tokens + ' tok')); }).join('；') : '无限制'; return '<tr><td><code>' + esc(cred.id) + '</code>' + (cred.label ? '<br><span class="muted">' + esc(cred.label) + '</span>' : '') + '</td><td><code>' + esc(cred.credential_id || '未配置') + '</code><br><span class="pill ' + (cred.credential_configured ? 'ok' : 'danger') + '">' + (cred.credential_configured ? '已配置' : '缺少') + '</span></td><td>' + esc(cred.weight == null ? 1 : cred.weight) + '</td><td><span class="pill ' + statusClass(cred.status || 'active') + '">' + esc(statusText(cred.status || 'active')) + '</span></td><td style="font-size:12px;">' + esc(limitText) + '</td></tr>'; }).join('') : '<tr><td colspan="5" class="empty">未配置多凭证池，使用上方默认 API Key。</td></tr>'; return '<div class="entity-meta">' +
           '<div class="entity-row"><span>ID</span><code>' + esc(upstream.id) + '</code></div>' +
           '<div class="entity-row"><span>名称</span><strong>' + esc(upstream.name || upstream.id) + '</strong></div>' +
           '<div class="entity-row"><span>类型</span><strong>' + esc(plugin ? plugin.name : upstream.plugin_id) + '</strong></div>' +
           '<div class="entity-row"><span>插件 ID</span><code>' + esc(upstream.plugin_id) + '</code></div>' +
           '<div class="entity-row"><span>基础地址</span><code>' + esc(upstream.base_url || '未配置') + '</code></div>' +
-          '<div class="entity-row"><span>API Key</span><div><code>' + esc(upstream.credential_id || '未配置') + '</code><br><span class="pill ' + (upstream.credential_configured ? 'ok' : 'danger') + '">' + (upstream.credential_configured ? '已配置' : '缺少') + '</span></div></div>' +
+          '<div class="entity-row"><span>默认 API Key</span><div><code>' + esc(upstream.credential_id || '未配置') + '</code><br><span class="pill ' + (upstream.credential_configured ? 'ok' : 'danger') + '">' + (upstream.credential_configured ? '已配置' : '缺少') + '</span></div></div>' +
+          '<div class="entity-row"><span>多凭证池</span><strong>' + esc(upstream.credentials_count == null ? 0 : upstream.credentials_count) + ' 个</strong></div>' +
           '<div class="entity-row"><span>状态</span><span class="pill ' + statusClass(upstream.status) + '">' + esc(statusText(upstream.status)) + '</span></div>' +
           '<div class="entity-row"><span>模型</span><strong>' + esc(upstream.models_active + '/' + upstream.models_total) + '</strong></div>' +
           '<div class="entity-row"><span>活跃路由</span><strong>' + esc(upstream.routes_active == null ? 0 : upstream.routes_active) + '</strong></div>' +
         '</div>' +
+        '<div><h3>多凭证池</h3><div class="table-wrap"><table><thead><tr><th>跟踪 ID</th><th>API Key</th><th>权重</th><th>状态</th><th>配额上限</th></tr></thead><tbody>' + credRows + '</tbody></table></div></div>' +
         '<div><h3>模型明细</h3><div class="table-wrap"><table><thead><tr><th>别名</th><th>上游模型</th><th>模态</th><th>图片模式</th><th>状态</th><th>流式</th><th>优先级</th><th>权重</th><th>价格</th></tr></thead><tbody>' + modelRows + '</tbody></table></div></div>' +
-        '<div class="status">下方 JSON 为当前上游完整配置。</div>'; }
-      function toUpstreamDetailJson(upstream, raw) { return Object.assign({}, raw || {}, { credential_configured: upstream.credential_configured, models_total: upstream.models_total, models_active: upstream.models_active, routes_active: upstream.routes_active == null ? 0 : upstream.routes_active }); }
+        '<div class="status">下方 JSON 为当前上游完整配置。<code>credential_ref</code> 字段（<code>' + esc(upstream.id) + ':&lt;credential_id&gt;</code>）会出现在用量记录和异步任务事件中，便于排错。</div>'; }
+      function toUpstreamDetailJson(upstream, raw) { return Object.assign({}, raw || {}, { credential_configured: upstream.credential_configured, credentials: upstream.credentials || [], credentials_count: upstream.credentials_count == null ? 0 : upstream.credentials_count, models_total: upstream.models_total, models_active: upstream.models_active, routes_active: upstream.routes_active == null ? 0 : upstream.routes_active }); }
       function findOverviewUpstream(id) { var upstreams = (state.overview && state.overview.upstreams) || []; return upstreams.find(function (item) { return item.id === id; }) || null; }
       function findConfigUpstream(id) { var upstreams = (state.config && state.config.config && state.config.config.upstreams) || []; return upstreams.find(function (item) { return item.id === id; }) || null; }
       function openModal(id, titleId, title) { var modal = document.getElementById(id); if (!modal) return; document.getElementById(titleId).textContent = title; modal.classList.add('open'); modal.setAttribute('aria-hidden', 'false'); document.body.classList.add('modal-open'); var firstField = modal.querySelector('.modal-form input:not([type="hidden"]), .modal-form select, .modal-form textarea'); if (firstField) firstField.focus(); }
