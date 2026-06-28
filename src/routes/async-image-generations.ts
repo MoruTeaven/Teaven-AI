@@ -1,10 +1,11 @@
-import { findModel, loadGatewayConfig, resolveModelAlias, selectRoute } from "../config";
+import { findModel, findUpstream, loadGatewayConfig, pickAvailableCredential, resolveModelAlias, selectRoute } from "../config";
 import { invalidRequest, permissionDenied, providerUnavailable } from "../http/errors";
 import { createProviderRegistry, resolveProviderCredential } from "../providers/registry";
 import { recordChatUsage } from "../admin/store";
+import { recordCredentialUsage } from "../admin/credentials-store";
 import { appendTaskEvent, taskDiagnostics } from "../tasks/events";
 import { saveTask } from "../tasks/store";
-import type { AuthContext, AsyncTaskRecord, Env, GatewayConfig, ImageGenerationRequest, ProviderRouteConfig } from "../types";
+import type { AuthContext, AsyncTaskRecord, CredentialLimit, Env, GatewayConfig, ImageGenerationRequest, ProviderRouteConfig } from "../types";
 import { createId } from "../utils/ids";
 import { readJsonObject, requireString, resolveImageInputs, resolveImageInput } from "../utils/request";
 import { rewriteModelInJsonResponse } from "../utils/model-rewrite";
@@ -13,6 +14,10 @@ interface UpstreamCallResult {
   response: Response;
   route: ProviderRouteConfig;
   usedAlias: string;
+  /** 实际选中凭证的 secret 引用（env:... 或直接 key），用于回填 provider_context */
+  credentialId: string | undefined;
+  credentialRef: string | undefined;
+  credentialLimits: CredentialLimit[] | undefined;
 }
 
 export async function handleAsyncImageGenerations(
@@ -99,6 +104,9 @@ export async function handleAsyncImageGenerations(
   const upstreamResponse = callResult.response;
   const usedRoute = callResult.route;
   const usedAlias = callResult.usedAlias;
+  const usedCredentialId = callResult.credentialId;
+  const usedCredentialRef = callResult.credentialRef;
+  const usedCredentialLimits = callResult.credentialLimits;
 
   // 解析上游响应
   const upstreamData = await upstreamResponse.json() as Record<string, unknown>;
@@ -123,13 +131,17 @@ export async function handleAsyncImageGenerations(
       requested_model: resolved.group ? requestedModelName : undefined,
       upstream_id: usedRoute.upstream_id,
       plugin_id: usedRoute.plugin_id,
+      // 记录选中的凭证跟踪 ID，多 key 排错用
+      credential_ref: usedCredentialRef,
       provider_execution_mode: "async_polling",
       provider_task_id: providerTaskId,
       provider_context: {
         upstream_model: usedRoute.provider_model,
         request_id: requestId,
         base_url: usedRoute.base_url,
-        credential_id: usedRoute.credential_id,
+        // 回填实际选中的凭证引用，consumer 据此 re-resolve 同一个 key
+        credential_id: usedCredentialId || usedRoute.credential_id,
+        credential_ref: usedCredentialRef,
         config: usedRoute.config
       },
       status: "queued",
@@ -148,6 +160,7 @@ export async function handleAsyncImageGenerations(
       stage: "task.created",
       status: task.status,
       request_id: requestId,
+      credential_ref: usedCredentialRef || null,
       provider_task_id: task.provider_task_id,
       message: "Task created via /v1/async/images/generations"
     });
@@ -157,6 +170,11 @@ export async function handleAsyncImageGenerations(
     // 将任务加入队列进行轮询
     await enqueueCreatedTask(env, task);
 
+    // 累加凭证配额计数器（按请求数计，token 为 0）
+    if (usedCredentialRef) {
+      await recordCredentialUsage(env, usedCredentialRef, usedCredentialLimits, 0).catch(() => { /* 计数器失败不阻断 */ });
+    }
+
     await recordChatUsage(env, {
       request_id: requestId,
       organization_id: auth.organization_id,
@@ -165,6 +183,7 @@ export async function handleAsyncImageGenerations(
       model: usedAlias,
       requested_model: requestedModelName,
       route: usedRoute,
+      credential_ref: usedCredentialRef,
       status_code: 202,
       latency_ms: Date.now() - startedAt,
       stream: false,
@@ -197,6 +216,11 @@ export async function handleAsyncImageGenerations(
   }
 
   // 如果上游直接返回结果（同步模式），转发响应
+  // 累加凭证配额计数器（按请求数计）
+  if (usedCredentialRef) {
+    await recordCredentialUsage(env, usedCredentialRef, usedCredentialLimits, 0).catch(() => { /* 计数器失败不阻断 */ });
+  }
+
   await recordChatUsage(env, {
     request_id: requestId,
     organization_id: auth.organization_id,
@@ -205,6 +229,7 @@ export async function handleAsyncImageGenerations(
     model: usedAlias,
     requested_model: requestedModelName,
     route: usedRoute,
+    credential_ref: usedCredentialRef,
     status_code: upstreamResponse.status,
     latency_ms: Date.now() - startedAt,
     stream: false,
@@ -279,7 +304,17 @@ async function callUpstreamWithFallback(params: {
         }
       }
 
-      const credential = resolveProviderCredential(params.env, candidate.route);
+      // 从上游凭证池中按权重+配额挑选一个可用 key
+      const upstream = findUpstream(params.config, candidate.route.upstream_id);
+      const picked = upstream ? await pickAvailableCredential(params.env, upstream) : undefined;
+      if (!picked) {
+        if (isLast) {
+          throw providerUnavailable(`No available credential for upstream: ${candidate.route.upstream_id}`);
+        }
+        continue;
+      }
+
+      const credential = resolveProviderCredential(params.env, candidate.route, picked.credential.credential_id);
       const requestBody = { ...params.body, model: candidate.alias };
 
       const response = await adapter.imageGenerations(
@@ -299,7 +334,14 @@ async function callUpstreamWithFallback(params: {
         continue;
       }
 
-      return { response, route: candidate.route, usedAlias: candidate.alias };
+      return {
+        response,
+        route: candidate.route,
+        usedAlias: candidate.alias,
+        credentialId: picked.credential.credential_id,
+        credentialRef: picked.ref,
+        credentialLimits: picked.credential.limits
+      };
     } catch (err) {
       primaryError = primaryError ?? err;
       if (isLast) {

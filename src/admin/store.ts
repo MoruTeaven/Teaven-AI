@@ -71,6 +71,8 @@ export interface UsageRecord {
   upstream_id?: string;
   plugin_id?: string;
   provider_model?: string;
+  /** 本次调用实际使用的凭证跟踪 ID（形如 "{upstream_id}:{credential.id}"），多 key 排错用 */
+  credential_ref?: string;
   status_code: number;
   latency_ms: number;
   stream: boolean;
@@ -528,6 +530,8 @@ export async function recordChatUsage(
     model: string;
     requested_model?: string;
     route?: ProviderRouteConfig;
+    /** 选中凭证的跟踪 ID（多 key 排错用） */
+    credential_ref?: string;
     status_code: number;
     latency_ms: number;
     stream: boolean;
@@ -546,6 +550,7 @@ export async function recordChatUsage(
     upstream_id: input.route?.upstream_id,
     plugin_id: input.route?.plugin_id,
     provider_model: input.route?.provider_model,
+    credential_ref: input.credential_ref,
     status_code: input.status_code,
     latency_ms: input.latency_ms,
     stream: input.stream,
@@ -578,6 +583,7 @@ export async function recordTaskUsage(
     upstream_id: task.upstream_id,
     plugin_id: task.plugin_id,
     provider_model: task.provider_task_id,
+    credential_ref: task.credential_ref,
     status_code: statusCode,
     latency_ms: latencyMs,
     stream: false,
@@ -729,17 +735,23 @@ function emptyUsageSummary(): UsageSummary {
 async function saveUsageRecord(env: Env, record: UsageRecord): Promise<void> {
   if (env.DB) {
     try {
-      await insertUsageRecord(env.DB, record, { includeCost: true, includeRequestedModel: true });
+      await insertUsageRecord(env.DB, record, {
+        includeCost: true,
+        includeRequestedModel: true,
+        includeCredentialRef: true
+      });
     } catch (error) {
       if (isMissingUsageTableError(error)) {
         return;
       }
       const missingCost = isMissingD1ColumnError(error, "cost");
       const missingRequestedModel = isMissingD1ColumnError(error, "requested_model");
-      if (missingCost || missingRequestedModel) {
+      const missingCredentialRef = isMissingD1ColumnError(error, "credential_ref");
+      if (missingCost || missingRequestedModel || missingCredentialRef) {
         await insertUsageRecord(env.DB, record, {
           includeCost: !missingCost,
-          includeRequestedModel: !missingRequestedModel
+          includeRequestedModel: !missingRequestedModel,
+          includeCredentialRef: !missingCredentialRef
         });
         return;
       }
@@ -758,7 +770,7 @@ async function saveUsageRecord(env: Env, record: UsageRecord): Promise<void> {
 async function insertUsageRecord(
   db: D1Database,
   record: UsageRecord,
-  options: { includeCost: boolean; includeRequestedModel: boolean }
+  options: { includeCost: boolean; includeRequestedModel: boolean; includeCredentialRef: boolean }
 ): Promise<void> {
   const extraColumns: string[] = [];
   const extraPlaceholders: string[] = [];
@@ -768,6 +780,11 @@ async function insertUsageRecord(
     extraColumns.push("requested_model");
     extraPlaceholders.push("?");
     extraValues.push(record.requested_model || null);
+  }
+  if (options.includeCredentialRef) {
+    extraColumns.push("credential_ref");
+    extraPlaceholders.push("?");
+    extraValues.push(record.credential_ref || null);
   }
   if (options.includeCost) {
     extraColumns.push("cost");
@@ -896,6 +913,7 @@ function usageRecordFromRow(row: D1Row): UsageRecord {
     upstream_id: optionalString(row.upstream_id),
     plugin_id: optionalString(row.plugin_id),
     provider_model: optionalString(row.provider_model),
+    credential_ref: optionalString(row.credential_ref),
     status_code: numberValue(row.status_code),
     latency_ms: numberValue(row.latency_ms),
     stream: row.stream === 1 || row.stream === true,

@@ -159,6 +159,7 @@ export async function processTask(env: Env, taskId: string): Promise<void> {
     attempt: pollAttempt,
     process_id: processId,
     provider_task_id: task.provider_task_id,
+    credential_ref: task.credential_ref || null,
     message: "Polling upstream task status"
   });
 
@@ -495,6 +496,7 @@ async function createUpstreamTask(env: Env, task: AsyncTaskRecord, processId: st
     status: task.status,
     attempt,
     process_id: processId,
+    credential_ref: task.credential_ref || null,
     message: "Creating upstream async task"
   });
 

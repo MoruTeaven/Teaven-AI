@@ -37,6 +37,9 @@ import { getTask, listTasks, saveTask } from "../tasks/store";
 import type {
   AsyncTaskRecord,
   AsyncTaskStatus,
+  CredentialLimit,
+  CredentialLimitWindow,
+  CredentialStatus,
   Env,
   GatewayConfig,
   ModelConfig,
@@ -46,6 +49,7 @@ import type {
   Modality,
   ProviderRouteConfig,
   UpstreamConfig,
+  UpstreamCredential,
   UpstreamModelConfig
 } from "../types";
 import { readJsonObject, requireString } from "../utils/request";
@@ -1190,6 +1194,23 @@ function publicUpstream(upstream: UpstreamConfig, config: GatewayConfig, env: En
   const routes = listProviderRoutes(config).filter((route) => route.upstream_id === upstream.id);
   const activeRoutes = routes.filter((route) => route.status !== "disabled");
 
+  // 序列化多凭证配置。每个凭证的 credential_id 标注是否已配置（实际值是否能在 env 解析到）
+  const credentials = Array.isArray(upstream.credentials) && upstream.credentials.length > 0
+    ? upstream.credentials.map((cred) => ({
+      id: cred.id,
+      label: cred.label || null,
+      credential_id: cred.credential_id || null,
+      credential_configured: isCredentialIdConfigured(env, cred.credential_id),
+      weight: cred.weight ?? 1,
+      status: cred.status || "active",
+      limits: Array.isArray(cred.limits) ? cred.limits.map((limit) => ({
+        window: limit.window,
+        max_requests: limit.max_requests ?? null,
+        max_tokens: limit.max_tokens ?? null
+      })) : []
+    }))
+    : [];
+
   return {
     id: upstream.id,
     name: upstream.name || upstream.id,
@@ -1197,6 +1218,9 @@ function publicUpstream(upstream: UpstreamConfig, config: GatewayConfig, env: En
     base_url: upstream.base_url || null,
     credential_id: upstream.credential_id || null,
     credential_configured: isCredentialIdConfigured(env, upstream.credential_id),
+    // 多凭证池：当为空数组时回退到上方单 credential_id 字段
+    credentials,
+    credentials_count: credentials.length,
     status: upstream.status || "active",
     models_total: upstream.models.length,
     models_active: upstream.models.filter((model) => model.status !== "disabled").length,
@@ -1406,9 +1430,129 @@ function readUpstreamInput(input: Record<string, unknown>): Omit<UpstreamConfig,
     plugin_id: requireString(upstream.plugin_id, "plugin_id"),
     base_url: optionalBodyString(upstream.base_url, "base_url"),
     credential_id: optionalBodyString(upstream.credential_id, "credential_id"),
+    credentials: readUpstreamCredentials(upstream.credentials),
     config: optionalObject(upstream.config, "config"),
     status: normalizeUpstreamStatus(upstream.status)
   };
+}
+
+/**
+ * 解析上游多凭证配置。
+ * 输入可为 undefined（保持向后兼容），或凭证对象数组。
+ * 自动补全 id、过滤空凭证、归一化 limits。
+ */
+function readUpstreamCredentials(raw: unknown): UpstreamCredential[] | undefined {
+  if (raw === undefined || raw === null) {
+    return undefined;
+  }
+  if (!Array.isArray(raw)) {
+    throw invalidRequest("credentials 必须是数组", "credentials");
+  }
+
+  const result: UpstreamCredential[] = [];
+  const ids = new Set<string>();
+  for (let index = 0; index < raw.length; index++) {
+    const item = raw[index];
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      throw invalidRequest(`credentials[${index}] 必须是对象`, "credentials");
+    }
+    const record = item as Record<string, unknown>;
+
+    const credentialId = requireString(record.credential_id, `credentials[${index}].credential_id`);
+    // id 缺失时自动按索引生成稳定 tracking id
+    let credId = typeof record.id === "string" && record.id.length > 0 ? record.id : `key${index + 1}`;
+    if (ids.has(credId)) {
+      throw invalidRequest(`credentials[${index}].id 重复：${credId}`, "credentials");
+    }
+    ids.add(credId);
+
+    const label = optionalBodyString(record.label, `credentials[${index}].label`);
+
+    let weight: number | undefined;
+    if (record.weight !== undefined && record.weight !== null && record.weight !== "") {
+      weight = Number(record.weight);
+      if (!Number.isFinite(weight) || weight < 0) {
+        throw invalidRequest(`credentials[${index}].weight 必须是非负数`, "credentials");
+      }
+    }
+
+    const status = normalizeCredentialStatus(record.status, `credentials[${index}].status`);
+    const limits = readCredentialLimits(record.limits, `credentials[${index}].limits`);
+
+    result.push({
+      id: credId,
+      label: label || undefined,
+      credential_id: credentialId,
+      weight,
+      limits,
+      status
+    });
+  }
+
+  return result.length > 0 ? result : undefined;
+}
+
+/** 解析单个凭证的配额上限数组。 */
+function readCredentialLimits(raw: unknown, path: string): CredentialLimit[] | undefined {
+  if (raw === undefined || raw === null) {
+    return undefined;
+  }
+  if (!Array.isArray(raw)) {
+    throw invalidRequest(`${path} 必须是数组`, "limits");
+  }
+
+  const result: CredentialLimit[] = [];
+  const windows = new Set<CredentialLimitWindow>();
+  for (let index = 0; index < raw.length; index++) {
+    const item = raw[index];
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      throw invalidRequest(`${path}[${index}] 必须是对象`, "limits");
+    }
+    const record = item as Record<string, unknown>;
+
+    const window = requireString(record.window, `${path}[${index}].window`);
+    if (!["hour", "day", "week", "month"].includes(window)) {
+      throw invalidRequest(`${path}[${index}].window 必须是 hour/day/week/month`, "limits");
+    }
+    const windowType = window as CredentialLimitWindow;
+    if (windows.has(windowType)) {
+      throw invalidRequest(`${path}[${index}].window 重复：${window}`, "limits");
+    }
+    windows.add(windowType);
+
+    let maxRequests: number | undefined;
+    let maxTokens: number | undefined;
+    if (record.max_requests !== undefined && record.max_requests !== null && record.max_requests !== "") {
+      maxRequests = Number(record.max_requests);
+      if (!Number.isFinite(maxRequests) || maxRequests < 0 || !Number.isInteger(maxRequests)) {
+        throw invalidRequest(`${path}[${index}].max_requests 必须是非负整数`, "limits");
+      }
+    }
+    if (record.max_tokens !== undefined && record.max_tokens !== null && record.max_tokens !== "") {
+      maxTokens = Number(record.max_tokens);
+      if (!Number.isFinite(maxTokens) || maxTokens < 0 || !Number.isInteger(maxTokens)) {
+        throw invalidRequest(`${path}[${index}].max_tokens 必须是非负整数`, "limits");
+      }
+    }
+
+    if (maxRequests === undefined && maxTokens === undefined) {
+      throw invalidRequest(`${path}[${index}] 至少需要配置 max_requests 或 max_tokens`, "limits");
+    }
+
+    result.push({ window: windowType, max_requests: maxRequests, max_tokens: maxTokens });
+  }
+
+  return result.length > 0 ? result : undefined;
+}
+
+function normalizeCredentialStatus(value: unknown, path: string): CredentialStatus {
+  if (value === undefined || value === null || value === "") {
+    return "active";
+  }
+  if (value === "active" || value === "disabled") {
+    return value;
+  }
+  throw invalidRequest(`${path} 必须是 active 或 disabled`, "status");
 }
 
 function upsertUpstreamModel(config: GatewayConfig, input: AdminModelMutation, replaceAlias?: string): UpstreamConfig[] {
@@ -2683,8 +2827,19 @@ const ADMIN_APP_HTML = `<!doctype html>
           <label>上游名称<input id="upstream-admin-name" value="OpenAI Compatible Default"></label>
           <label>类型<select id="upstream-admin-plugin"></select></label>
           <label>基础地址<input id="upstream-admin-base-url" value="https://api.openai.com/v1"></label>
-          <label>API Key<input id="upstream-admin-credential" value="env:OPENAI_COMPATIBLE_API_KEY" placeholder="env:MY_SECRET 或直接填写 sk-..."></label>
+          <label>API Key（默认凭证，凭证池为空时使用）<input id="upstream-admin-credential" value="env:OPENAI_COMPATIBLE_API_KEY" placeholder="env:MY_SECRET 或直接填写 sk-..."></label>
           <label>状态<select id="upstream-admin-status"><option value="active">启用</option><option value="degraded">降级</option><option value="disabled">停用</option></select></label>
+        </div>
+        <div class="credentials-pool-panel" style="margin-top: 18px; border-top: 1px dashed var(--border, #ddd); padding-top: 14px;">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 8px;">
+            <div>
+              <strong>多凭证池（加权随机 + 配额）</strong>
+              <p class="muted" style="margin: 4px 0 0; font-size: 12px;">配置后调用时按权重随机挑选可用 key，超额自动跳过；不配置则使用上方默认凭证。<code>credential_ref</code> 会写入用量与任务事件，便于排错。</p>
+            </div>
+            <button id="add-credential-btn" class="compact" type="button">+ 添加凭证</button>
+          </div>
+          <div id="upstream-credentials-list" class="credentials-list"></div>
+          <div id="upstream-credentials-empty" class="empty muted" style="padding: 12px; text-align: center;">尚未配置多凭证，将使用上方默认 API Key。</div>
         </div>
         <div class="actions" style="margin-top: 14px;"><button id="save-upstream-form" type="button">保存上游</button><button id="reset-upstream-form" class="secondary" type="button">清空表单</button></div>
       </section>

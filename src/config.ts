@@ -1,7 +1,10 @@
 import { invalidRequest } from "./http/errors";
 import { clearManagedGatewayConfig, loadManagedGatewayConfig, saveManagedGatewayConfig } from "./admin/store";
+import { checkCredentialQuota } from "./admin/credentials-store";
 import { createId } from "./utils/ids";
 import type {
+  CredentialLimit,
+  CredentialLimitWindow,
   Env,
   GatewayConfig,
   ModelConfig,
@@ -9,6 +12,7 @@ import type {
   ModelGroupMember,
   ProviderRouteConfig,
   UpstreamConfig,
+  UpstreamCredential,
   UpstreamModelConfig
 } from "./types";
 
@@ -86,6 +90,121 @@ export function pickWeightedMember(members: ModelGroupMember[]): ModelGroupMembe
     }
   }
   return candidates[candidates.length - 1];
+}
+
+/**
+ * 加权随机挑选一个凭证。
+ * 仅参与 status 非 disabled 且 weight > 0（或未设置）的凭证；若全部不可用返回 undefined。
+ * 注意：本函数只做加权随机，不做配额预检。配额预检由调用方结合 checkCredentialQuota 完成。
+ */
+export function pickWeightedCredential(credentials: UpstreamCredential[]): UpstreamCredential | undefined {
+  const candidates = credentials.filter(
+    (cred) => cred.status !== "disabled" && (cred.weight === undefined || cred.weight > 0)
+  );
+  if (candidates.length === 0) {
+    return undefined;
+  }
+
+  const totalWeight = candidates.reduce((sum, cred) => sum + (cred.weight ?? 1), 0);
+  if (totalWeight <= 0) {
+    return undefined;
+  }
+
+  let remaining = Math.random() * totalWeight;
+  for (const cred of candidates) {
+    remaining -= (cred.weight ?? 1);
+    if (remaining < 0) {
+      return cred;
+    }
+  }
+  return candidates[candidates.length - 1];
+}
+
+/**
+ * 列出某上游可用凭证池。
+ * - 若配置了非空 `credentials` 数组，返回其中 status 非 disabled 的条目。
+ * - 否则把 `credential_id` 包装成单条隐式凭证（id 固定为 "default"），保持向后兼容。
+ *
+ * 返回空数组表示该上游没有可用凭证。
+ */
+export function listUpstreamCredentials(upstream: UpstreamConfig): UpstreamCredential[] {
+  if (Array.isArray(upstream.credentials) && upstream.credentials.length > 0) {
+    return upstream.credentials.filter((cred) => cred.status !== "disabled" && cred.credential_id);
+  }
+
+  if (upstream.credential_id) {
+    return [{ id: "default", credential_id: upstream.credential_id, weight: 1, status: "active" }];
+  }
+
+  return [];
+}
+
+/** 按路由的 upstream_id 查找上游配置。 */
+export function findUpstream(config: GatewayConfig, upstreamId: string): UpstreamConfig | undefined {
+  return config.upstreams.find((upstream) => upstream.id === upstreamId);
+}
+
+/**
+ * 生成凭证的跨上游唯一跟踪引用，用于用量记录、计数器与排错。
+ * 形如 "openai-main:cred_abc"。legacy 单凭证场景返回 "{upstream_id}:default"。
+ */
+export function credentialRef(upstreamId: string, credentialId: string): string {
+  return `${upstreamId}:${credentialId}`;
+}
+
+export interface PickedCredential {
+  credential: UpstreamCredential;
+  /** 跨上游唯一的跟踪引用，用于 usage_records / async_tasks / 事件 */
+  ref: string;
+}
+
+/**
+ * 从某上游的凭证池中挑选一个可用凭证：
+ * 1. 列出 status 非 disabled 的凭证（含 legacy 单凭证回退）
+ * 2. 逐个配额预检，过滤掉超限的
+ * 3. 在剩余凭证中按权重加权随机挑选
+ *
+ * 全部不可用（无凭证或全部超限）时返回 undefined，调用方应跳过该路由并尝试 fallback。
+ *
+ * 配额预检失败（如 D1 异常）时按"可用"处理，避免因配额表故障阻断所有调用；
+ * 真正的配额超限由计数器在调用后继续累加，下一轮自然生效。
+ */
+export async function pickAvailableCredential(
+  env: Env,
+  upstream: UpstreamConfig
+): Promise<PickedCredential | undefined> {
+  const credentials = listUpstreamCredentials(upstream);
+  if (credentials.length === 0) {
+    return undefined;
+  }
+
+  const available: UpstreamCredential[] = [];
+  for (const credential of credentials) {
+    const ref = credentialRef(upstream.id, credential.id);
+    try {
+      const check = await checkCredentialQuota(env, ref, credential.limits);
+      if (check.allowed) {
+        available.push(credential);
+      }
+    } catch {
+      // 配额预检异常时不阻断，视为可用
+      available.push(credential);
+    }
+  }
+
+  if (available.length === 0) {
+    return undefined;
+  }
+
+  const picked = pickWeightedCredential(available);
+  if (!picked) {
+    return undefined;
+  }
+
+  return {
+    credential: picked,
+    ref: credentialRef(upstream.id, picked.id)
+  };
 }
 
 /**
@@ -219,6 +338,8 @@ export function validateGatewayConfig(config: GatewayConfig): void {
       throw new Error(`upstream ${upstream.id} 必须配置 models 数组`);
     }
 
+    validateUpstreamCredentials(upstream.id, upstream);
+
     for (const model of upstream.models) {
       if (typeof model.alias !== "string" || model.alias.length === 0) {
         throw new Error(`upstream ${upstream.id} 的 model alias 不能为空`);
@@ -242,6 +363,91 @@ export function validateGatewayConfig(config: GatewayConfig): void {
   }
 
   validateModelGroups(config, aliases);
+}
+
+function validateUpstreamCredentials(upstreamId: string, upstream: UpstreamConfig): void {
+  if (!Array.isArray(upstream.credentials) || upstream.credentials.length === 0) {
+    return;
+  }
+
+  const credIds = new Set<string>();
+  for (const cred of upstream.credentials) {
+    if (typeof cred.id !== "string" || cred.id.length === 0) {
+      throw new Error(`upstream ${upstreamId} 的 credential id 不能为空`);
+    }
+    if (credIds.has(cred.id)) {
+      throw new Error(`upstream ${upstreamId} 的 credential id 重复：${cred.id}`);
+    }
+    credIds.add(cred.id);
+
+    if (typeof cred.credential_id !== "string" || cred.credential_id.length === 0) {
+      throw new Error(`upstream ${upstreamId} 的 credential ${cred.id} 必须配置 credential_id`);
+    }
+
+    if (cred.weight !== undefined) {
+      if (typeof cred.weight !== "number" || !Number.isFinite(cred.weight) || cred.weight < 0) {
+        throw new Error(`upstream ${upstreamId} 的 credential ${cred.id} weight 必须是非负数`);
+      }
+    }
+
+    if (cred.status !== undefined && !["active", "disabled"].includes(cred.status)) {
+      throw new Error(`upstream ${upstreamId} 的 credential ${cred.id} status 无效`);
+    }
+
+    validateCredentialLimits(upstreamId, cred.id, cred.limits);
+  }
+}
+
+function validateCredentialLimits(
+  upstreamId: string,
+  credentialId: string,
+  limits: CredentialLimit[] | undefined
+): void {
+  if (!limits || limits.length === 0) {
+    return;
+  }
+  if (!Array.isArray(limits)) {
+    throw new Error(`upstream ${upstreamId} 的 credential ${credentialId} limits 必须是数组`);
+  }
+
+  const validWindows: CredentialLimitWindow[] = ["hour", "day", "week", "month"];
+  const seenWindows = new Set<CredentialLimitWindow>();
+
+  for (const limit of limits) {
+    if (!validWindows.includes(limit.window)) {
+      throw new Error(
+        `upstream ${upstreamId} 的 credential ${credentialId} limit window 无效：${String(limit.window)}`
+      );
+    }
+    if (seenWindows.has(limit.window)) {
+      throw new Error(
+        `upstream ${upstreamId} 的 credential ${credentialId} 重复的 window：${limit.window}`
+      );
+    }
+    seenWindows.add(limit.window);
+
+    const hasMaxRequests = limit.max_requests !== undefined;
+    const hasMaxTokens = limit.max_tokens !== undefined;
+    if (!hasMaxRequests && !hasMaxTokens) {
+      throw new Error(
+        `upstream ${upstreamId} 的 credential ${credentialId} limit(${limit.window}) 至少配置 max_requests 或 max_tokens`
+      );
+    }
+    if (hasMaxRequests) {
+      if (typeof limit.max_requests !== "number" || !Number.isFinite(limit.max_requests) || limit.max_requests < 0) {
+        throw new Error(
+          `upstream ${upstreamId} 的 credential ${credentialId} limit(${limit.window}) max_requests 必须是非负数`
+        );
+      }
+    }
+    if (hasMaxTokens) {
+      if (typeof limit.max_tokens !== "number" || !Number.isFinite(limit.max_tokens) || limit.max_tokens < 0) {
+        throw new Error(
+          `upstream ${upstreamId} 的 credential ${credentialId} limit(${limit.window}) max_tokens 必须是非负数`
+        );
+      }
+    }
+  }
 }
 
 function validateModelGroups(

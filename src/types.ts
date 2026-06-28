@@ -38,8 +38,47 @@ export type ImageGenerationMode = "text-to-image" | "image-to-image" | "both";
 export type UpstreamStatus = "active" | "disabled" | "degraded";
 export type ModelStatus = "active" | "hidden" | "disabled";
 export type UpstreamModelStatus = "active" | "hidden" | "disabled";
+export type CredentialStatus = "active" | "disabled";
 
 export type PriceUnit = "per_1m_tokens" | "per_call";
+
+/**
+ * 凭证配额的时间窗口。
+ * - hour:  按小时刷新（整点重置，固定窗口）
+ * - day:   按日固定额度（自然日重置）
+ * - week:  按周固定额度（ISO 周重置）
+ * - month: 按月固定额度（自然月重置）
+ */
+export type CredentialLimitWindow = "hour" | "day" | "week" | "month";
+
+export interface CredentialLimit {
+  window: CredentialLimitWindow;
+  /** 窗口内最大请求数 */
+  max_requests?: number;
+  /** 窗口内最大 token 总量（尽力而为：调用前预检，调用后累加） */
+  max_tokens?: number;
+}
+
+/**
+ * 上游凭证条目。一个上游可以配置多个凭证，按权重加权随机挑选，
+ * 每个凭证可独立设置配额上限，便于在多个 key 之间分摊用量。
+ */
+export interface UpstreamCredential {
+  /**
+   * 稳定跟踪 ID（用于日志、usage_records.credential_ref、async_tasks 事件，
+   * 不要放真实密钥）。同一上游内必须唯一。
+   */
+  id: string;
+  /** 显示名（可选），便于后台识别 */
+  label?: string;
+  /** 凭证引用：`env:SECRET_NAME` 或直接 key */
+  credential_id: string;
+  /** 权重，默认 1，>0 才参与抽取 */
+  weight?: number;
+  /** 配额上限列表，可同时配置多个窗口 */
+  limits?: CredentialLimit[];
+  status?: CredentialStatus;
+}
 
 export interface UpstreamModelConfig {
   alias: string;
@@ -62,6 +101,11 @@ export interface UpstreamConfig {
   plugin_id: string;
   base_url?: string;
   credential_id?: string;
+  /**
+   * 多凭证池（可选）。配置后优先按权重加权随机挑选凭证，
+   * 每个凭证可独立设置配额上限。未配置或为空时回退到 `credential_id` 单凭证。
+   */
+  credentials?: UpstreamCredential[];
   config?: Record<string, unknown>;
   status?: UpstreamStatus;
   models: UpstreamModelConfig[];
@@ -206,6 +250,8 @@ export interface AsyncTaskEvent {
   delay_seconds?: number;
   process_id?: string;
   request_id?: string;
+  /** 本次调用使用的凭证跟踪 ID（多 key 排错用） */
+  credential_ref?: string | null;
   message?: string;
   error?: unknown;
   details?: Record<string, unknown>;
@@ -222,6 +268,8 @@ export interface AsyncTaskRecord {
   requested_model?: string;
   upstream_id?: string;
   plugin_id?: string;
+  /** 本次任务使用的凭证跟踪 ID（形如 "{upstream_id}:{credential.id}"），多 key 排错用 */
+  credential_ref?: string;
   provider_execution_mode?: string;
   provider_task_id?: string;
   provider_context?: Record<string, unknown>;

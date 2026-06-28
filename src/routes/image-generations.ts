@@ -1,8 +1,9 @@
-import { findModel, loadGatewayConfig, resolveModelAlias, selectRoute } from "../config";
+import { findModel, findUpstream, loadGatewayConfig, pickAvailableCredential, resolveModelAlias, selectRoute } from "../config";
 import { invalidRequest, permissionDenied, providerUnavailable } from "../http/errors";
 import { createProviderRegistry, resolveProviderCredential } from "../providers/registry";
 import { recordChatUsage } from "../admin/store";
-import type { AuthContext, Env, GatewayConfig, ImageGenerationRequest, ProviderRouteConfig } from "../types";
+import { recordCredentialUsage } from "../admin/credentials-store";
+import type { AuthContext, CredentialLimit, Env, GatewayConfig, ImageGenerationRequest, ProviderRouteConfig } from "../types";
 import { readJsonObject, requireString, resolveImageInputs, resolveImageInput } from "../utils/request";
 import { rewriteModelInJsonResponse } from "../utils/model-rewrite";
 
@@ -80,6 +81,8 @@ export async function handleImageGenerations(
   let response: Response | undefined;
   let usedRoute: ProviderRouteConfig = route;
   let usedAlias = resolved.resolvedAlias;
+  let usedCredentialRef: string | undefined;
+  let usedCredentialLimits: CredentialLimit[] | undefined;
   let primaryError: unknown;
 
   for (let index = 0; index < candidates.length; index++) {
@@ -92,6 +95,16 @@ export async function handleImageGenerations(
         : selectRouteForImageAlias(config, candidate);
       if (!candidateRoute) {
         if (isLast) break;
+        continue;
+      }
+
+      // 从上游凭证池中按权重+配额挑选一个可用 key
+      const upstream = findUpstream(config, candidateRoute.upstream_id);
+      const picked = upstream ? await pickAvailableCredential(env, upstream) : undefined;
+      if (!picked) {
+        if (isLast) {
+          throw providerUnavailable(`No available credential for upstream: ${candidateRoute.upstream_id}`);
+        }
         continue;
       }
 
@@ -120,7 +133,7 @@ export async function handleImageGenerations(
         }
       }
 
-      const credential = resolveProviderCredential(env, candidateRoute);
+      const credential = resolveProviderCredential(env, candidateRoute, picked.credential.credential_id);
       const requestBody = { ...body, model: candidate };
 
       const candidateResponse = await adapter.imageGenerations(
@@ -143,6 +156,8 @@ export async function handleImageGenerations(
       response = candidateResponse;
       usedRoute = candidateRoute;
       usedAlias = candidate;
+      usedCredentialRef = picked.ref;
+      usedCredentialLimits = picked.credential.limits;
       break;
     } catch (err) {
       primaryError = primaryError ?? err;
@@ -165,11 +180,17 @@ export async function handleImageGenerations(
     model: usedAlias,
     requested_model: requestedModelName,
     route: usedRoute,
+    credential_ref: usedCredentialRef,
     status_code: response.status,
     latency_ms: Date.now() - startedAt,
     stream: false,
     usage: undefined
   });
+
+  // 累加凭证配额计数器（图片生成按请求数计，token 为 0）
+  if (usedCredentialRef) {
+    await recordCredentialUsage(env, usedCredentialRef, usedCredentialLimits, 0).catch(() => { /* 计数器失败不阻断响应 */ });
+  }
 
   // 命中分组时，把响应里的 model 字段重写回组别名
   if (resolved.group) {

@@ -31,8 +31,14 @@ export function createProviderRegistry(env: Env): ProviderRegistry {
   return registry;
 }
 
-export function resolveProviderCredential(env: Env, route: ProviderRouteConfig): ProviderCredential {
-  const credentialId = route.credential_id;
+export function resolveProviderCredential(
+  env: Env,
+  route: ProviderRouteConfig,
+  credentialIdOverride?: string
+): ProviderCredential {
+  // 多凭证场景下，调用方传入实际选中的 credential_id（来自 UpstreamCredential.credential_id）。
+  // 未传时回退到 route.credential_id（legacy 单凭证）。
+  const credentialId = credentialIdOverride || route.credential_id;
   if (!credentialId) {
     throw providerUnavailable(`Provider credential is not configured for upstream: ${route.upstream_id}`);
   }

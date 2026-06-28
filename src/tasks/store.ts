@@ -7,15 +7,21 @@ type TaskRow = Record<string, unknown>;
 export async function saveTask(env: Env, task: AsyncTaskRecord): Promise<void> {
   if (env.DB) {
     try {
-      await saveTaskToD1(env.DB, task, { includeEvents: true, includeRequestedModel: true });
+      await saveTaskToD1(env.DB, task, {
+        includeEvents: true,
+        includeRequestedModel: true,
+        includeCredentialRef: true
+      });
       return;
     } catch (error) {
       const missingEvents = isMissingD1ColumnError(error, "events");
       const missingRequestedModel = isMissingD1ColumnError(error, "requested_model");
-      if (missingEvents || missingRequestedModel) {
+      const missingCredentialRef = isMissingD1ColumnError(error, "credential_ref");
+      if (missingEvents || missingRequestedModel || missingCredentialRef) {
         await saveTaskToD1(env.DB, task, {
           includeEvents: !missingEvents,
-          includeRequestedModel: !missingRequestedModel
+          includeRequestedModel: !missingRequestedModel,
+          includeCredentialRef: !missingCredentialRef
         });
         return;
       }
@@ -89,7 +95,7 @@ function taskKey(taskId: string): string {
 async function saveTaskToD1(
   db: D1Database,
   task: AsyncTaskRecord,
-  options: { includeEvents: boolean; includeRequestedModel: boolean }
+  options: { includeEvents: boolean; includeRequestedModel: boolean; includeCredentialRef: boolean }
 ): Promise<void> {
   const extraColumns: string[] = [];
   const extraPlaceholders: string[] = [];
@@ -101,6 +107,12 @@ async function saveTaskToD1(
     extraPlaceholders.push("?");
     extraValues.push(task.requested_model || null);
     extraUpdates.push("requested_model = excluded.requested_model");
+  }
+  if (options.includeCredentialRef) {
+    extraColumns.push("credential_ref");
+    extraPlaceholders.push("?");
+    extraValues.push(task.credential_ref || null);
+    extraUpdates.push("credential_ref = excluded.credential_ref");
   }
   if (options.includeEvents) {
     extraColumns.push("events");
@@ -205,6 +217,7 @@ function taskFromRow(row: TaskRow): AsyncTaskRecord {
     requested_model: optionalString(row.requested_model),
     upstream_id: optionalString(row.upstream_id),
     plugin_id: optionalString(row.plugin_id),
+    credential_ref: optionalString(row.credential_ref),
     provider_execution_mode: optionalString(row.provider_execution_mode),
     provider_task_id: optionalString(row.provider_task_id),
     provider_context: parseJsonObject(row.provider_context),

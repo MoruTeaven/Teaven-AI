@@ -1,8 +1,9 @@
-import { findModel, loadGatewayConfig, resolveModelAlias, selectRoute } from "../config";
+import { findModel, findUpstream, loadGatewayConfig, pickAvailableCredential, resolveModelAlias, selectRoute } from "../config";
 import { invalidRequest, permissionDenied, providerUnavailable } from "../http/errors";
 import { createProviderRegistry, resolveProviderCredential } from "../providers/registry";
 import { recordChatUsage } from "../admin/store";
-import type { AuthContext, ChatCompletionRequest, Env, GatewayConfig, ProviderRouteConfig } from "../types";
+import { recordCredentialUsage } from "../admin/credentials-store";
+import type { AuthContext, ChatCompletionRequest, CredentialLimit, Env, GatewayConfig, ProviderRouteConfig } from "../types";
 import { readJsonObject, requireString } from "../utils/request";
 import { rewriteModelInJsonResponse, rewriteModelInStreamResponse } from "../utils/model-rewrite";
 
@@ -61,6 +62,8 @@ export async function handleChatCompletions(
   let response: Response | undefined;
   let usedRoute: ProviderRouteConfig = route;
   let usedAlias = resolved.resolvedAlias;
+  let usedCredentialRef: string | undefined;
+  let usedCredentialLimits: CredentialLimit[] | undefined;
   let primaryError: unknown;
 
   for (let index = 0; index < candidates.length; index++) {
@@ -76,6 +79,16 @@ export async function handleChatCompletions(
         continue;
       }
 
+      // 从上游凭证池中按权重+配额挑选一个可用 key
+      const upstream = findUpstream(config, candidateRoute.upstream_id);
+      const picked = upstream ? await pickAvailableCredential(env, upstream) : undefined;
+      if (!picked) {
+        if (isLast) {
+          throw providerUnavailable(`No available credential for upstream: ${candidateRoute.upstream_id}`);
+        }
+        continue;
+      }
+
       const registry = createProviderRegistry(env);
       const plugin = registry.get(candidateRoute.plugin_id);
       const adapter = plugin.createAdapter(env);
@@ -86,7 +99,7 @@ export async function handleChatCompletions(
         continue;
       }
 
-      const credential = resolveProviderCredential(env, candidateRoute);
+      const credential = resolveProviderCredential(env, candidateRoute, picked.credential.credential_id);
       const requestBody = { ...body, model: candidate };
 
       const candidateResponse = await adapter.chatCompletions(
@@ -109,6 +122,8 @@ export async function handleChatCompletions(
       response = candidateResponse;
       usedRoute = candidateRoute;
       usedAlias = candidate;
+      usedCredentialRef = picked.ref;
+      usedCredentialLimits = picked.credential.limits;
       break;
     } catch (err) {
       primaryError = primaryError ?? err;
@@ -124,6 +139,7 @@ export async function handleChatCompletions(
     throw providerUnavailable(`No active provider route for model: ${requestedModelName}`);
   }
 
+  const usage = streamRequested ? undefined : await readUsage(response.clone());
   await recordChatUsage(env, {
     request_id: requestId,
     organization_id: auth.organization_id,
@@ -132,11 +148,20 @@ export async function handleChatCompletions(
     model: usedAlias,
     requested_model: requestedModelName,
     route: usedRoute,
+    credential_ref: usedCredentialRef,
     status_code: response.status,
     latency_ms: Date.now() - startedAt,
     stream: streamRequested,
-    usage: streamRequested ? undefined : await readUsage(response.clone())
+    usage
   });
+
+  // 累加凭证配额计数器（流式无 usage 时按 0 token 记录请求数）
+  if (usedCredentialRef) {
+    const tokens = usage && typeof usage === "object"
+      ? (Number((usage as Record<string, unknown>).total_tokens) || 0)
+      : 0;
+    await recordCredentialUsage(env, usedCredentialRef, usedCredentialLimits, tokens).catch(() => { /* 计数器失败不阻断响应 */ });
+  }
 
   // 命中分组时，把响应里的 model 字段重写回组别名
   if (resolved.group) {
