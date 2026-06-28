@@ -6,7 +6,7 @@ import { appendTaskEvent, taskDiagnostics } from "../tasks/events";
 import { saveTask } from "../tasks/store";
 import type { AuthContext, AsyncTaskRecord, Env, ImageGenerationRequest } from "../types";
 import { createId } from "../utils/ids";
-import { readJsonObject, requireString } from "../utils/request";
+import { readJsonObject, requireString, resolveImageInputs, resolveImageInput } from "../utils/request";
 
 export async function handleAsyncImageGenerations(
   request: Request,
@@ -27,6 +27,19 @@ export async function handleAsyncImageGenerations(
     throw invalidRequest('response_format must be "url" or "b64_json"', "response_format");
   }
 
+  // 校验图片输入
+  if (body.image !== undefined) {
+    resolveImageInputs(body.image);
+  }
+  if (body.mask !== undefined) {
+    resolveImageInput(body.mask);
+  }
+  if (body.strength !== undefined) {
+    if (typeof body.strength !== "number" || body.strength < 0 || body.strength > 1) {
+      throw invalidRequest("strength must be a number between 0 and 1", "strength");
+    }
+  }
+
   if (auth.allowed_models && !auth.allowed_models.includes(modelName)) {
     throw permissionDenied(`API key cannot access model: ${modelName}`);
   }
@@ -44,6 +57,16 @@ export async function handleAsyncImageGenerations(
     );
   }
 
+  // 检查模型是否支持图生图
+  const hasImageInput = body.image || body.mask;
+  if (hasImageInput && model.image_mode === "text-to-image") {
+    throw invalidRequest(
+      `Model does not support image-to-image: ${modelName}`,
+      "image",
+      "unsupported_image_input"
+    );
+  }
+
   const route = selectRoute(model, false);
   if (!route) {
     throw providerUnavailable(`No active provider route for model: ${modelName}`);
@@ -55,6 +78,18 @@ export async function handleAsyncImageGenerations(
   
   if (!adapter.imageGenerations) {
     throw providerUnavailable(`Provider plugin does not support image generation: ${route.plugin_id}`);
+  }
+
+  // 检查 Provider 是否支持图生图
+  if (hasImageInput) {
+    const imageCap = plugin.manifest.capabilities["image"];
+    if (imageCap && imageCap.supports_image_input === false) {
+      throw invalidRequest(
+        `Provider plugin does not support image-to-image: ${route.plugin_id}`,
+        "image",
+        "unsupported_image_input"
+      );
+    }
   }
 
   const credential = resolveProviderCredential(env, route);

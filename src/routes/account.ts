@@ -192,6 +192,7 @@ async function handleAccountProfile(user: AdminUser, env: Env, requestId: string
       modality: model.modality,
       supports_stream: model.supports_stream !== false,
       supports_async: model.supports_async !== false,
+      image_mode: model.image_mode || null,
       status: model.status || "active"
     }));
 
@@ -1522,6 +1523,7 @@ function renderAccountAppHtml(env: Env): string {
             <div class="card-head"><h3>个人资料</h3></div>
             <form id="profileForm" class="form-grid">
               <label class="full">显示名称<input id="profileName" name="name" placeholder="可选"></label>
+              <label class="full">邮箱<input id="profileEmail" readonly></label>
               <div class="full" id="profileMeta"></div>
               <button class="full" type="submit">保存资料</button>
             </form>
@@ -1844,8 +1846,9 @@ Content-Type: application/json</code></pre></div>
        const user = state.user;
        $('#subtitle').textContent = user.name ? user.name + ' · ' + user.email : user.email;
        $('#status').textContent = '数据已更新';
-       $('#profileName').value = user.name || '';
-       $('#profileMeta').innerHTML = '<div class="entity-row"><span>用户 ID</span><code>' + escapeHtml(user.id) + '</code></div><div class="entity-row"><span>组织 ID</span><code>' + escapeHtml(user.organization_id) + '</code></div><div class="entity-row"><span>角色</span><span>' + escapeHtml(user.role) + '</span></div><div class="entity-row"><span>存储</span><span>' + escapeHtml(state.storage.source) + '</span></div>';
+        $('#profileName').value = user.name || '';
+        $('#profileEmail').value = user.email || '';
+        $('#profileMeta').innerHTML = '<div class="entity-row"><span>用户 ID</span><code>' + escapeHtml(user.id) + '</code></div><div class="entity-row"><span>组织 ID</span><code>' + escapeHtml(user.organization_id) + '</code></div><div class="entity-row"><span>角色</span><span>' + escapeHtml(user.role) + '</span></div><div class="entity-row"><span>存储</span><span>' + escapeHtml(state.storage.source) + '</span></div>';
        $('#statKeys').textContent = fmt.format(state.api_keys.length);
        $('#statRequests').textContent = fmt.format(state.usage.total_requests);
        $('#statTokens').textContent = fmt.format(state.usage.total_tokens);
@@ -1862,7 +1865,7 @@ Content-Type: application/json</code></pre></div>
 
      function renderModels() {
         $('#keyModels').innerHTML = state.models.map((model) => '<option value="' + escapeHtml(model.id) + '">' + escapeHtml(model.id) + ' · ' + escapeHtml(modalityText(model.modality)) + '</option>').join('');
-        $('#modelList').innerHTML = state.models.length ? state.models.map((model) => '<div class="item"><header><strong>' + escapeHtml(model.id) + '</strong><span class="badge ok">' + escapeHtml(modalityText(model.modality)) + '</span></header><span class="muted">流式：' + (model.supports_stream ? '支持' : '不支持') + ' · 异步：' + (model.supports_async ? '支持' : '不支持') + '</span></div>').join('') : '<div class="notice">暂无可用模型。</div>';
+        $('#modelList').innerHTML = state.models.length ? state.models.map((model) => '<div class="item"><header><strong>' + escapeHtml(model.id) + '</strong><span class="badge ok">' + escapeHtml(modalityText(model.modality)) + '</span>' + (model.modality === 'image' && model.image_mode ? '<span class="badge">' + escapeHtml(imageModeText(model.image_mode)) + '</span>' : '') + '</header><span class="muted">流式：' + (model.supports_stream ? '支持' : '不支持') + ' · 异步：' + (model.supports_async ? '支持' : '不支持') + '</span></div>').join('') : '<div class="notice">暂无可用模型。</div>';
       }
 
       function renderTestModels() {
@@ -1891,7 +1894,8 @@ Content-Type: application/json</code></pre></div>
         const taskOption = $('#testMode').querySelector('option[value="task"]');
         if (streamOption) streamOption.disabled = !model.supports_stream;
         if (taskOption) taskOption.disabled = isText;
-        $('#testModelMeta').innerHTML = '<span class="badge ok">' + escapeHtml(modalityText(model.modality)) + '</span><span class="badge ' + (isText && model.supports_stream ? 'ok' : '') + '">流式：' + (isText && model.supports_stream ? '支持' : '不适用') + '</span><span class="badge ' + (!isText && model.supports_async ? 'ok' : '') + '">异步：' + (!isText && model.supports_async ? '支持' : (isText ? '不适用' : '未声明')) + '</span>';
+        var imageModeBadge = (model.modality === 'image' && model.image_mode) ? '<span class="badge">' + escapeHtml(imageModeText(model.image_mode)) + '</span>' : '';
+        $('#testModelMeta').innerHTML = '<span class="badge ok">' + escapeHtml(modalityText(model.modality)) + '</span>' + imageModeBadge + '<span class="badge ' + (isText && model.supports_stream ? 'ok' : '') + '">流式：' + (isText && model.supports_stream ? '支持' : '不适用') + '</span><span class="badge ' + (!isText && model.supports_async ? 'ok' : '') + '">异步：' + (!isText && model.supports_async ? '支持' : (isText ? '不适用' : '未声明')) + '</span>';
         $('#testModeLabel').style.display = isText ? 'block' : 'none';
         $('#testInputJsonLabel').style.display = isText ? 'none' : 'block';
         $('#testTaskOptions').style.display = isText ? 'none' : 'grid';
@@ -1922,6 +1926,13 @@ Content-Type: application/json</code></pre></div>
         if (value === 'video') return '视频';
         if (value === 'file') return '文件';
         return value || '未知';
+      }
+
+      function imageModeText(value) {
+        if (value === 'text-to-image') return '文生图';
+        if (value === 'image-to-image') return '图生图';
+        if (value === 'both') return '文生图 + 图生图';
+        return value || '未设置';
       }
 
       function statusText(status) {

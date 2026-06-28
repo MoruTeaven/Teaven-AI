@@ -27,6 +27,14 @@ export interface AuthContext {
 
 export type Modality = "text" | "image" | "video" | "file";
 
+/**
+ * 图片生成模式标签。
+ * - text-to-image: 仅支持文生图
+ * - image-to-image: 仅支持图生图
+ * - both: 同时支持文生图和图生图
+ */
+export type ImageGenerationMode = "text-to-image" | "image-to-image" | "both";
+
 export type UpstreamStatus = "active" | "disabled" | "degraded";
 export type ModelStatus = "active" | "hidden" | "disabled";
 export type UpstreamModelStatus = "active" | "hidden" | "disabled";
@@ -39,6 +47,8 @@ export interface UpstreamModelConfig {
   modality: Modality;
   supports_stream?: boolean;
   supports_async?: boolean;
+  /** 图片生成模式标签，仅 modality 为 image 时有效 */
+  image_mode?: ImageGenerationMode;
   priority?: number;
   weight?: number;
   status?: UpstreamModelStatus;
@@ -68,6 +78,8 @@ export interface ProviderRouteConfig {
   modality: Modality;
   supports_stream?: boolean;
   supports_async?: boolean;
+  /** 图片生成模式标签，仅 modality 为 image 时有效 */
+  image_mode?: ImageGenerationMode;
   priority?: number;
   weight?: number;
   status?: UpstreamModelStatus;
@@ -78,6 +90,8 @@ export interface ModelConfig {
   modality: Modality;
   supports_stream?: boolean;
   supports_async?: boolean;
+  /** 图片生成模式标签，仅 modality 为 image 时有效 */
+  image_mode?: ImageGenerationMode;
   status?: ModelStatus;
   price?: string;
   price_unit?: PriceUnit;
@@ -98,6 +112,14 @@ export interface ChatCompletionRequest {
 export interface ImageGenerationRequest {
   model: string;
   prompt: string;
+  /** 参考图片，支持 URL 或 base64 data URI。单张为字符串，多张为数组。 */
+  image?: string | string[];
+  /** 局部重绘遮罩图片，白色区域为重绘区域 */
+  mask?: string;
+  /** 重绘强度 0~1，值越大与原图差异越大 */
+  strength?: number;
+  /** 图生图模式 */
+  mode?: "image-to-image" | "inpaint" | "style-transfer";
   image_count?: number;
   n?: number;
   size?: string;

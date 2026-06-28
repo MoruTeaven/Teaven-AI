@@ -15,8 +15,15 @@ const MANIFEST: ProviderPluginManifest = {
     },
     "image": {
       execution_mode: "sync",
+      supports_image_input: true,
+      supports_mask: true,
+      supports_strength: true,
+      supported_image_modes: ["image-to-image", "inpaint"],
       parameters: [
         { name: "prompt", type: "string", required: true, description: "生图提示词", maps_to: "prompt" },
+        { name: "image", type: "string", description: "参考图片 URL 或 base64", maps_to: "image" },
+        { name: "mask", type: "string", description: "局部重绘遮罩", maps_to: "mask" },
+        { name: "strength", type: "number", description: "重绘强度 0~1", maps_to: "strength" },
         { name: "size", type: "string", description: "图片尺寸", maps_to: "size" },
         { name: "width", type: "integer", description: "图片宽度，需和 height 一起传", maps_to: "size" },
         { name: "height", type: "integer", description: "图片高度，需和 width 一起传", maps_to: "size" },
@@ -125,6 +132,12 @@ async function forwardImageGeneration(request: ImageGenerationRequest, context: 
     throw upstreamError("Provider API key is missing", 503, "provider_unavailable");
   }
 
+  const hasImageInput = request.image || request.mask;
+
+  if (hasImageInput) {
+    return forwardImageEdit(request, context, apiKey);
+  }
+
   const baseUrl = context.credential.base_url || "https://api.openai.com/v1";
   const upstreamUrl = joinUrl(baseUrl, "/images/generations");
   const upstreamRequest = buildOpenAIImageRequest(request, context.route.provider_model);
@@ -151,6 +164,90 @@ async function forwardImageGeneration(request: ImageGenerationRequest, context: 
       "X-Request-Id": context.request_id
     }
   });
+}
+
+async function forwardImageEdit(
+  request: ImageGenerationRequest,
+  context: ProviderRequestContext,
+  apiKey: string
+): Promise<Response> {
+  const baseUrl = context.credential.base_url || "https://api.openai.com/v1";
+  const upstreamUrl = joinUrl(baseUrl, "/images/edits");
+
+  const formData = new FormData();
+  formData.append("model", context.route.provider_model);
+  formData.append("prompt", request.prompt);
+
+  // 处理参考图片
+  const imageValue = Array.isArray(request.image) ? request.image[0] : request.image;
+  if (imageValue) {
+    const imageBlob = await resolveToBlob(imageValue, "image");
+    formData.append("image", imageBlob, "image.png");
+  }
+
+  // 处理遮罩
+  if (request.mask) {
+    const maskBlob = await resolveToBlob(request.mask, "mask");
+    formData.append("mask", maskBlob, "mask.png");
+  }
+
+  if (request.size) formData.append("size", request.size);
+  const count = request.image_count || request.n;
+  if (count) formData.append("n", String(count));
+  if (request.response_format) formData.append("response_format", request.response_format);
+  if (typeof request.strength === "number") formData.append("strength", String(request.strength));
+
+  const upstream = await fetch(upstreamUrl, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "X-Request-Id": context.request_id
+    },
+    body: formData,
+    signal: context.signal
+  });
+
+  if (!upstream.ok) {
+    throw await mapUpstreamError(upstream);
+  }
+
+  const data = (await upstream.json()) as Record<string, unknown>;
+  return jsonResponse(data, {
+    status: 200,
+    headers: {
+      "X-Request-Id": context.request_id
+    }
+  });
+}
+
+/**
+ * 将图片输入（URL 或 base64）解析为 Blob。
+ */
+async function resolveToBlob(input: string, paramName: string): Promise<Blob> {
+  if (input.startsWith("data:")) {
+    const match = input.match(/^data:([^;]+);base64,(.+)$/);
+    if (!match) {
+      throw upstreamError(`Invalid base64 data URI for ${paramName}`, 400, "invalid_request");
+    }
+    const mimeType = match[1];
+    const base64 = match[2];
+    const binary = atob(base64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+    return new Blob([bytes], { type: mimeType });
+  }
+
+  if (input.startsWith("http://") || input.startsWith("https://")) {
+    const response = await fetch(input);
+    if (!response.ok) {
+      throw upstreamError(`Failed to download ${paramName} from URL: ${response.status}`, 400, "invalid_request");
+    }
+    return await response.blob();
+  }
+
+  throw upstreamError(`${paramName} must be a URL or base64 data URI`, 400, "invalid_request");
 }
 
 function buildOpenAIImageRequest(request: ImageGenerationRequest, providerModel: string): Record<string, unknown> {

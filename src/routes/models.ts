@@ -23,6 +23,7 @@ export async function handleListModels(
       object: "model",
       owned_by: "teaven",
       modality: model.modality,
+      image_mode: model.image_mode || null,
       price: model.price || null,
       price_unit: model.price_unit || null
     }));

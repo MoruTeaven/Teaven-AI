@@ -8,6 +8,14 @@ export interface ProviderCapability {
   result_delivery?: "direct" | "polling" | "webhook";
   poll_interval_seconds?: number;
   parameters?: ProviderParameterSpec[];
+  /** 是否支持图生图（传入参考图片） */
+  supports_image_input?: boolean;
+  /** 是否支持局部重绘遮罩 */
+  supports_mask?: boolean;
+  /** 是否支持重绘强度参数 */
+  supports_strength?: boolean;
+  /** 支持的图生图模式列表 */
+  supported_image_modes?: string[];
 }
 
 export interface ProviderParameterSpec {

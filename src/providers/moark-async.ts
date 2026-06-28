@@ -13,8 +13,15 @@ const MANIFEST: ProviderPluginManifest = {
       execution_mode: "async_polling",
       result_delivery: "polling",
       poll_interval_seconds: 2,
+      supports_image_input: true,
+      supports_mask: true,
+      supports_strength: true,
+      supported_image_modes: ["image-to-image", "inpaint"],
       parameters: [
         { name: "prompt", type: "string", required: true, description: "生图提示词", maps_to: "prompt" },
+        { name: "image", type: "string", description: "参考图片 URL 或 base64", maps_to: "reference_image" },
+        { name: "mask", type: "string", description: "局部重绘遮罩", maps_to: "mask_image" },
+        { name: "strength", type: "number", description: "重绘强度 0~1", maps_to: "strength" },
         { name: "size", type: "string", default: "1024x1024", description: "图片尺寸，会解析为 width 和 height", maps_to: "width,height" },
         { name: "width", type: "integer", default: 1024, description: "图片宽度", maps_to: "width" },
         { name: "height", type: "integer", default: 1024, description: "图片高度", maps_to: "height" },
@@ -145,6 +152,18 @@ function buildMoarkImageRequest(request: ImageGenerationRequest, providerModel: 
   upstreamRequest.width = width ?? parsedSize?.width ?? 1024;
   upstreamRequest.height = height ?? parsedSize?.height ?? 1024;
 
+  // 图生图参数映射
+  const imageValue = Array.isArray(request.image) ? request.image[0] : request.image;
+  if (imageValue) {
+    upstreamRequest.reference_image = normalizeImageForUpstream(imageValue);
+  }
+  if (request.mask) {
+    upstreamRequest.mask_image = normalizeImageForUpstream(request.mask);
+  }
+  if (typeof request.strength === "number") {
+    upstreamRequest.strength = request.strength;
+  }
+
   Object.keys(upstreamRequest).forEach((key) => {
     if (upstreamRequest[key] === undefined) {
       delete upstreamRequest[key];
@@ -152,6 +171,14 @@ function buildMoarkImageRequest(request: ImageGenerationRequest, providerModel: 
   });
 
   return upstreamRequest;
+}
+
+/**
+ * 将图片输入（URL 或 base64）转换为上游可接受的格式。
+ * URL 直接传递，base64 传递完整 data URI。
+ */
+function normalizeImageForUpstream(image: string): string {
+  return image;
 }
 
 function objectParam(value: unknown): Record<string, unknown> {

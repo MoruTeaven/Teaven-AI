@@ -50,6 +50,30 @@ async function routeRequest(request: Request, env: Env, requestId: string): Prom
   const url = new URL(request.url);
   const pathname = normalizePath(url.pathname);
 
+  if (request.method === "GET" && pathname === "/") {
+    return jsonResponse(
+      {
+        name: "Teaven AI Gateway",
+        version: "0.1.0",
+        status: "running",
+        endpoints: {
+          health: "/health",
+          admin: "/admin",
+          account: "/account",
+          models: "/v1/models",
+          chat_completions: "/v1/chat/completions",
+          tasks: "/v1/tasks",
+          image_generations: "/v1/images/generations"
+        }
+      },
+      {
+        headers: {
+          "X-Request-Id": requestId
+        }
+      }
+    );
+  }
+
   if (request.method === "GET" && pathname === "/health") {
     return jsonResponse(
       {

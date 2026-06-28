@@ -989,6 +989,7 @@ function publicModel(model: ModelConfig, env: Env): Record<string, unknown> {
     alias: model.alias,
     modality: model.modality,
     supports_stream: model.supports_stream !== false,
+    image_mode: model.image_mode || null,
     status: model.status || "active",
     price: model.price || null,
     price_unit: model.price_unit || null,
@@ -1002,6 +1003,7 @@ function publicModel(model: ModelConfig, env: Env): Record<string, unknown> {
       credential_configured: isRouteCredentialConfigured(env, route),
       modality: route.modality,
       supports_stream: route.supports_stream !== false,
+      image_mode: route.image_mode || null,
       priority: route.priority ?? null,
       weight: route.weight ?? null,
       status: route.status || "active",
@@ -1030,6 +1032,7 @@ function publicUpstream(upstream: UpstreamConfig, config: GatewayConfig, env: En
       provider_model: model.provider_model,
       modality: model.modality,
       supports_stream: model.supports_stream !== false,
+      image_mode: model.image_mode || null,
       priority: model.priority ?? null,
       weight: model.weight ?? null,
       status: model.status || "active"
@@ -1106,6 +1109,7 @@ function normalizeModelInput(value: unknown): AdminModelMutation {
     provider_model,
     modality: modality as UpstreamModelConfig["modality"],
     supports_stream: input.supports_stream !== false,
+    image_mode: normalizeImageMode(input.image_mode, modality),
     priority: optionalNumber(input.priority, "priority"),
     weight: optionalNumber(input.weight, "weight"),
     status: normalizeModelStatus(input.status),
@@ -1165,6 +1169,19 @@ function normalizeModelStatus(value: unknown): UpstreamModelConfig["status"] {
     return value;
   }
   throw invalidRequest("模型状态无效", "status");
+}
+
+function normalizeImageMode(value: unknown, modality: string): UpstreamModelConfig["image_mode"] {
+  if (modality !== "image") {
+    return undefined;
+  }
+  if (value === undefined || value === null || value === "") {
+    return "text-to-image";
+  }
+  if (value === "text-to-image" || value === "image-to-image" || value === "both") {
+    return value;
+  }
+  throw invalidRequest("图片生成模式必须是 text-to-image、image-to-image 或 both", "image_mode");
 }
 
 function normalizeUpstreamStatus(value: unknown): UpstreamConfig["status"] {
@@ -1792,10 +1809,15 @@ function renderAdminLoginHtml(errorMessage = "", adminTokenConfigured = true): s
 
     .theme-float {
       position: fixed;
+      top: 18px;
       right: 18px;
-      bottom: 18px;
+      bottom: auto;
+      width: auto;
+      max-width: calc(100vw - 36px);
+      margin-top: 0;
       display: inline-flex;
       align-items: center;
+      justify-content: center;
       gap: 8px;
       padding: 0 12px;
       height: 38px;
@@ -1805,10 +1827,11 @@ function renderAdminLoginHtml(errorMessage = "", adminTokenConfigured = true): s
       background: var(--panel);
       cursor: pointer;
       font-weight: 900;
+      white-space: nowrap;
       transition: transform 160ms ease, border-color 160ms ease;
     }
 
-    .theme-float:hover { transform: translateY(-1px); border-color: var(--line-strong); }
+    .theme-float:hover { transform: translateY(-1px); border-color: var(--line-strong); background: var(--panel); box-shadow: none; }
     .theme-float i { font-size: 18px; }
 
     @media (max-width: 480px) {
@@ -2415,6 +2438,7 @@ const ADMIN_APP_HTML = `<!doctype html>
           <label>模型别名<input id="model-alias" placeholder="gpt-4o-mini"></label>
           <label>上游模型名<input id="route-provider-model" placeholder="gpt-4o-mini"></label>
           <label>模态<select id="model-modality"><option value="text">文本</option><option value="image">图片</option><option value="video">视频</option><option value="file">文件</option></select></label>
+          <label>图片生成模式<select id="model-image-mode"><option value="text-to-image">文生图</option><option value="image-to-image">图生图</option><option value="both">文生图 + 图生图</option></select></label>
           <label>模型状态<select id="model-status"><option value="active">启用</option><option value="hidden">隐藏</option><option value="disabled">停用</option></select></label>
           <label>流式<select id="model-stream"><option value="true">支持</option><option value="false">不支持</option></select></label>
           <label>优先级<input id="route-priority" type="number" value="1"></label>
@@ -2506,6 +2530,7 @@ const ADMIN_APP_HTML = `<!doctype html>
       document.getElementById('open-model-modal').addEventListener('click', function () { resetModelForm(); openModal('model-modal', 'model-modal-title', '添加模型'); });
       document.getElementById('open-user-modal').addEventListener('click', function () { resetUserForm(); openModal('user-modal', 'user-modal-title', '添加用户'); });
       document.getElementById('save-model-form').addEventListener('click', saveModelFromForm);
+      document.getElementById('model-modality').addEventListener('change', function () { toggleImageModeField(this.value); });
       document.getElementById('save-model-json').addEventListener('click', saveModelFromJson);
       document.getElementById('reset-models').addEventListener('click', resetModels);
       document.getElementById('save-upstream-form').addEventListener('click', saveUpstreamFromForm);
@@ -2644,6 +2669,7 @@ const ADMIN_APP_HTML = `<!doctype html>
             '<header><div class="entity-title"><code>' + esc(model.alias) + '</code><div class="status">上游路由 ' + esc((model.routes || []).length) + ' 条</div></div><span class="pill ' + statusClass(model.status) + '">' + esc(statusText(model.status)) + '</span></header>' +
             '<div class="entity-meta">' +
               '<div class="entity-row"><span>模态</span><strong>' + esc(modalityText(model.modality)) + '</strong></div>' +
+              (model.modality === 'image' ? '<div class="entity-row"><span>图片模式</span><strong>' + esc(imageModeText(model.image_mode)) + '</strong></div>' : '') +
               '<div class="entity-row"><span>流式</span><strong>' + (model.supports_stream !== false ? '支持' : '不支持') + '</strong></div>' +
               '<div class="entity-row"><span>价格</span><strong>' + priceText(model.price, model.price_unit) + '</strong></div>' +
               '<div class="entity-row"><span>路由</span><div>' + routes + '</div></div>' +
@@ -2687,6 +2713,7 @@ const ADMIN_APP_HTML = `<!doctype html>
         return '<div class="entity-meta">' +
           '<div class="entity-row"><span>别名</span><code>' + esc(model.alias) + '</code></div>' +
           '<div class="entity-row"><span>模态</span><strong>' + esc(modalityText(model.modality)) + '</strong></div>' +
+          (model.modality === 'image' ? '<div class="entity-row"><span>图片模式</span><strong>' + esc(imageModeText(model.image_mode)) + '</strong></div>' : '') +
           '<div class="entity-row"><span>状态</span><span class="pill ' + statusClass(model.status) + '">' + esc(statusText(model.status)) + '</span></div>' +
           '<div class="entity-row"><span>流式</span><strong>' + (model.supports_stream !== false ? '支持' : '不支持') + '</strong></div>' +
           '<div class="entity-row"><span>价格</span><strong>' + priceText(model.price, model.price_unit) + '</strong></div>' +
@@ -2717,7 +2744,7 @@ const ADMIN_APP_HTML = `<!doctype html>
       function renderUsers() {
         document.getElementById('users-list').innerHTML = state.users.length ? state.users.map(function (user) {
           return '<article class="entity-card">' +
-            '<header><div class="entity-title"><strong>' + esc(user.email) + '</strong><div class="status">' + esc(user.name || user.id) + '</div></div><span class="pill ' + statusClass(user.status) + '">' + esc(statusText(user.status)) + '</span></header>' +
+            '<header><div class="entity-title"><strong>' + esc(user.name || user.id) + '</strong><div class="status">' + esc(user.email) + '</div></div><span class="pill ' + statusClass(user.status) + '">' + esc(statusText(user.status)) + '</span></header>' +
             '<div class="entity-meta">' +
               '<div class="entity-row"><span>角色</span><strong>' + esc(roleText(user.role)) + '</strong></div>' +
               '<div class="entity-row"><span>组织</span><code>' + esc(user.organization_id) + '</code></div>' +
@@ -2948,7 +2975,8 @@ const ADMIN_APP_HTML = `<!doctype html>
       async function saveModelFromForm() {
         var upstream_id = document.getElementById('model-upstream-select').value;
         if (!upstream_id) { setStatus('请先选择所属上游', 'error'); return; }
-        var model = { upstream_id: upstream_id, alias: value('model-alias'), provider_model: value('route-provider-model'), modality: value('model-modality'), supports_stream: value('model-stream') === 'true', status: value('model-status'), priority: Number(value('route-priority') || 1), weight: 100, price: value('model-price'), price_unit: value('model-price-unit') };
+        var modality = value('model-modality');
+        var model = { upstream_id: upstream_id, alias: value('model-alias'), provider_model: value('route-provider-model'), modality: modality, supports_stream: value('model-stream') === 'true', image_mode: modality === 'image' ? value('model-image-mode') : undefined, status: value('model-status'), priority: Number(value('route-priority') || 1), weight: 100, price: value('model-price'), price_unit: value('model-price-unit') };
         await saveModel(model, state.editingModelAlias);
         closeModal('model-modal');
       }
@@ -2980,6 +3008,8 @@ const ADMIN_APP_HTML = `<!doctype html>
         document.getElementById('model-alias').value = '';
         document.getElementById('route-provider-model').value = '';
         document.getElementById('model-modality').value = 'text';
+        toggleImageModeField('text');
+        document.getElementById('model-image-mode').value = 'text-to-image';
         document.getElementById('model-status').value = 'active';
         document.getElementById('model-stream').value = 'true';
         document.getElementById('route-priority').value = '1';
@@ -3117,12 +3147,12 @@ const ADMIN_APP_HTML = `<!doctype html>
         }
       }
 
-      function fillModelEditor(alias, editing) { var model = state.models.find(function (item) { return item.alias === alias; }); if (!model) return; state.editingModelAlias = editing ? alias : null; var route = model.routes && model.routes[0] ? model.routes[0] : {}; document.getElementById('model-json').value = JSON.stringify(toModelInput(model), null, 2); document.getElementById('model-alias').value = model.alias; document.getElementById('model-modality').value = model.modality; document.getElementById('model-status').value = model.status; document.getElementById('model-stream').value = String(model.supports_stream !== false); var select = document.getElementById('model-upstream-select'); if (select.options.length > 1) { select.value = route.upstream_id || ''; } document.getElementById('route-provider-model').value = route.provider_model || ''; document.getElementById('route-priority').value = route.priority || 1; document.getElementById('model-price').value = model.price || ''; document.getElementById('model-price-unit').value = model.price_unit || 'per_1m_tokens'; }
+      function fillModelEditor(alias, editing) { var model = state.models.find(function (item) { return item.alias === alias; }); if (!model) return; state.editingModelAlias = editing ? alias : null; var route = model.routes && model.routes[0] ? model.routes[0] : {}; document.getElementById('model-json').value = JSON.stringify(toModelInput(model), null, 2); document.getElementById('model-alias').value = model.alias; document.getElementById('model-modality').value = model.modality; toggleImageModeField(model.modality); document.getElementById('model-image-mode').value = model.image_mode || 'text-to-image'; document.getElementById('model-status').value = model.status; document.getElementById('model-stream').value = String(model.supports_stream !== false); var select = document.getElementById('model-upstream-select'); if (select.options.length > 1) { select.value = route.upstream_id || ''; } document.getElementById('route-provider-model').value = route.provider_model || ''; document.getElementById('route-priority').value = route.priority || 1; document.getElementById('model-price').value = model.price || ''; document.getElementById('model-price-unit').value = model.price_unit || 'per_1m_tokens'; }
       function viewModel(alias) { state.selectedModelAlias = alias; renderModelDetail(); setStatus('正在查看模型：' + alias, 'ok'); }
-      function toModelInput(model) { var route = model.routes && model.routes[0] ? model.routes[0] : {}; return { original_alias: model.alias, upstream_id: route.upstream_id, alias: model.alias, provider_model: route.provider_model, modality: model.modality, supports_stream: model.supports_stream, status: model.status, priority: route.priority, weight: route.weight, price: model.price || '', price_unit: model.price_unit || '' }; }
+      function toModelInput(model) { var route = model.routes && model.routes[0] ? model.routes[0] : {}; return { original_alias: model.alias, upstream_id: route.upstream_id, alias: model.alias, provider_model: route.provider_model, modality: model.modality, supports_stream: model.supports_stream, image_mode: model.image_mode || null, status: model.status, priority: route.priority, weight: route.weight, price: model.price || '', price_unit: model.price_unit || '' }; }
       function fillUpstreamEditor(id) { var upstreams = (state.overview && state.overview.upstreams) || []; var upstream = upstreams.find(function (item) { return item.id === id; }); if (!upstream) return; document.getElementById('upstream-admin-id').value = upstream.id || ''; document.getElementById('upstream-admin-name').value = upstream.name || ''; document.getElementById('upstream-admin-plugin').value = upstream.plugin_id || ''; document.getElementById('upstream-admin-base-url').value = upstream.base_url || ''; document.getElementById('upstream-admin-credential').value = upstream.credential_id || ''; document.getElementById('upstream-admin-status').value = upstream.status || 'active'; }
       function viewUpstream(id) { var upstream = findOverviewUpstream(id); if (!upstream) { setStatus('未找到上游：' + id, 'error'); return; } var raw = findConfigUpstream(id) || upstream; var name = upstream.name || upstream.id; document.getElementById('upstream-view-title').textContent = '查看上游：' + name; document.getElementById('upstream-view-content').innerHTML = renderUpstreamDetail(upstream, raw); document.getElementById('upstream-view-json').textContent = JSON.stringify(toUpstreamDetailJson(upstream, raw), null, 2); openModal('upstream-view-modal', 'upstream-view-title', '查看上游：' + name); }
-      function renderUpstreamDetail(upstream, raw) { var providers = (state.overview && state.overview.providers) || []; var plugin = findProvider(providers, upstream.plugin_id); var models = (raw && raw.models) || upstream.models || []; var modelRows = models.length ? models.map(function (model) { return '<tr><td><code>' + esc(model.alias) + '</code></td><td><code>' + esc(model.provider_model) + '</code></td><td>' + esc(modalityText(model.modality)) + '</td><td><span class="pill ' + statusClass(model.status || 'active') + '">' + esc(statusText(model.status || 'active')) + '</span></td><td>' + (model.supports_stream !== false ? '支持' : '不支持') + '</td><td>' + esc(model.priority == null ? '未设置' : model.priority) + '</td><td>' + esc(model.weight == null ? '未设置' : model.weight) + '</td><td>' + priceText(model.price, model.price_unit) + '</td></tr>'; }).join('') : '<tr><td colspan="8" class="empty">暂无模型。</td></tr>'; return '<div class="entity-meta">' +
+      function renderUpstreamDetail(upstream, raw) { var providers = (state.overview && state.overview.providers) || []; var plugin = findProvider(providers, upstream.plugin_id); var models = (raw && raw.models) || upstream.models || []; var modelRows = models.length ? models.map(function (model) { return '<tr><td><code>' + esc(model.alias) + '</code></td><td><code>' + esc(model.provider_model) + '</code></td><td>' + esc(modalityText(model.modality)) + '</td><td>' + (model.modality === 'image' ? esc(imageModeText(model.image_mode)) : '-') + '</td><td><span class="pill ' + statusClass(model.status || 'active') + '">' + esc(statusText(model.status || 'active')) + '</span></td><td>' + (model.supports_stream !== false ? '支持' : '不支持') + '</td><td>' + esc(model.priority == null ? '未设置' : model.priority) + '</td><td>' + esc(model.weight == null ? '未设置' : model.weight) + '</td><td>' + priceText(model.price, model.price_unit) + '</td></tr>'; }).join('') : '<tr><td colspan="9" class="empty">暂无模型。</td></tr>'; return '<div class="entity-meta">' +
           '<div class="entity-row"><span>ID</span><code>' + esc(upstream.id) + '</code></div>' +
           '<div class="entity-row"><span>名称</span><strong>' + esc(upstream.name || upstream.id) + '</strong></div>' +
           '<div class="entity-row"><span>类型</span><strong>' + esc(plugin ? plugin.name : upstream.plugin_id) + '</strong></div>' +
@@ -3133,7 +3163,7 @@ const ADMIN_APP_HTML = `<!doctype html>
           '<div class="entity-row"><span>模型</span><strong>' + esc(upstream.models_active + '/' + upstream.models_total) + '</strong></div>' +
           '<div class="entity-row"><span>活跃路由</span><strong>' + esc(upstream.routes_active == null ? 0 : upstream.routes_active) + '</strong></div>' +
         '</div>' +
-        '<div><h3>模型明细</h3><div class="table-wrap"><table><thead><tr><th>别名</th><th>上游模型</th><th>模态</th><th>状态</th><th>流式</th><th>优先级</th><th>权重</th><th>价格</th></tr></thead><tbody>' + modelRows + '</tbody></table></div></div>' +
+        '<div><h3>模型明细</h3><div class="table-wrap"><table><thead><tr><th>别名</th><th>上游模型</th><th>模态</th><th>图片模式</th><th>状态</th><th>流式</th><th>优先级</th><th>权重</th><th>价格</th></tr></thead><tbody>' + modelRows + '</tbody></table></div></div>' +
         '<div class="status">下方 JSON 为当前上游完整配置。</div>'; }
       function toUpstreamDetailJson(upstream, raw) { return Object.assign({}, raw || {}, { credential_configured: upstream.credential_configured, models_total: upstream.models_total, models_active: upstream.models_active, routes_active: upstream.routes_active == null ? 0 : upstream.routes_active }); }
       function findOverviewUpstream(id) { var upstreams = (state.overview && state.overview.upstreams) || []; return upstreams.find(function (item) { return item.id === id; }) || null; }
@@ -3153,6 +3183,8 @@ const ADMIN_APP_HTML = `<!doctype html>
       function taskStoreText(value) { return value === 'kv' ? 'KV' : value === 'memory' ? '内存' : value; }
       function priceText(price, unit) { if (!price) return '未设置'; var p = esc(price); if (unit === 'per_call') return p + ' 元 / 次'; return p + ' 元 / 1M Token'; }
       function modalityText(value) { if (value === 'text') return '文本'; if (value === 'image') return '图片'; if (value === 'video') return '视频'; if (value === 'file') return '文件'; if (value === 'vision') return '视觉'; if (value === 'audio') return '音频'; return value; }
+      function imageModeText(value) { if (value === 'text-to-image') return '文生图'; if (value === 'image-to-image') return '图生图'; if (value === 'both') return '文生图 + 图生图'; return value || '未设置'; }
+      function toggleImageModeField(modality) { var row = document.getElementById('model-image-mode'); if (!row) return; var label = row.closest('label'); if (!label) return; label.style.display = modality === 'image' ? '' : 'none'; }
       function roleText(value) { if (value === 'owner') return '所有者'; if (value === 'admin') return '管理员'; if (value === 'member') return '成员'; return value; }
       function taskTypeText(value) { if (value === 'chat' || value === 'chat.completions') return '聊天补全'; if (value === 'responses') return '响应生成'; if (value === 'image' || value === 'image_generation' || value === 'image.generation' || value === 'image.generations' || value === 'images.generations') return '图片生成'; if (value === 'video' || value === 'video_generation' || value === 'video.generation' || value === 'video.generations' || value === 'videos.generations') return '视频生成'; if (value === 'speech' || value === 'audio.speech') return '语音合成'; if (value === 'transcriptions' || value === 'audio.transcriptions') return '语音转写'; if (value === 'translations' || value === 'audio.translations') return '语音翻译'; if (value === 'file' || value === 'file.processing') return '文件处理'; if (value === 'embeddings') return '向量嵌入'; return value ? '未知类型：' + value : '未知类型'; }
       function statusText(status) { if (status === 'active') return '启用'; if (status === 'degraded') return '降级'; if (status === 'hidden') return '隐藏'; if (status === 'disabled') return '停用'; if (status === 'queued') return '排队中'; if (status === 'running') return '运行中'; if (status === 'succeeded') return '成功'; if (status === 'failed') return '失败'; if (status === 'canceled') return '已取消'; if (status === 'expired') return '已过期'; if (status === 'ok') return '正常'; if (status === 'warning') return '警告'; if (status === 'error') return '异常'; return status; }

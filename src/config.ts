@@ -77,6 +77,7 @@ export function listModels(config: GatewayConfig): ModelConfig[] {
           modality: upstreamModel.modality,
           supports_stream: upstreamModel.supports_stream !== false,
           supports_async: upstreamModel.supports_async !== false,
+          image_mode: upstreamModel.image_mode,
           status: upstreamModel.status || "active",
           price: upstreamModel.price,
           price_unit: upstreamModel.price_unit,
@@ -162,6 +163,7 @@ function toProviderRoute(upstream: UpstreamConfig, model: UpstreamModelConfig): 
     modality: model.modality,
     supports_stream: model.supports_stream !== false,
     supports_async: model.supports_async !== false,
+    image_mode: model.image_mode,
     priority: model.priority,
     weight: model.weight,
     status: model.status || "active"

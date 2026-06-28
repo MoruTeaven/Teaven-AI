@@ -261,6 +261,7 @@ http://localhost:8787/account
 | `model` | `modality` | `text`、`image`、`video` 或 `file` |
 | `model` | `supports_stream` | 是否支持流式文本调用 |
 | `model` | `supports_async` | 是否支持异步任务 |
+| `model` | `image_mode` | 图片生成模式标签，仅 `image` 模态有值：`text-to-image`（文生图）、`image-to-image`（图生图）、`both`（都支持） |
 | `model` | `status` | 模型状态，用户中心只返回非 `disabled` 模型 |
 
 获取用户中心首页数据：
@@ -778,6 +779,9 @@ Cookie: teaven_account_session=<session>
 | 字段 | 类型 | 默认值 | 说明 |
 | --- | --- | --- | --- |
 | `prompt` | `string` | 必填 | 生图提示词。可放在顶层 `prompt`，也可放在 `input.prompt`。 |
+| `image` | `string \| string[]` | 无 | 参考图片（图生图）。支持 URL（`https://...`）或 base64（`data:image/png;base64,...`）。传入单张图片时为字符串，多张时为数组。 |
+| `mask` | `string` | 无 | 局部重绘遮罩图片，格式同 `image`。白色区域为重绘区域，黑色区域保留原图。仅对支持 inpaint 的上游生效。 |
+| `strength` | `number` | 上游默认 | 重绘强度，取值 0~1。值越大与原图差异越大，值越小越保留原图内容。仅对支持该参数的上游生效。 |
 | `size` | `string` | `1024x1024` | 图片尺寸，例如 `1024x1024`。支持该字段的 Provider 会自动拆成上游需要的尺寸参数。 |
 | `width` | `number` | 从 `size` 推导 | 图片宽度。传了 `width`/`height` 时优先级高于 `size`。 |
 | `height` | `number` | 从 `size` 推导 | 图片高度。传了 `width`/`height` 时优先级高于 `size`。 |
@@ -791,11 +795,23 @@ Cookie: teaven_account_session=<session>
 | `style` | `string` | 无 | 图片风格，主要用于 OpenAI 兼容类生图模型，取值由上游决定。 |
 | `provider_params` | `object` | 无 | Provider 原生参数透传区。只有当标准字段不足以表达某个上游私有参数时使用。 |
 
+图生图说明：
+
+- 传入 `image` 参数即可启用图生图模式。未传入 `image` 时为普通文生图。
+- 如果模型的 `image_mode` 为 `text-to-image`，传入 `image` 会返回 `400` 错误。
+- 如果 Provider 不支持图生图，也会返回明确错误。
+- `image` 支持 URL 和 base64 两种格式。URL 由上游直接拉取；base64 由平台解码后转发。
+- `mask` 用于局部重绘（inpaint），需要配合 `image` 使用。
+- `strength` 控制重绘强度，取值 0~1。
+
 Provider 参数映射：
 
 | 平台标准字段 | `moark-async` 上游字段 | `openai-compatible` 上游字段 |
 | --- | --- | --- |
 | `prompt` | `prompt` | `prompt` |
+| `image` | `reference_image` | `image`（multipart/form-data） |
+| `mask` | `mask_image` | `mask`（multipart/form-data） |
+| `strength` | `strength` | `strength` |
 | `size` | `width` + `height` | `size` |
 | `width` / `height` | `width` / `height` | `size`，格式为 `{width}x{height}` |
 | `image_count` | `num_images_per_prompt` | `n` |
