@@ -122,15 +122,16 @@ Content-Type: image/png
 | `mask` | `string` | 无 | 局部重绘遮罩 |
 | `strength` | `number` | 上游默认 | 重绘强度 0~1 |
 | `mode` | `string` | `image-to-image` | 图生图模式 |
-| `width` | `number` | `1024` | 图片宽度（像素） |
-| `height` | `number` | `1024` | 图片高度（像素） |
+| `width` | `number` | `1024` | 图片宽度（像素）。与 `aspect_ratio` 互斥 |
+| `height` | `number` | `1024` | 图片高度（像素）。与 `aspect_ratio` 互斥 |
+| `aspect_ratio` | `string` | 无 | 图片比例，如 `"1:1"`、`"16:9"`、`"9:16"`。网关自动从模型支持的尺寸列表中匹配。与 `width`/`height` 互斥 |
+| `quality` | `string` | 无 | 图片画质，如 `"standard"`、`"hd"`。网关自动从模型支持的尺寸列表中匹配。可与 `aspect_ratio` 组合使用 |
 | `image_count` | `number` | `1` | 生成数量 |
 | `steps` | `number` | `30` | 采样步数 |
 | `guidance_scale` | `number` | `1.0` | 引导强度 |
 | `negative_prompt` | `string` | `""` | 反向提示词 |
 | `seed` | `number` | 无 | 随机种子 |
 | `response_format` | `string` | `url` | 返回格式 |
-| `quality` | `string` | 无 | 图片质量 |
 | `style` | `string` | 无 | 图片风格 |
 | `provider_params` | `object` | 无 | 上游原生参数透传 |
 

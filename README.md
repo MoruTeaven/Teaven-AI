@@ -785,8 +785,10 @@ Cookie: teaven_account_session=<session>
 | `image` | `string \| string[]` | 无 | 参考图片（图生图）。支持 URL（`https://...`）或 base64（`data:image/png;base64,...`）。传入单张图片时为字符串，多张时为数组。 |
 | `mask` | `string` | 无 | 局部重绘遮罩图片，格式同 `image`。白色区域为重绘区域，黑色区域保留原图。仅对支持 inpaint 的上游生效。 |
 | `strength` | `number` | 上游默认 | 重绘强度，取值 0~1。值越大与原图差异越大，值越小越保留原图内容。仅对支持该参数的上游生效。 |
-| `width` | `number` | `1024` | 图片宽度（像素）。可通过 `/v1/models` 接口查询模型支持的尺寸。 |
-| `height` | `number` | `1024` | 图片高度（像素）。可通过 `/v1/models` 接口查询模型支持的尺寸。 |
+| `width` | `number` | `1024` | 图片宽度（像素）。可通过 `/v1/models` 接口查询模型支持的尺寸。与 `aspect_ratio` 互斥。 |
+| `height` | `number` | `1024` | 图片高度（像素）。可通过 `/v1/models` 接口查询模型支持的尺寸。与 `aspect_ratio` 互斥。 |
+| `aspect_ratio` | `string` | 无 | 图片比例，如 `"1:1"`、`"16:9"`、`"9:16"`。网关自动从模型支持的尺寸列表中匹配。与 `width`/`height` 互斥。 |
+| `quality` | `string` | 无 | 图片画质，如 `"standard"`、`"hd"`。网关自动从模型支持的尺寸列表中匹配。可与 `aspect_ratio` 组合使用。 |
 | `image_count` | `number` | `1` | 生成图片数量。兼容旧字段 `n`。 |
 | `steps` | `number` | `30` | 迭代/采样步数。兼容旧字段 `num_inference_steps`。只有支持该能力的 Provider 才会生效。 |
 | `guidance_scale` | `number` | `1.0` | 提示词引导强度。兼容旧字段 `cfg_scale`。只有支持该能力的 Provider 才会生效。 |

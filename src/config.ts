@@ -283,6 +283,7 @@ export function listModels(config: GatewayConfig): ModelConfig[] {
           supports_stream: upstreamModel.supports_stream !== false,
           supports_async: upstreamModel.supports_async !== false,
           image_mode: upstreamModel.image_mode,
+          supported_image_sizes: upstreamModel.supported_image_sizes,
           status: upstreamModel.status || "active",
           price: upstreamModel.price,
           price_unit: upstreamModel.price_unit,

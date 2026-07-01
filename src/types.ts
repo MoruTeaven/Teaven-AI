@@ -52,6 +52,8 @@ export interface ImageSizePreset {
   width: number;
   /** 高度（像素） */
   height: number;
+  /** 画质标签，如 "standard"、"hd" */
+  quality?: string;
 }
 
 /**
@@ -227,6 +229,10 @@ export interface ImageGenerationRequest {
   width?: number;
   /** 图片高度（像素） */
   height?: number;
+  /** 图片比例，如 "1:1"、"16:9"，网关自动匹配到具体尺寸 */
+  aspect_ratio?: string;
+  /** 图片画质，如 "standard"、"hd"，网关自动匹配到具体尺寸 */
+  quality?: string;
   /** 采样步数 */
   steps?: number;
   /** 提示词引导强度 */
@@ -237,8 +243,6 @@ export interface ImageGenerationRequest {
   seed?: number;
   /** 图片返回格式 */
   response_format?: "url" | "b64_json";
-  /** 图片质量 */
-  quality?: string;
   /** 图片风格 */
   style?: string;
   /** Provider 原生参数透传区 */

@@ -6,6 +6,7 @@ import { recordCredentialUsage } from "../admin/credentials-store";
 import type { AuthContext, CredentialLimit, Env, GatewayConfig, ImageGenerationRequest, ProviderRouteConfig } from "../types";
 import { readJsonObject, requireString, resolveImageInputs, resolveImageInput } from "../utils/request";
 import { rewriteModelInJsonResponse } from "../utils/model-rewrite";
+import { resolveImageSize } from "../utils/image-size";
 
 export async function handleImageGenerations(
   request: Request,
@@ -68,6 +69,31 @@ export async function handleImageGenerations(
       "image",
       "unsupported_image_input"
     );
+  }
+
+  // 解析 aspect_ratio 和 quality，自动匹配 width/height
+  if (body.aspect_ratio !== undefined || body.quality !== undefined) {
+    if (body.width === undefined && body.height === undefined) {
+      const resolvedSize = resolveImageSize(
+        body.aspect_ratio as string | undefined,
+        body.quality as string | undefined,
+        model.supported_image_sizes
+      );
+      if (resolvedSize) {
+        body.width = resolvedSize.width;
+        body.height = resolvedSize.height;
+      } else if (model.supported_image_sizes && model.supported_image_sizes.length > 0) {
+        throw invalidRequest(
+          `Unsupported aspect_ratio or quality for model: ${requestedModelName}. Supported sizes: ${model.supported_image_sizes.map(s => `${s.name}${s.quality ? `(${s.quality})` : ''}`).join(', ')}`,
+          "aspect_ratio"
+        );
+      }
+    } else {
+      throw invalidRequest(
+        "Cannot specify both width/height and aspect_ratio/quality",
+        "aspect_ratio"
+      );
+    }
   }
 
   const route = selectRoute(model, false);

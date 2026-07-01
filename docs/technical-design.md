@@ -267,8 +267,10 @@ POST /v1/tasks
 | 参数 | 类型 | 默认值 | 说明 |
 | --- | --- | --- | --- |
 | `prompt` | string | 必填 | 生图提示词。 |
-| `width` | integer | `1024` | 图片宽度（像素）。可通过 `/v1/models` 接口查询模型支持的尺寸。 |
-| `height` | integer | `1024` | 图片高度（像素）。可通过 `/v1/models` 接口查询模型支持的尺寸。 |
+| `width` | integer | `1024` | 图片宽度（像素）。可通过 `/v1/models` 接口查询模型支持的尺寸。与 `aspect_ratio` 互斥。 |
+| `height` | integer | `1024` | 图片高度（像素）。可通过 `/v1/models` 接口查询模型支持的尺寸。与 `aspect_ratio` 互斥。 |
+| `aspect_ratio` | string | 无 | 图片比例，如 `"1:1"`、`"16:9"`、`"9:16"`。网关自动从模型支持的尺寸列表中匹配。与 `width`/`height` 互斥。 |
+| `quality` | string | 无 | 图片画质，如 `"standard"`、`"hd"`。网关自动从模型支持的尺寸列表中匹配。可与 `aspect_ratio` 组合使用。 |
 | `image_count` | integer | `1` | 生成图片数量。兼容旧字段 `n`。 |
 | `steps` | integer | `30` | 迭代/采样步数。兼容旧字段 `num_inference_steps`。 |
 | `guidance_scale` | number | `1.0` | 提示词引导强度。兼容旧字段 `cfg_scale`。 |

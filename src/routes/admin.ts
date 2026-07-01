@@ -1339,6 +1339,7 @@ function normalizeModelInput(value: unknown): AdminModelMutation {
     modality: modality as UpstreamModelConfig["modality"],
     supports_stream: input.supports_stream !== false,
     image_mode: normalizeImageMode(input.image_mode, modality),
+    supported_image_sizes: normalizeImageSizes(input.supported_image_sizes),
     priority: optionalNumber(input.priority, "priority"),
     weight: optionalNumber(input.weight, "weight"),
     status: normalizeModelStatus(input.status),
@@ -1347,6 +1348,43 @@ function normalizeModelInput(value: unknown): AdminModelMutation {
   };
 
   return { upstream_id, model };
+}
+
+/** 校验并规范化图片尺寸预设列表 */
+function normalizeImageSizes(value: unknown): UpstreamModelConfig["supported_image_sizes"] {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  if (!Array.isArray(value)) {
+    throw invalidRequest("supported_image_sizes 必须是数组", "supported_image_sizes");
+  }
+  if (value.length === 0) {
+    return [];
+  }
+
+  return value.map((item, index) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      throw invalidRequest(`supported_image_sizes[${index}] 必须是对象`, "supported_image_sizes");
+    }
+    const preset = item as Record<string, unknown>;
+    const name = requireString(preset.name, `supported_image_sizes[${index}].name`);
+    const width = optionalNumber(preset.width, `supported_image_sizes[${index}].width`);
+    const height = optionalNumber(preset.height, `supported_image_sizes[${index}].height`);
+
+    if (width === undefined || width <= 0) {
+      throw invalidRequest(`supported_image_sizes[${index}].width 必须是正整数`, "supported_image_sizes");
+    }
+    if (height === undefined || height <= 0) {
+      throw invalidRequest(`supported_image_sizes[${index}].height 必须是正整数`, "supported_image_sizes");
+    }
+
+    return {
+      name,
+      width,
+      height,
+      quality: typeof preset.quality === "string" ? preset.quality : undefined
+    };
+  });
 }
 
 /** 校验并规范化模型分组输入。成员引用合法性在 saveGatewayConfig → validateModelGroups 中再校验。 */
@@ -2894,6 +2932,14 @@ const ADMIN_APP_HTML = `<!doctype html>
           <label>计费单位<select id="model-price-unit"><option value="per_1m_tokens">元 / 1M Token</option><option value="per_call">元 / 次</option></select></label>
           <label>所属上游<select id="model-upstream-select"></select></label>
         </div>
+        <div id="image-sizes-section" style="margin-top: 14px; display: none;">
+          <div style="display:flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+            <strong>支持的图片尺寸</strong>
+            <button id="image-size-add" class="secondary compact" type="button">+ 添加尺寸</button>
+          </div>
+          <div id="image-sizes-list" class="stack"></div>
+          <p class="subtitle" style="margin-top: 6px;">为图片模型配置支持的比例和画质组合。比例名称如 "1:1"、"16:9"；画质如 "standard"、"hd"。</p>
+        </div>
         <div class="actions" style="margin-top: 14px;"><button id="save-model-form" type="button">保存模型</button></div>
       </section>
     </div>
@@ -3011,7 +3057,14 @@ const ADMIN_APP_HTML = `<!doctype html>
       document.getElementById('open-model-modal').addEventListener('click', function () { resetModelForm(); openModal('model-modal', 'model-modal-title', '添加模型'); });
       document.getElementById('open-user-modal').addEventListener('click', function () { resetUserForm(); openModal('user-modal', 'user-modal-title', '添加用户'); });
       document.getElementById('save-model-form').addEventListener('click', saveModelFromForm);
-      document.getElementById('model-modality').addEventListener('change', function () { toggleImageModeField(this.value); });
+      document.getElementById('model-modality').addEventListener('change', function () { toggleImageModeField(this.value); toggleImageSizesSection(this.value); });
+      document.getElementById('image-size-add').addEventListener('click', function () { appendImageSizeRow({ name: '', width: 1024, height: 1024, quality: '' }); });
+      document.getElementById('image-sizes-list').addEventListener('click', function (event) {
+        var remove = event.target.closest('[data-image-size-remove]');
+        if (!remove) return;
+        var row = remove.closest('[data-image-size-row]');
+        if (row) row.remove();
+      });
       document.getElementById('save-model-json').addEventListener('click', saveModelFromJson);
       document.getElementById('reset-models').addEventListener('click', resetModels);
       document.getElementById('open-group-modal').addEventListener('click', function () { resetGroupForm(); openModal('model-group-modal', 'model-group-modal-title', '添加分组'); });
@@ -3475,6 +3528,12 @@ const ADMIN_APP_HTML = `<!doctype html>
         if (!upstream_id) { setStatus('请先选择所属上游', 'error'); return; }
         var modality = value('model-modality');
         var model = { upstream_id: upstream_id, alias: value('model-alias'), provider_model: value('route-provider-model'), modality: modality, supports_stream: value('model-stream') === 'true', image_mode: modality === 'image' ? value('model-image-mode') : undefined, status: value('model-status'), priority: Number(value('route-priority') || 1), weight: 100, price: value('model-price'), price_unit: value('model-price-unit') };
+        if (modality === 'image') {
+          var imageSizes = collectImageSizes();
+          if (imageSizes.length > 0) {
+            model.supported_image_sizes = imageSizes;
+          }
+        }
         await saveModel(model, state.editingModelAlias);
         closeModal('model-modal');
       }
@@ -3839,6 +3898,7 @@ const ADMIN_APP_HTML = `<!doctype html>
         document.getElementById('route-provider-model').value = '';
         document.getElementById('model-modality').value = 'text';
         toggleImageModeField('text');
+        toggleImageSizesSection('text');
         document.getElementById('model-image-mode').value = 'text-to-image';
         document.getElementById('model-status').value = 'active';
         document.getElementById('model-stream').value = 'true';
@@ -3847,6 +3907,44 @@ const ADMIN_APP_HTML = `<!doctype html>
         document.getElementById('model-price-unit').value = 'per_1m_tokens';
         populateUpstreamSelect();
         document.getElementById('model-upstream-select').value = '';
+        document.getElementById('image-sizes-list').innerHTML = '';
+      }
+
+      function toggleImageSizesSection(modality) {
+        var section = document.getElementById('image-sizes-section');
+        if (section) section.style.display = modality === 'image' ? '' : 'none';
+      }
+
+      function appendImageSizeRow(preset) {
+        var container = document.getElementById('image-sizes-list');
+        var row = document.createElement('div');
+        row.setAttribute('data-image-size-row', '');
+        row.className = 'form-grid';
+        row.style.gridTemplateColumns = '1fr 1fr 1fr 1fr auto';
+        row.innerHTML =
+          '<label>比例名称<input class="image-size-name" placeholder="1:1 或 16:9" value="' + esc(preset.name || '') + '"></label>' +
+          '<label>宽度<input type="number" class="image-size-width" min="1" step="1" value="' + esc(String(preset.width || 1024)) + '"></label>' +
+          '<label>高度<input type="number" class="image-size-height" min="1" step="1" value="' + esc(String(preset.height || 1024)) + '"></label>' +
+          '<label>画质<input class="image-size-quality" placeholder="standard 或 hd" value="' + esc(preset.quality || '') + '"></label>' +
+          '<button class="danger compact" type="button" data-image-size-remove>移除</button>';
+        container.appendChild(row);
+      }
+
+      function collectImageSizes() {
+        var rows = document.querySelectorAll('[data-image-size-row]');
+        var sizes = [];
+        rows.forEach(function (row) {
+          var name = row.querySelector('.image-size-name').value.trim();
+          var width = parseInt(row.querySelector('.image-size-width').value, 10);
+          var height = parseInt(row.querySelector('.image-size-height').value, 10);
+          var quality = row.querySelector('.image-size-quality').value.trim();
+          if (name && width > 0 && height > 0) {
+            var preset = { name: name, width: width, height: height };
+            if (quality) preset.quality = quality;
+            sizes.push(preset);
+          }
+        });
+        return sizes;
       }
 
       function resetUserForm() {
@@ -3977,9 +4075,9 @@ const ADMIN_APP_HTML = `<!doctype html>
         }
       }
 
-      function fillModelEditor(alias, editing) { var model = state.models.find(function (item) { return item.alias === alias; }); if (!model) return; state.editingModelAlias = editing ? alias : null; var route = model.routes && model.routes[0] ? model.routes[0] : {}; document.getElementById('model-json').value = JSON.stringify(toModelInput(model), null, 2); document.getElementById('model-alias').value = model.alias; document.getElementById('model-modality').value = model.modality; toggleImageModeField(model.modality); document.getElementById('model-image-mode').value = model.image_mode || 'text-to-image'; document.getElementById('model-status').value = model.status; document.getElementById('model-stream').value = String(model.supports_stream !== false); var select = document.getElementById('model-upstream-select'); if (select.options.length > 1) { select.value = route.upstream_id || ''; } document.getElementById('route-provider-model').value = route.provider_model || ''; document.getElementById('route-priority').value = route.priority || 1; document.getElementById('model-price').value = model.price || ''; document.getElementById('model-price-unit').value = model.price_unit || 'per_1m_tokens'; }
+      function fillModelEditor(alias, editing) { var model = state.models.find(function (item) { return item.alias === alias; }); if (!model) return; state.editingModelAlias = editing ? alias : null; var route = model.routes && model.routes[0] ? model.routes[0] : {}; document.getElementById('model-json').value = JSON.stringify(toModelInput(model), null, 2); document.getElementById('model-alias').value = model.alias; document.getElementById('model-modality').value = model.modality; toggleImageModeField(model.modality); toggleImageSizesSection(model.modality); document.getElementById('model-image-mode').value = model.image_mode || 'text-to-image'; document.getElementById('model-status').value = model.status; document.getElementById('model-stream').value = String(model.supports_stream !== false); var select = document.getElementById('model-upstream-select'); if (select.options.length > 1) { select.value = route.upstream_id || ''; } document.getElementById('route-provider-model').value = route.provider_model || ''; document.getElementById('route-priority').value = route.priority || 1; document.getElementById('model-price').value = model.price || ''; document.getElementById('model-price-unit').value = model.price_unit || 'per_1m_tokens'; document.getElementById('image-sizes-list').innerHTML = ''; if (model.modality === 'image' && model.supported_image_sizes) { model.supported_image_sizes.forEach(function (preset) { appendImageSizeRow(preset); }); } }
       function viewModel(alias) { state.selectedModelAlias = alias; renderModelDetail(); setStatus('正在查看模型：' + alias, 'ok'); }
-      function toModelInput(model) { var route = model.routes && model.routes[0] ? model.routes[0] : {}; return { original_alias: model.alias, upstream_id: route.upstream_id, alias: model.alias, provider_model: route.provider_model, modality: model.modality, supports_stream: model.supports_stream, image_mode: model.image_mode || null, status: model.status, priority: route.priority, weight: route.weight, price: model.price || '', price_unit: model.price_unit || '' }; }
+      function toModelInput(model) { var route = model.routes && model.routes[0] ? model.routes[0] : {}; return { original_alias: model.alias, upstream_id: route.upstream_id, alias: model.alias, provider_model: route.provider_model, modality: model.modality, supports_stream: model.supports_stream, image_mode: model.image_mode || null, supported_image_sizes: model.supported_image_sizes || null, status: model.status, priority: route.priority, weight: route.weight, price: model.price || '', price_unit: model.price_unit || '' }; }
       function fillUpstreamEditor(id) { var upstreams = (state.overview && state.overview.upstreams) || []; var upstream = upstreams.find(function (item) { return item.id === id; }); if (!upstream) return; document.getElementById('upstream-admin-id').value = upstream.id || ''; document.getElementById('upstream-admin-name').value = upstream.name || ''; document.getElementById('upstream-admin-plugin').value = upstream.plugin_id || ''; document.getElementById('upstream-admin-base-url').value = upstream.base_url || ''; document.getElementById('upstream-admin-credential').value = upstream.credential_id || ''; document.getElementById('upstream-admin-status').value = upstream.status || 'active'; renderCredentialsList(upstream.credentials || []); }
       function viewUpstream(id) { var upstream = findOverviewUpstream(id); if (!upstream) { setStatus('未找到上游：' + id, 'error'); return; } var raw = findConfigUpstream(id) || upstream; var name = upstream.name || upstream.id; document.getElementById('upstream-view-title').textContent = '查看上游：' + name; document.getElementById('upstream-view-content').innerHTML = renderUpstreamDetail(upstream, raw); document.getElementById('upstream-view-json').textContent = JSON.stringify(toUpstreamDetailJson(upstream, raw), null, 2); openModal('upstream-view-modal', 'upstream-view-title', '查看上游：' + name); }
       function renderUpstreamDetail(upstream, raw) { var providers = (state.overview && state.overview.providers) || []; var plugin = findProvider(providers, upstream.plugin_id); var models = (raw && raw.models) || upstream.models || []; var modelRows = models.length ? models.map(function (model) { return '<tr><td><code>' + esc(model.alias) + '</code></td><td><code>' + esc(model.provider_model) + '</code></td><td>' + esc(modalityText(model.modality)) + '</td><td>' + (model.modality === 'image' ? esc(imageModeText(model.image_mode)) : '-') + '</td><td><span class="pill ' + statusClass(model.status || 'active') + '">' + esc(statusText(model.status || 'active')) + '</span></td><td>' + (model.supports_stream !== false ? '支持' : '不支持') + '</td><td>' + esc(model.priority == null ? '未设置' : model.priority) + '</td><td>' + esc(model.weight == null ? '未设置' : model.weight) + '</td><td>' + priceText(model.price, model.price_unit) + '</td></tr>'; }).join('') : '<tr><td colspan="9" class="empty">暂无模型。</td></tr>'; var credentials = upstream.credentials || []; var credRows = credentials.length ? credentials.map(function (cred) { var limits = Array.isArray(cred.limits) ? cred.limits : []; var limitText = limits.length ? limits.map(function (l) { return windowText(l.window) + '：' + (l.max_requests == null ? '∞ req' : (l.max_requests + ' req')) + ' / ' + (l.max_tokens == null ? '∞ tok' : (l.max_tokens + ' tok')); }).join('；') : '无限制'; return '<tr><td><code>' + esc(cred.id) + '</code>' + (cred.label ? '<br><span class="muted">' + esc(cred.label) + '</span>' : '') + '</td><td><code>' + esc(cred.credential_id || '未配置') + '</code><br><span class="pill ' + (cred.credential_configured ? 'ok' : 'danger') + '">' + (cred.credential_configured ? '已配置' : '缺少') + '</span></td><td>' + esc(cred.weight == null ? 1 : cred.weight) + '</td><td><span class="pill ' + statusClass(cred.status || 'active') + '">' + esc(statusText(cred.status || 'active')) + '</span></td><td style="font-size:12px;">' + esc(limitText) + '</td></tr>'; }).join('') : '<tr><td colspan="5" class="empty">未配置多凭证池，使用上方默认 API Key。</td></tr>'; return '<div class="entity-meta">' +
