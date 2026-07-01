@@ -24,9 +24,8 @@ const MANIFEST: ProviderPluginManifest = {
         { name: "image", type: "string", description: "参考图片 URL 或 base64", maps_to: "image" },
         { name: "mask", type: "string", description: "局部重绘遮罩", maps_to: "mask" },
         { name: "strength", type: "number", description: "重绘强度 0~1", maps_to: "strength" },
-        { name: "size", type: "string", description: "图片尺寸", maps_to: "size" },
-        { name: "width", type: "integer", description: "图片宽度，需和 height 一起传", maps_to: "size" },
-        { name: "height", type: "integer", description: "图片高度，需和 width 一起传", maps_to: "size" },
+        { name: "width", type: "integer", description: "图片宽度（像素）", maps_to: "width" },
+        { name: "height", type: "integer", description: "图片高度（像素）", maps_to: "height" },
         { name: "image_count", type: "integer", default: 1, description: "生成图片数量", maps_to: "n", aliases: ["n"] },
         { name: "response_format", type: "string", default: "url", description: "图片返回格式", maps_to: "response_format" },
         { name: "quality", type: "string", description: "图片质量，具体取值由上游模型决定", maps_to: "quality" },
@@ -191,7 +190,10 @@ async function forwardImageEdit(
     formData.append("mask", maskBlob, "mask.png");
   }
 
-  if (request.size) formData.append("size", request.size);
+  // 构造 size 参数（width x height）
+  if (request.width && request.height) {
+    formData.append("size", `${request.width}x${request.height}`);
+  }
   const count = request.image_count || request.n;
   if (count) formData.append("n", String(count));
   if (request.response_format) formData.append("response_format", request.response_format);
@@ -264,7 +266,7 @@ function buildOpenAIImageRequest(request: ImageGenerationRequest, providerModel:
   if (imageCount !== undefined) {
     upstreamRequest.n = imageCount;
   }
-  if (!request.size && width !== undefined && height !== undefined) {
+  if (width !== undefined && height !== undefined) {
     upstreamRequest.size = `${width}x${height}`;
   }
   delete upstreamRequest.image_count;

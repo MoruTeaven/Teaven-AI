@@ -22,9 +22,8 @@ const MANIFEST: ProviderPluginManifest = {
         { name: "image", type: "string", description: "参考图片 URL 或 base64", maps_to: "reference_image" },
         { name: "mask", type: "string", description: "局部重绘遮罩", maps_to: "mask_image" },
         { name: "strength", type: "number", description: "重绘强度 0~1", maps_to: "strength" },
-        { name: "size", type: "string", default: "1024x1024", description: "图片尺寸，会解析为 width 和 height", maps_to: "width,height" },
-        { name: "width", type: "integer", default: 1024, description: "图片宽度", maps_to: "width" },
-        { name: "height", type: "integer", default: 1024, description: "图片高度", maps_to: "height" },
+        { name: "width", type: "integer", default: 1024, description: "图片宽度（像素）", maps_to: "width" },
+        { name: "height", type: "integer", default: 1024, description: "图片高度（像素）", maps_to: "height" },
         { name: "image_count", type: "integer", default: 1, description: "生成图片数量", maps_to: "num_images_per_prompt", aliases: ["n"] },
         { name: "steps", type: "integer", default: 30, description: "迭代/采样步数", maps_to: "num_inference_steps", aliases: ["num_inference_steps"] },
         { name: "guidance_scale", type: "number", default: 1.0, description: "提示词引导强度", maps_to: "cfg_scale", aliases: ["cfg_scale"] },
@@ -134,7 +133,6 @@ async function forwardAsyncImageGeneration(
 
 function buildMoarkImageRequest(request: ImageGenerationRequest, providerModel: string): Record<string, unknown> {
   const providerParams = objectParam(request.provider_params);
-  const parsedSize = parseSize(request.size);
   const upstreamRequest: Record<string, unknown> = {
     ...providerParams,
     model: providerModel,
@@ -149,8 +147,8 @@ function buildMoarkImageRequest(request: ImageGenerationRequest, providerModel: 
 
   const width = numberParam(request.width, providerParams.width);
   const height = numberParam(request.height, providerParams.height);
-  upstreamRequest.width = width ?? parsedSize?.width ?? 1024;
-  upstreamRequest.height = height ?? parsedSize?.height ?? 1024;
+  upstreamRequest.width = width ?? 1024;
+  upstreamRequest.height = height ?? 1024;
 
   // 图生图参数映射
   const imageValue = Array.isArray(request.image) ? request.image[0] : request.image;
@@ -450,17 +448,6 @@ function firstString(...values: unknown[]): string | undefined {
     }
   }
   return undefined;
-}
-
-function parseSize(size: unknown): { width: number; height: number } | undefined {
-  if (typeof size !== "string") {
-    return undefined;
-  }
-  const match = /^(\d+)x(\d+)$/.exec(size);
-  if (!match) {
-    return undefined;
-  }
-  return { width: Number(match[1]), height: Number(match[2]) };
 }
 
 function truncateString(value: string, maxLength: number): string {

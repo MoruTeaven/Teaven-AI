@@ -60,7 +60,8 @@ Authorization: Bearer sk-...
     "prompt": "将这张照片转为油画风格",
     "image": "https://example.com/input-photo.jpg",
     "strength": 0.75,
-    "size": "1024x1024"
+    "width": 1024,
+    "height": 1024
   }
 }
 ```
@@ -80,7 +81,8 @@ Authorization: Bearer sk-...
     "image": "data:image/png;base64,iVBORw0KGgo...",
     "mask": "data:image/png;base64,iVBORw0KGgo...",
     "mode": "inpaint",
-    "size": "1024x1024"
+    "width": 1024,
+    "height": 1024
   }
 }
 ```
@@ -120,9 +122,8 @@ Content-Type: image/png
 | `mask` | `string` | 无 | 局部重绘遮罩 |
 | `strength` | `number` | 上游默认 | 重绘强度 0~1 |
 | `mode` | `string` | `image-to-image` | 图生图模式 |
-| `size` | `string` | `1024x1024` | 图片尺寸 |
-| `width` | `number` | 从 size 推导 | 图片宽度 |
-| `height` | `number` | 从 size 推导 | 图片高度 |
+| `width` | `number` | `1024` | 图片宽度（像素） |
+| `height` | `number` | `1024` | 图片高度（像素） |
 | `image_count` | `number` | `1` | 生成数量 |
 | `steps` | `number` | `30` | 采样步数 |
 | `guidance_scale` | `number` | `1.0` | 引导强度 |
@@ -505,7 +506,8 @@ function normalizeImageForUpstream(image: string | string[]): string | string[]
   "prompt": "转为油画风格",
   "image": "https://example.com/photo.jpg",
   "strength": 0.75,
-  "size": "1024x1024",
+  "width": 1024,
+  "height": 1024,
   "image_count": 1
 }
 ```
@@ -518,7 +520,8 @@ function normalizeImageForUpstream(image: string | string[]): string | string[]
   "image": "inputs/task_xxx/abc123.jpg",
   "image_source": "r2",
   "strength": 0.75,
-  "size": "1024x1024"
+  "width": 1024,
+  "height": 1024
 }
 ```
 

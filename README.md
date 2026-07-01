@@ -717,7 +717,8 @@ Cookie: teaven_account_session=<session>
   "model": "image-model",
   "prompt": "一只橘猫",
   "input": {
-    "size": "1024x1024",
+    "width": 1024,
+    "height": 1024,
     "image_count": 1,
     "steps": 30,
     "guidance_scale": 1,
@@ -754,7 +755,8 @@ Cookie: teaven_account_session=<session>
     "error": null
   },
   "input": {
-    "size": "1024x1024",
+    "width": 1024,
+    "height": 1024,
     "image_count": 1,
     "steps": 30,
     "guidance_scale": 1,
@@ -783,9 +785,8 @@ Cookie: teaven_account_session=<session>
 | `image` | `string \| string[]` | 无 | 参考图片（图生图）。支持 URL（`https://...`）或 base64（`data:image/png;base64,...`）。传入单张图片时为字符串，多张时为数组。 |
 | `mask` | `string` | 无 | 局部重绘遮罩图片，格式同 `image`。白色区域为重绘区域，黑色区域保留原图。仅对支持 inpaint 的上游生效。 |
 | `strength` | `number` | 上游默认 | 重绘强度，取值 0~1。值越大与原图差异越大，值越小越保留原图内容。仅对支持该参数的上游生效。 |
-| `size` | `string` | `1024x1024` | 图片尺寸，例如 `1024x1024`。支持该字段的 Provider 会自动拆成上游需要的尺寸参数。 |
-| `width` | `number` | 从 `size` 推导 | 图片宽度。传了 `width`/`height` 时优先级高于 `size`。 |
-| `height` | `number` | 从 `size` 推导 | 图片高度。传了 `width`/`height` 时优先级高于 `size`。 |
+| `width` | `number` | `1024` | 图片宽度（像素）。可通过 `/v1/models` 接口查询模型支持的尺寸。 |
+| `height` | `number` | `1024` | 图片高度（像素）。可通过 `/v1/models` 接口查询模型支持的尺寸。 |
 | `image_count` | `number` | `1` | 生成图片数量。兼容旧字段 `n`。 |
 | `steps` | `number` | `30` | 迭代/采样步数。兼容旧字段 `num_inference_steps`。只有支持该能力的 Provider 才会生效。 |
 | `guidance_scale` | `number` | `1.0` | 提示词引导强度。兼容旧字段 `cfg_scale`。只有支持该能力的 Provider 才会生效。 |
@@ -813,8 +814,8 @@ Provider 参数映射：
 | `image` | `reference_image` | `image`（multipart/form-data） |
 | `mask` | `mask_image` | `mask`（multipart/form-data） |
 | `strength` | `strength` | `strength` |
-| `size` | `width` + `height` | `size` |
-| `width` / `height` | `width` / `height` | `size`，格式为 `{width}x{height}` |
+| `width` | `width` | `size`（格式：`{width}x{height}`） |
+| `height` | `height` | `size`（格式：`{width}x{height}`） |
 | `image_count` | `num_images_per_prompt` | `n` |
 | `n` | `num_images_per_prompt` | `n` |
 | `steps` | `num_inference_steps` | 非 OpenAI 标准字段；如上游兼容实现支持，可放入 `provider_params` |

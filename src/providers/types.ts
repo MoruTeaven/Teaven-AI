@@ -1,4 +1,4 @@
-import type { AsyncTaskOutputItem, AsyncTaskRecord, AsyncTaskStatus, ChatCompletionRequest, Env, ImageGenerationRequest, ProviderRouteConfig } from "../types";
+import type { AsyncTaskOutputItem, AsyncTaskRecord, AsyncTaskStatus, ChatCompletionRequest, Env, ImageGenerationRequest, ImageSizePreset, ProviderRouteConfig } from "../types";
 
 export type ExecutionMode = "sync" | "stream" | "stream_or_sync" | "async_polling" | "async_webhook";
 
@@ -16,6 +16,8 @@ export interface ProviderCapability {
   supports_strength?: boolean;
   /** 支持的图生图模式列表 */
   supported_image_modes?: string[];
+  /** 支持的图片尺寸列表 */
+  supported_image_sizes?: ImageSizePreset[];
 }
 
 export interface ProviderParameterSpec {

@@ -27,6 +27,8 @@ export default {
       const response = await routeRequest(request, env, requestId);
       return withCors(response, request);
     } catch (error) {
+      const errUrl = new URL(request.url);
+      console.error(`[${requestId}] ${request.method} ${errUrl.pathname}:`, error);
       return errorResponse(error, requestId, request);
     }
   },

@@ -100,7 +100,12 @@ export async function handleCreateTask(request: Request, env: Env, auth: AuthCon
 
   await enqueueCreatedTask(env, task);
 
-  await recordTaskUsage(env, task, 202, Date.now() - startedAt, hitGroup ? requestedModelName : undefined);
+  // 用量记录失败不应影响已创建的任务返回
+  try {
+    await recordTaskUsage(env, task, 202, Date.now() - startedAt, hitGroup ? requestedModelName : undefined);
+  } catch (err) {
+    console.error(`[${requestId}] recordTaskUsage failed for task ${task.id}:`, err);
+  }
 
   return jsonResponse(await publicTask(task, env, request.url), {
     status: 202,
@@ -238,6 +243,7 @@ async function enqueueCreatedTask(env: Env, task: AsyncTaskRecord): Promise<void
     task.updated_at = new Date().toISOString();
     await saveTask(env, task);
   } catch (err) {
+    console.error(`[enqueueCreatedTask] failed to enqueue task ${task.id}:`, err);
     appendTaskEvent(task, {
       stage: "queue.enqueue_failed",
       status: task.status,
@@ -245,7 +251,7 @@ async function enqueueCreatedTask(env: Env, task: AsyncTaskRecord): Promise<void
     });
     task.updated_at = new Date().toISOString();
     await saveTask(env, task);
-    throw err;
+    // 任务已持久化到 D1，入队失败不抛异常，通过事件记录供排障
   }
 }
 

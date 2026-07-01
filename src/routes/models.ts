@@ -33,6 +33,7 @@ export async function handleListModels(
       modality: model.modality,
       is_group: false,
       image_mode: model.image_mode || null,
+      supported_image_sizes: model.supported_image_sizes || null,
       price: model.price || null,
       price_unit: model.price_unit || null
     }));

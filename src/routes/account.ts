@@ -693,6 +693,7 @@ async function enqueueAccountTestTask(env: Env, task: AsyncTaskRecord): Promise<
     task.updated_at = new Date().toISOString();
     await saveTask(env, task);
   } catch (err) {
+    console.error(`[enqueueAccountTestTask] failed to enqueue task ${task.id}:`, err);
     appendTaskEvent(task, {
       stage: "queue.enqueue_failed",
       status: task.status,
@@ -700,7 +701,7 @@ async function enqueueAccountTestTask(env: Env, task: AsyncTaskRecord): Promise<
     });
     task.updated_at = new Date().toISOString();
     await saveTask(env, task);
-    throw err;
+    // 任务已持久化到 D1，入队失败不抛异常，通过事件记录供排障
   }
 }
 
@@ -1697,9 +1698,8 @@ Content-Type: application/json</code></pre></div>
               <thead><tr><th>字段</th><th>类型</th><th>默认值</th><th>说明</th></tr></thead>
               <tbody>
                 <tr><td><code>prompt</code></td><td>string</td><td>必填</td><td>生图提示词。可放在任务顶层 <code>prompt</code>，也可放在 <code>input.prompt</code>。</td></tr>
-                <tr><td><code>size</code></td><td>string</td><td><code>1024x1024</code></td><td>图片尺寸，例如 <code>1024x1024</code>。支持该字段的 Provider 会自动拆成上游需要的尺寸参数。</td></tr>
-                <tr><td><code>width</code></td><td>integer</td><td>从 <code>size</code> 推导</td><td>图片宽度。传了 <code>width</code> / <code>height</code> 时优先级高于 <code>size</code>。</td></tr>
-                <tr><td><code>height</code></td><td>integer</td><td>从 <code>size</code> 推导</td><td>图片高度。传了 <code>width</code> / <code>height</code> 时优先级高于 <code>size</code>。</td></tr>
+                <tr><td><code>width</code></td><td>integer</td><td><code>1024</code></td><td>图片宽度（像素）。可通过 <code>/v1/models</code> 接口查询模型支持的尺寸。</td></tr>
+                <tr><td><code>height</code></td><td>integer</td><td><code>1024</code></td><td>图片高度（像素）。可通过 <code>/v1/models</code> 接口查询模型支持的尺寸。</td></tr>
                 <tr><td><code>image_count</code></td><td>integer</td><td><code>1</code></td><td>生成图片数量。兼容旧字段 <code>n</code>。</td></tr>
                 <tr><td><code>steps</code></td><td>integer</td><td><code>30</code></td><td>迭代 / 采样步数。兼容旧字段 <code>num_inference_steps</code>。只有支持该能力的 Provider 才会生效。</td></tr>
                 <tr><td><code>guidance_scale</code></td><td>number</td><td><code>1.0</code></td><td>提示词引导强度。兼容旧字段 <code>cfg_scale</code>。只有支持该能力的 Provider 才会生效。</td></tr>
@@ -1720,8 +1720,8 @@ Content-Type: application/json</code></pre></div>
               <thead><tr><th>平台字段</th><th><code>moark-async</code> 上游字段</th><th><code>openai-compatible</code> 上游字段</th></tr></thead>
               <tbody>
                 <tr><td><code>prompt</code></td><td><code>prompt</code></td><td><code>prompt</code></td></tr>
-                <tr><td><code>size</code></td><td><code>width</code> + <code>height</code></td><td><code>size</code></td></tr>
-                <tr><td><code>width</code> / <code>height</code></td><td><code>width</code> / <code>height</code></td><td><code>size</code>，格式为 <code>{width}x{height}</code></td></tr>
+                <tr><td><code>width</code></td><td><code>width</code></td><td><code>size</code>（格式：<code>{width}x{height}</code>）</td></tr>
+                <tr><td><code>height</code></td><td><code>height</code></td><td><code>size</code>（格式：<code>{width}x{height}</code>）</td></tr>
                 <tr><td><code>image_count</code> / <code>n</code></td><td><code>num_images_per_prompt</code></td><td><code>n</code></td></tr>
                 <tr><td><code>steps</code> / <code>num_inference_steps</code></td><td><code>num_inference_steps</code></td><td>非 OpenAI 标准字段；如上游兼容实现支持，可放入 <code>provider_params</code></td></tr>
                 <tr><td><code>guidance_scale</code> / <code>cfg_scale</code></td><td><code>cfg_scale</code></td><td>非 OpenAI 标准字段；如上游兼容实现支持，可放入 <code>provider_params</code></td></tr>
@@ -2062,8 +2062,8 @@ Content-Type: application/json</code></pre></div>
       }
 
       function defaultTestInput(modality) {
-        if (modality === 'image') return { size: '1024x1024', image_count: 1, steps: 30, guidance_scale: 1, negative_prompt: '', response_format: 'url' };
-        if (modality === 'video') return { duration: 5, size: '1280x720', fps: 24 };
+        if (modality === 'image') return { width: 1024, height: 1024, image_count: 1, steps: 30, guidance_scale: 1, negative_prompt: '', response_format: 'url' };
+        if (modality === 'video') return { duration: 5, width: 1280, height: 720, fps: 24 };
         if (modality === 'file') return { file_url: 'https://example.com/input.pdf' };
         return {};
       }
@@ -2193,8 +2193,8 @@ Content-Type: application/json</code></pre></div>
       const imageModel = findModelByModality('image') || 'image-basic';
       const videoModel = findModelByModality('video') || 'video-basic';
       const mediaModels = state.models.filter((model) => model.modality === 'image' || model.modality === 'video' || model.modality === 'file');
-      const imageBody = JSON.stringify({ type: 'image', model: imageModel, input: { prompt: '一只猫坐在云端', size: '1024x1024', image_count: 1, steps: 30, guidance_scale: 1, negative_prompt: '低清晰度、畸形', seed: 123456, response_format: 'url' }, store_output: true, storage_ttl_seconds: 86400, callback_url: 'https://example.com/webhooks/ai-task', metadata: { biz_id: 'order_123' } }, null, 2);
-      const videoBody = JSON.stringify({ type: 'video', model: videoModel, input: { prompt: '海面日出，电影感镜头推进', duration: 5, size: '1280x720', fps: 24 }, store_output: true, storage_ttl_seconds: 86400, metadata: { scene: 'landing-page' } }, null, 2);
+      const imageBody = JSON.stringify({ type: 'image', model: imageModel, input: { prompt: '一只猫坐在云端', width: 1024, height: 1024, image_count: 1, steps: 30, guidance_scale: 1, negative_prompt: '低清晰度、畸形', seed: 123456, response_format: 'url' }, store_output: true, storage_ttl_seconds: 86400, callback_url: 'https://example.com/webhooks/ai-task', metadata: { biz_id: 'order_123' } }, null, 2);
+      const videoBody = JSON.stringify({ type: 'video', model: videoModel, input: { prompt: '海面日出，电影感镜头推进', duration: 5, width: 1280, height: 720, fps: 24 }, store_output: true, storage_ttl_seconds: 86400, metadata: { scene: 'landing-page' } }, null, 2);
 
       $('#mediaModelDocs').innerHTML = mediaModels.length ? '<table><thead><tr><th>模型</th><th>类型</th><th>异步</th></tr></thead><tbody>' + mediaModels.map((model) => '<tr><td><code>' + escapeHtml(model.id) + '</code></td><td>' + escapeHtml(modalityText(model.modality)) + '</td><td>' + (model.supports_async ? '支持' : '未声明') + '</td></tr>').join('') + '</tbody></table>' : '<div class="notice">当前没有配置图片、视频或文件模型。可先在后台添加非文本模型，再按下方异步任务接口调用。</div>';
       $('#imageTaskExample').textContent = ['POST ' + origin + '/v1/tasks', 'Authorization: Bearer YOUR_API_KEY', 'Content-Type: application/json', 'Idempotency-Key: image-demo-001', '', imageBody].join('\n');

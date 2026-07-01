@@ -43,6 +43,18 @@ export type CredentialStatus = "active" | "disabled";
 export type PriceUnit = "per_1m_tokens" | "per_call";
 
 /**
+ * 图片尺寸预设档位
+ */
+export interface ImageSizePreset {
+  /** 档位名称，如 "1:1"、"16:9" */
+  name: string;
+  /** 宽度（像素） */
+  width: number;
+  /** 高度（像素） */
+  height: number;
+}
+
+/**
  * 凭证配额的时间窗口。
  * - hour:  按小时刷新（整点重置，固定窗口）
  * - day:   按日固定额度（自然日重置）
@@ -88,6 +100,8 @@ export interface UpstreamModelConfig {
   supports_async?: boolean;
   /** 图片生成模式标签，仅 modality 为 image 时有效 */
   image_mode?: ImageGenerationMode;
+  /** 支持的图片尺寸列表，仅 modality 为 image 时有效 */
+  supported_image_sizes?: ImageSizePreset[];
   priority?: number;
   weight?: number;
   status?: UpstreamModelStatus;
@@ -124,6 +138,8 @@ export interface ProviderRouteConfig {
   supports_async?: boolean;
   /** 图片生成模式标签，仅 modality 为 image 时有效 */
   image_mode?: ImageGenerationMode;
+  /** 支持的图片尺寸列表，仅 modality 为 image 时有效 */
+  supported_image_sizes?: ImageSizePreset[];
   priority?: number;
   weight?: number;
   status?: UpstreamModelStatus;
@@ -136,6 +152,8 @@ export interface ModelConfig {
   supports_async?: boolean;
   /** 图片生成模式标签，仅 modality 为 image 时有效 */
   image_mode?: ImageGenerationMode;
+  /** 支持的图片尺寸列表，仅 modality 为 image 时有效 */
+  supported_image_sizes?: ImageSizePreset[];
   status?: ModelStatus;
   price?: string;
   price_unit?: PriceUnit;
@@ -205,16 +223,25 @@ export interface ImageGenerationRequest {
   mode?: "image-to-image" | "inpaint" | "style-transfer";
   image_count?: number;
   n?: number;
-  size?: string;
+  /** 图片宽度（像素） */
   width?: number;
+  /** 图片高度（像素） */
   height?: number;
+  /** 采样步数 */
   steps?: number;
+  /** 提示词引导强度 */
   guidance_scale?: number;
+  /** 反向提示词 */
   negative_prompt?: string;
+  /** 随机种子 */
   seed?: number;
+  /** 图片返回格式 */
   response_format?: "url" | "b64_json";
+  /** 图片质量 */
   quality?: string;
+  /** 图片风格 */
   style?: string;
+  /** Provider 原生参数透传区 */
   provider_params?: Record<string, unknown>;
   [key: string]: unknown;
 }

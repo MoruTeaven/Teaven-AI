@@ -1,46 +1,26 @@
-name = "teaven-ai"
+name = "teaven-ai-gateway"
 main = "src/index.ts"
-compatibility_date = "2026-06-12"
-
-[[kv_namespaces]]
-binding = "AI_GATEWAY_KV"
-id = "9b3b75b6e5784d62a6a48bdc3bfde967"
-
-[[queues.producers]]
-queue = "teaven-ai"
-binding = "TASK_QUEUE"
-
-[[queues.consumers]]
-queue = "teaven-ai"
-max_batch_size = 10
-max_batch_timeout = 5
-max_retries = 3
-dead_letter_queue = "teaven-ai-dlq"
+compatibility_date = "2024-12-01"
 
 [[d1_databases]]
 binding = "DB"
 database_name = "teaven-ai-db"
 database_id = "3ecc5cdc-ac1a-410a-9c3e-a3d7ac9638bd"
 
-[[migrations]]
-tag = "v1"
+[[kv_namespaces]]
+binding = "AI_GATEWAY_KV"
+id = "9b3b75b6e5784d62a6a48bdc3bfde967"
 
 [[r2_buckets]]
 binding = "FILES"
 bucket_name = "teaven-ai"
 
-[observability]
-enabled = false
-head_sampling_rate = 1
+[[queues.producers]]
+binding = "TASK_QUEUE"
+queue = "teaven-ai-gateway-tasks"
 
-[observability.logs]
-enabled = true
-head_sampling_rate = 1
-persist = true
-invocation_logs = true
-
-[observability.traces]
-enabled = false
-persist = true
-head_sampling_rate = 1
-
+[[queues.consumers]]
+queue = "teaven-ai-gateway-tasks"
+max_batch_size = 10
+max_batch_timeout = 10
+max_retries = 3

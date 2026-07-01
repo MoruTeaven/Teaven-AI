@@ -493,7 +493,8 @@ curl -X POST http://localhost:8787/v1/async/images/generations \
     "model": "Qwen-Image",
     "prompt": "A beautiful sunset over mountains",
     "n": 1,
-    "size": "1024x1024",
+    "width": 1024,
+    "height": 1024,
     "response_format": "url"
   }'
 ```
