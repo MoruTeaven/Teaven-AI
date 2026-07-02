@@ -263,6 +263,7 @@ http://localhost:8787/account
 | `model` | `supports_stream` | 是否支持流式文本调用 |
 | `model` | `supports_async` | 是否支持异步任务 |
 | `model` | `image_mode` | 图片生成模式标签，仅 `image` 模态有值：`text-to-image`（文生图）、`image-to-image`（图生图）、`both`（都支持） |
+| `model` | `supported_image_sizes` | 图片模型支持的尺寸预设列表，包含 `name`（比例名称）、`width`、`height` 和可选的 `quality`（画质标签）。调用时可使用 `aspect_ratio` 和 `quality` 让网关自动匹配。 |
 | `model` | `status` | 模型状态，用户中心只返回非 `disabled` 模型 |
 
 获取用户中心首页数据：
@@ -710,7 +711,7 @@ Cookie: teaven_account_session=<session>
 }
 ```
 
-非文本模型请求示例：
+非文本模型请求示例（使用 `width`/`height`）：
 
 ```json
 {
@@ -724,6 +725,22 @@ Cookie: teaven_account_session=<session>
     "guidance_scale": 1,
     "negative_prompt": "低清晰度、畸形",
     "seed": 123456
+  },
+  "store_output": true,
+  "storage_ttl_seconds": 86400
+}
+```
+
+非文本模型请求示例（使用 `aspect_ratio`/`quality`）：
+
+```json
+{
+  "model": "image-model",
+  "prompt": "一只橘猫",
+  "input": {
+    "aspect_ratio": "16:9",
+    "quality": "hd",
+    "image_count": 1
   },
   "store_output": true,
   "storage_ttl_seconds": 86400
@@ -788,14 +805,13 @@ Cookie: teaven_account_session=<session>
 | `width` | `number` | `1024` | 图片宽度（像素）。可通过 `/v1/models` 接口查询模型支持的尺寸。与 `aspect_ratio` 互斥。 |
 | `height` | `number` | `1024` | 图片高度（像素）。可通过 `/v1/models` 接口查询模型支持的尺寸。与 `aspect_ratio` 互斥。 |
 | `aspect_ratio` | `string` | 无 | 图片比例，如 `"1:1"`、`"16:9"`、`"9:16"`。网关自动从模型支持的尺寸列表中匹配。与 `width`/`height` 互斥。 |
-| `quality` | `string` | 无 | 图片画质，如 `"standard"`、`"hd"`。网关自动从模型支持的尺寸列表中匹配。可与 `aspect_ratio` 组合使用。 |
+| `quality` | `string` | 无 | 图片画质，如 `"standard"`、`"hd"`。网关优先用于从模型支持的尺寸列表中匹配分辨率；未匹配时透传给上游。取值由上游决定。可与 `aspect_ratio` 组合使用。 |
 | `image_count` | `number` | `1` | 生成图片数量。兼容旧字段 `n`。 |
 | `steps` | `number` | `30` | 迭代/采样步数。兼容旧字段 `num_inference_steps`。只有支持该能力的 Provider 才会生效。 |
 | `guidance_scale` | `number` | `1.0` | 提示词引导强度。兼容旧字段 `cfg_scale`。只有支持该能力的 Provider 才会生效。 |
 | `negative_prompt` | `string` | `""` | 反向提示词。只有支持该能力的 Provider 才会生效。 |
 | `seed` | `number` | 无 | 随机种子，用于尽量复现结果，具体范围由上游决定。 |
 | `response_format` | `string` | `url` | 图片返回格式，常见值为 `url` 或 `b64_json`，具体支持由 Provider 决定。 |
-| `quality` | `string` | 无 | 图片质量，主要用于 OpenAI 兼容类生图模型，取值由上游决定。 |
 | `style` | `string` | 无 | 图片风格，主要用于 OpenAI 兼容类生图模型，取值由上游决定。 |
 | `provider_params` | `object` | 无 | Provider 原生参数透传区。只有当标准字段不足以表达某个上游私有参数时使用。 |
 
@@ -807,6 +823,13 @@ Cookie: teaven_account_session=<session>
 - `image` 支持 URL 和 base64 两种格式。URL 由上游直接拉取；base64 由平台解码后转发。
 - `mask` 用于局部重绘（inpaint），需要配合 `image` 使用。
 - `strength` 控制重绘强度，取值 0~1。
+
+图片尺寸匹配规则：
+
+- 用户可通过 `aspect_ratio`（比例）和 `quality`（画质）让网关自动匹配具体分辨率，无需手动传 `width`/`height`。
+- `aspect_ratio` 和 `width`/`height` 互斥，不能同时使用。
+- 匹配优先级：`aspect_ratio + quality` 完全匹配 → 仅 `aspect_ratio` 匹配 → 仅 `quality` 匹配 → 使用默认值。
+- 可通过 `/v1/models` 接口查询模型支持的 `supported_image_sizes` 列表，了解可用的比例和画质组合。
 
 Provider 参数映射：
 

@@ -221,6 +221,9 @@ async function handleUpdateAccountProfile(user: AdminUser, request: Request, env
   if (body.name !== undefined) {
     user.name = optionalBodyString(body.name, "name");
   }
+  if (body.nickname !== undefined) {
+    user.nickname = optionalBodyString(body.nickname, "nickname");
+  }
   user.updated_at = new Date().toISOString();
   await saveAdminUser(env, user);
 
@@ -778,6 +781,7 @@ function publicUser(user: AdminUser): Record<string, unknown> {
     organization_id: user.organization_id,
     email: user.email,
     name: user.name || null,
+    nickname: user.nickname || null,
     role: user.role,
     status: user.status,
     created_at: user.created_at,
@@ -1072,10 +1076,12 @@ function renderAccountLoginHtml(env: Env, errorMessage = ""): string {
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>登录 Teaven AI 用户中心</title>
+  <link rel="stylesheet" href="https://cdn.bootcdn.net/ajax/libs/remixicon/4.6.0/remixicon.css">
   <style>
     :root { color-scheme: light; --bg: #f9fafb; --panel: #ffffff; --line: #e5e7eb; --text: #111827; --muted: #6b7280; --accent: #7c3aed; --accent-strong: #6d28d9; --danger: #dc2626; }
+    html[data-theme="dark"] { color-scheme: dark; --bg: #0a0a0b; --panel: #141416; --line: #27272a; --text: #fafafa; --muted: #a1a1aa; --accent: #a78bfa; --accent-strong: #c4b5fd; --danger: #f87171; }
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 24px; color: var(--text); font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; background: var(--bg); -webkit-font-smoothing: antialiased; font-size: 14px; line-height: 1.5; }
+    body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 24px; color: var(--text); background: var(--bg); -webkit-font-smoothing: antialiased; font-size: 14px; line-height: 1.5; transition: background 200ms ease, color 200ms ease; }
     .shell { width: min(100%, 400px); }
     .card { border: 1px solid var(--line); border-radius: 12px; padding: 32px; background: var(--panel); }
     .eyebrow { color: var(--muted); font-size: 11px; font-weight: 500; letter-spacing: 0.06em; text-transform: uppercase; }
@@ -1086,10 +1092,14 @@ function renderAccountLoginHtml(env: Env, errorMessage = ""): string {
     input, button { width: 100%; font: inherit; }
     input { color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: 8px; outline: none; padding: 8px 12px; font-size: 13px; transition: border-color 150ms ease; }
     input:focus { border-color: var(--accent); }
-    button { border: 0; border-radius: 8px; color: #fff; background: var(--accent); cursor: pointer; font-weight: 500; font-size: 14px; padding: 10px 16px; min-height: 40px; transition: background 150ms ease; }
+    button { border: 0; border-radius: 8px; color: #fff; background: var(--accent); cursor: pointer; font-weight: 500; font-size: 14px; padding: 10px 16px; min-height: 40px; transition: background 150ms ease; display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
     button:hover { background: var(--accent-strong); }
     button:disabled { opacity: 0.5; cursor: not-allowed; }
     .alert { margin-top: 16px; border: 1px solid var(--line); border-radius: 8px; background: #fef2f2; color: var(--danger); padding: 12px 14px; font-size: 13px; }
+    html[data-theme="dark"] .alert { background: rgba(248, 113, 113, 0.1); }
+    .theme-toggle { position: fixed; top: 16px; right: 16px; width: 36px; height: 36px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); cursor: pointer; display: grid; place-items: center; transition: background 150ms ease, border-color 150ms ease; }
+    .theme-toggle:hover { background: var(--bg); border-color: var(--accent); }
+    .theme-toggle i { font-size: 18px; color: var(--text); }
   </style>
 </head>
 <body>
@@ -1105,10 +1115,36 @@ function renderAccountLoginHtml(env: Env, errorMessage = ""): string {
         <input id="email" name="email" type="email" autocomplete="email" required autofocus>
         <label for="access_token">访问口令</label>
         <input id="access_token" name="access_token" type="password" autocomplete="current-password" required>
-        <button type="submit" ${configured ? "" : "disabled"}>进入用户中心</button>
+        <button type="submit" ${configured ? "" : "disabled"}><i class="ri-login-box-line"></i>进入用户中心</button>
       </form>
     </section>
   </main>
+  <button class="theme-toggle" id="theme-toggle" type="button" aria-label="切换主题"><i class="ri-contrast-2-line"></i></button>
+  <script>
+    (function () {
+      var stored = localStorage.getItem('teaven_account_theme');
+      var theme = stored || (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+      applyTheme(theme);
+
+      var toggle = document.getElementById('theme-toggle');
+      if (toggle) toggle.addEventListener('click', function () {
+        var next = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+        applyTheme(next);
+        localStorage.setItem('teaven_account_theme', next);
+      });
+
+      if (window.matchMedia) {
+        window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', function (event) {
+          if (localStorage.getItem('teaven_account_theme')) return;
+          applyTheme(event.matches ? 'dark' : 'light');
+        });
+      }
+
+      function applyTheme(next) {
+        document.documentElement.setAttribute('data-theme', next);
+      }
+    })();
+  </script>
 </body>
 </html>`;
 }
@@ -1133,7 +1169,7 @@ function renderAccountAppHtml(env: Env): string {
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Teaven AI 用户中心</title>
-  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/remixicon/4.6.0/remixicon.min.css" />
+  <link rel="stylesheet" href="https://cdn.bootcdn.net/ajax/libs/remixicon/4.6.0/remixicon.css">
   <style>
     :root {
       color-scheme: light;
@@ -1198,7 +1234,6 @@ function renderAccountAppHtml(env: Env): string {
       min-height: 100vh;
       background: var(--bg);
       color: var(--text);
-      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
       transition: background 200ms var(--ease), color 200ms var(--ease);
       -webkit-font-smoothing: antialiased;
       font-size: 14px;
@@ -1225,10 +1260,10 @@ function renderAccountAppHtml(env: Env): string {
       outline: none; padding: 8px 12px; font-size: 13px;
       transition: border-color 150ms var(--ease);
     }
-    textarea { min-height: 80px; resize: vertical; font-family: "JetBrains Mono", Consolas, monospace; font-size: 13px; line-height: 1.6; }
+    textarea { min-height: 80px; resize: vertical; font-size: 13px; line-height: 1.6; }
     input:focus, select:focus, textarea:focus { border-color: var(--accent); }
     a { color: inherit; text-decoration: none; }
-    code { font-family: "JetBrains Mono", Consolas, monospace; font-size: 12px; }
+    code { font-size: 12px; }
 
     /* Layout */
     .layout { display: grid; grid-template-columns: var(--sidebar) minmax(0, 1fr); min-height: 100vh; }
@@ -1351,7 +1386,7 @@ function renderAccountAppHtml(env: Env): string {
     th { color: var(--muted); background: var(--panel-muted); font-size: 11px; letter-spacing: 0.05em; text-transform: uppercase; font-weight: 600; }
     tbody tr { transition: background 150ms var(--ease); }
     tbody tr:hover { background: var(--panel-muted); }
-    code, pre { font-family: "JetBrains Mono", Consolas, "SFMono-Regular", monospace; }
+    code, pre { font-size: 12px; }
     pre { margin: 0; white-space: pre-wrap; word-break: break-word; }
     code { color: var(--accent); }
     .table-scroll { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--radius); }
@@ -1595,7 +1630,7 @@ function renderAccountAppHtml(env: Env): string {
                   <div><span style="font-weight:bold;">耗时:</span> <span id="testDuration">-</span>ms</div>
                 </div>
                 <div id="testPreview" class="test-preview"></div>
-                <div style="border:1px solid var(--line);border-radius:12px;background:var(--panel-strong);padding:12px;overflow:auto;max-height:400px;font-family:Consolas,'SFMono-Regular',monospace;font-size:13px;line-height:1.5;">
+                <div style="border:1px solid var(--line);border-radius:var(--radius);background:var(--panel-strong);padding:12px;overflow:auto;max-height:400px;font-size:13px;line-height:1.5;">
                   <pre id="testOutput" style="margin:0;white-space:pre-wrap;word-break:break-word;"></pre>
                 </div>
              </div>

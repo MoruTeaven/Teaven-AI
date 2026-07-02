@@ -153,15 +153,7 @@ export async function processTask(env: Env, taskId: string): Promise<void> {
   const pollAttempt = pollCount + 1;
   const pollStartedAt = new Date().toISOString();
   task.provider_context._last_poll_at = pollStartedAt;
-  appendTaskEvent(task, {
-    stage: "poll.started",
-    status: task.status,
-    attempt: pollAttempt,
-    process_id: processId,
-    provider_task_id: task.provider_task_id,
-    credential_ref: task.credential_ref || null,
-    message: "Polling upstream task status"
-  });
+  // 不记录 poll.started 事件，减少中间轮询的 events 膨胀
 
   try {
     const registry = createProviderRegistry(env);
@@ -198,6 +190,7 @@ export async function processTask(env: Env, taskId: string): Promise<void> {
 
   // ── 8. 更新轮询计数 ──
   task.provider_context._poll_count = pollAttempt;
+  const previousProviderStatus = task.provider_context._last_provider_status;
   if (pollResult.provider_status) {
     task.provider_context._last_provider_status = pollResult.provider_status;
   }
@@ -214,23 +207,29 @@ export async function processTask(env: Env, taskId: string): Promise<void> {
     task.provider_task_id = pollResult.provider_task_id;
   }
 
-  appendTaskEvent(task, {
-    stage: "poll.result",
-    status: pollResult.status,
-    attempt: pollAttempt,
-    process_id: processId,
-    provider_task_id: task.provider_task_id,
-    poll_url: pollResult.poll_url || null,
-    provider_status: pollResult.provider_status || null,
-    provider_response_code: pollResult.provider_response_code || null,
-    http_status: pollResult.http_status,
-    message: pollResult.message,
-    details: {
-      output_count: pollResult.output?.length || 0,
+  // 只在状态变化或终态时记录事件，避免中间轮询产生大量 events
+  const statusChanged = pollResult.status !== "running" && pollResult.status !== "queued";
+  const providerStatusChanged = pollResult.provider_status && pollResult.provider_status !== previousProviderStatus;
+
+  if (statusChanged || providerStatusChanged || pollResult.status === "succeeded" || pollResult.status === "failed") {
+    appendTaskEvent(task, {
+      stage: "poll.result",
+      status: pollResult.status,
+      attempt: pollAttempt,
+      process_id: processId,
+      provider_task_id: task.provider_task_id,
       poll_url: pollResult.poll_url || null,
-      upstream_raw_body: pollResult.upstream_raw_body || null
-    }
-  });
+      provider_status: pollResult.provider_status || null,
+      provider_response_code: pollResult.provider_response_code || null,
+      http_status: pollResult.http_status,
+      message: pollResult.message,
+      details: {
+        output_count: pollResult.output?.length || 0,
+        poll_url: pollResult.poll_url || null,
+        upstream_raw_body: pollResult.upstream_raw_body || null
+      }
+    });
+  }
 
   // ── 9. 按上游状态走分支 ──
   const now = new Date().toISOString();
@@ -383,8 +382,9 @@ function isCallbackTerminal(status: string): boolean {
 }
 
 async function reEnqueue(env: Env, task: AsyncTaskRecord, requestedDelaySeconds?: number): Promise<void> {
-  // 从 manifest 获取轮询间隔
-  const delaySeconds = normalizeDelaySeconds(requestedDelaySeconds, getPollInterval(env, task.plugin_id || "", 5));
+  // 从 manifest 获取轮询间隔，根据当前轮询次数动态调整
+  const pollCount = (task.provider_context?._poll_count as number) || 0;
+  const delaySeconds = normalizeDelaySeconds(requestedDelaySeconds, getPollInterval(env, task.plugin_id || "", 5, pollCount));
   task.next_poll_at = new Date(Date.now() + delaySeconds * 1000).toISOString();
 
   if (!env.TASK_QUEUE) {
@@ -434,12 +434,21 @@ function normalizeDelaySeconds(requestedDelaySeconds: number | undefined, fallba
   return fallback;
 }
 
-function getPollInterval(env: Env, pluginId: string, fallback: number): number {
+function getPollInterval(env: Env, pluginId: string, fallback: number, pollCount: number): number {
   try {
     const registry = createProviderRegistry(env);
     const plugin = registry.get(pluginId);
     const cap = plugin.manifest.capabilities["image"];
-    return cap?.poll_interval_seconds || fallback;
+    const baseInterval = cap?.poll_interval_seconds || fallback;
+
+    // 渐进式轮询：前 3 次用基础间隔，之后逐渐拉长
+    if (pollCount < 3) {
+      return baseInterval;
+    } else if (pollCount < 10) {
+      return Math.max(baseInterval, 5); // 3-10 次用 5 秒
+    } else {
+      return Math.max(baseInterval, 10); // 10 次以上用 10 秒
+    }
   } catch {
     return fallback;
   }
@@ -666,48 +675,41 @@ async function storeOutputFiles(
     return output;
   }
 
-  const stored: AsyncTaskOutputItem[] = [];
-  for (const item of output) {
-    if (!item.url) {
-      stored.push(item);
-      continue;
-    }
-
-    try {
-      // 跳过已经是自己 R2 的 URL
-      if (item.source === "r2" || item.stored) {
-        stored.push(item);
-        continue;
+  // 并行下载并转存所有输出文件
+  const results = await Promise.all(
+    output.map(async (item): Promise<AsyncTaskOutputItem> => {
+      if (!item.url || item.source === "r2" || item.stored) {
+        return item;
       }
 
-      const response = await fetch(item.url);
-      if (!response.ok || !response.body) {
-        console.warn(`[processor ${processId}] failed to download output: ${item.url}, status ${response.status}`);
-        stored.push(item); // 保留原始 URL
-        continue;
-      }
+      try {
+        const response = await fetch(item.url);
+        if (!response.ok || !response.body) {
+          console.warn(`[processor ${processId}] failed to download output: ${item.url}, status ${response.status}`);
+          return item;
+        }
 
-      if (env.FILES) {
-        const objectKey = `tasks/${task.id}/${createId("file")}.png`;
-        await env.FILES.put(objectKey, response.body, {
-          httpMetadata: { contentType: response.headers.get("Content-Type") || "image/png" }
-        });
-        stored.push({
-          ...item,
-          url: objectKey, // R2 key 作为 URL
-          stored: true,
-          source: "r2"
-        });
-      } else {
-        stored.push(item); // 没绑定 R2，保留原始 URL
+        if (env.FILES) {
+          const objectKey = `tasks/${task.id}/${createId("file")}.png`;
+          await env.FILES.put(objectKey, response.body, {
+            httpMetadata: { contentType: response.headers.get("Content-Type") || "image/png" }
+          });
+          return {
+            ...item,
+            url: objectKey,
+            stored: true,
+            source: "r2"
+          };
+        }
+        return item;
+      } catch (err) {
+        console.error(`[processor ${processId}] R2 store error for ${item.url}:`, err);
+        return item;
       }
-    } catch (err) {
-      console.error(`[processor ${processId}] R2 store error for ${item.url}:`, err);
-      stored.push(item); // 出错保留原始 URL
-    }
-  }
+    })
+  );
 
-  return stored;
+  return results;
 }
 
 /**

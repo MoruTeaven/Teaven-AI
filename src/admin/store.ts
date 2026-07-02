@@ -31,6 +31,7 @@ export interface AdminUser {
   organization_id: string;
   email: string;
   name?: string;
+  nickname?: string;
   role: "owner" | "admin" | "member";
   status: "active" | "disabled";
   created_at: string;
@@ -271,7 +272,7 @@ export async function findAdminUserByEmail(env: Env, email: string): Promise<Adm
 
 export async function createAdminUser(
   env: Env,
-  input: Pick<AdminUser, "email"> & Partial<Pick<AdminUser, "name" | "role" | "status" | "organization_id">>
+  input: Pick<AdminUser, "email"> & Partial<Pick<AdminUser, "name" | "nickname" | "role" | "status" | "organization_id">>
 ): Promise<AdminUser> {
   const now = new Date().toISOString();
   const user: AdminUser = {
@@ -279,6 +280,7 @@ export async function createAdminUser(
     organization_id: input.organization_id || createId("organization"),
     email: input.email.trim().toLowerCase(),
     name: input.name,
+    nickname: input.nickname,
     role: input.role || "member",
     status: input.status || "active",
     created_at: now,
@@ -301,12 +303,13 @@ export async function saveAdminUser(env: Env, user: AdminUser): Promise<void> {
           ON CONFLICT(id) DO UPDATE SET updated_at = excluded.updated_at
         `).bind(user.organization_id, "", user.created_at, user.updated_at),
         env.DB.prepare(`
-          INSERT INTO users (id, organization_id, email, name, role, status, created_at, updated_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+          INSERT INTO users (id, organization_id, email, name, nickname, role, status, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
           ON CONFLICT(id) DO UPDATE SET
             organization_id = excluded.organization_id,
             email = excluded.email,
             name = excluded.name,
+            nickname = excluded.nickname,
             role = excluded.role,
             status = excluded.status,
             updated_at = excluded.updated_at
@@ -315,6 +318,7 @@ export async function saveAdminUser(env: Env, user: AdminUser): Promise<void> {
           user.organization_id,
           user.email,
           user.name || "",
+          user.nickname || "",
           user.role,
           user.status,
           user.created_at,
@@ -875,6 +879,7 @@ function adminUserFromRow(row: D1Row): AdminUser {
     organization_id: stringValue(row.organization_id),
     email: stringValue(row.email),
     name: optionalString(row.name),
+    nickname: optionalString(row.nickname),
     role: stringValue(row.role) as AdminUser["role"],
     status: stringValue(row.status) as AdminUser["status"],
     created_at: stringValue(row.created_at),

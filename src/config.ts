@@ -10,6 +10,7 @@ import type {
   ModelConfig,
   ModelGroup,
   ModelGroupMember,
+  ModelType,
   ProviderRouteConfig,
   UpstreamConfig,
   UpstreamCredential,
@@ -280,6 +281,7 @@ export function listModels(config: GatewayConfig): ModelConfig[] {
         models.set(upstreamModel.alias, {
           alias: upstreamModel.alias,
           modality: upstreamModel.modality,
+          model_type: upstreamModel.model_type || "ai",
           supports_stream: upstreamModel.supports_stream !== false,
           supports_async: upstreamModel.supports_async !== false,
           image_mode: upstreamModel.image_mode,
@@ -350,6 +352,9 @@ export function validateGatewayConfig(config: GatewayConfig): void {
       }
       if (!["text", "image", "video", "file"].includes(model.modality)) {
         throw new Error(`model ${model.alias} 的 modality 无效`);
+      }
+      if (model.model_type !== undefined && !["ai", "traditional"].includes(model.model_type)) {
+        throw new Error(`model ${model.alias} 的 model_type 无效`);
       }
 
       const existing = aliases.get(model.alias);

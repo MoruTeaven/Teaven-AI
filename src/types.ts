@@ -28,6 +28,13 @@ export interface AuthContext {
 export type Modality = "text" | "image" | "video" | "file";
 
 /**
+ * 模型类型。
+ * - ai: AI 大模型（如 GPT、Claude 等）
+ * - traditional: 传统模型（如规则引擎、统计模型等）
+ */
+export type ModelType = "ai" | "traditional";
+
+/**
  * 图片生成模式标签。
  * - text-to-image: 仅支持文生图
  * - image-to-image: 仅支持图生图
@@ -98,6 +105,7 @@ export interface UpstreamModelConfig {
   alias: string;
   provider_model: string;
   modality: Modality;
+  model_type?: ModelType;
   supports_stream?: boolean;
   supports_async?: boolean;
   /** 图片生成模式标签，仅 modality 为 image 时有效 */
@@ -150,6 +158,7 @@ export interface ProviderRouteConfig {
 export interface ModelConfig {
   alias: string;
   modality: Modality;
+  model_type?: ModelType;
   supports_stream?: boolean;
   supports_async?: boolean;
   /** 图片生成模式标签，仅 modality 为 image 时有效 */

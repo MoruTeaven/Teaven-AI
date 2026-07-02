@@ -31,6 +31,7 @@ export async function handleListModels(
       object: "model",
       owned_by: "teaven",
       modality: model.modality,
+      model_type: model.model_type || "ai",
       is_group: false,
       image_mode: model.image_mode || null,
       supported_image_sizes: model.supported_image_sizes || null,
