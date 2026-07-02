@@ -553,6 +553,7 @@ function toProviderRoute(upstream: UpstreamConfig, model: UpstreamModelConfig): 
     supports_stream: model.supports_stream !== false,
     supports_async: model.supports_async !== false,
     image_mode: model.image_mode,
+    supported_image_sizes: model.supported_image_sizes,
     priority: model.priority,
     weight: model.weight,
     status: model.status || "active"

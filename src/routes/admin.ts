@@ -1168,6 +1168,7 @@ function publicModel(model: ModelConfig, env: Env): Record<string, unknown> {
     modality: model.modality,
     supports_stream: model.supports_stream !== false,
     image_mode: model.image_mode || null,
+    supported_image_sizes: model.supported_image_sizes || null,
     status: model.status || "active",
     price: model.price || null,
     price_unit: model.price_unit || null,
@@ -1182,6 +1183,7 @@ function publicModel(model: ModelConfig, env: Env): Record<string, unknown> {
       modality: route.modality,
       supports_stream: route.supports_stream !== false,
       image_mode: route.image_mode || null,
+      supported_image_sizes: route.supported_image_sizes || null,
       priority: route.priority ?? null,
       weight: route.weight ?? null,
       status: route.status || "active",
@@ -1231,6 +1233,7 @@ function publicUpstream(upstream: UpstreamConfig, config: GatewayConfig, env: En
       modality: model.modality,
       supports_stream: model.supports_stream !== false,
       image_mode: model.image_mode || null,
+      supported_image_sizes: model.supported_image_sizes || null,
       priority: model.priority ?? null,
       weight: model.weight ?? null,
       status: model.status || "active"
