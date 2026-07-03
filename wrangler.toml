@@ -37,5 +37,5 @@ queue = "teaven-ai-gateway-tasks"
 [[queues.consumers]]
 queue = "teaven-ai-gateway-tasks"
 max_batch_size = 10
-max_batch_timeout = 10
+max_batch_timeout = 1
 max_retries = 3

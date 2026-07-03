@@ -434,21 +434,12 @@ function normalizeDelaySeconds(requestedDelaySeconds: number | undefined, fallba
   return fallback;
 }
 
-function getPollInterval(env: Env, pluginId: string, fallback: number, pollCount: number): number {
+function getPollInterval(env: Env, pluginId: string, fallback: number, _pollCount: number): number {
   try {
     const registry = createProviderRegistry(env);
     const plugin = registry.get(pluginId);
     const cap = plugin.manifest.capabilities["image"];
-    const baseInterval = cap?.poll_interval_seconds || fallback;
-
-    // 渐进式轮询：前 3 次用基础间隔，之后逐渐拉长
-    if (pollCount < 3) {
-      return baseInterval;
-    } else if (pollCount < 10) {
-      return Math.max(baseInterval, 5); // 3-10 次用 5 秒
-    } else {
-      return Math.max(baseInterval, 10); // 10 次以上用 10 秒
-    }
+    return cap?.poll_interval_seconds || fallback;
   } catch {
     return fallback;
   }
@@ -671,7 +662,8 @@ async function storeOutputFiles(
   output: AsyncTaskOutputItem[],
   processId: string
 ): Promise<AsyncTaskOutputItem[]> {
-  if (!task.store_output || !output.length) {
+  const files = env.FILES;
+  if (!task.store_output || !output.length || !files) {
     return output;
   }
 
@@ -689,19 +681,16 @@ async function storeOutputFiles(
           return item;
         }
 
-        if (env.FILES) {
-          const objectKey = `tasks/${task.id}/${createId("file")}.png`;
-          await env.FILES.put(objectKey, response.body, {
-            httpMetadata: { contentType: response.headers.get("Content-Type") || "image/png" }
-          });
-          return {
-            ...item,
-            url: objectKey,
-            stored: true,
-            source: "r2"
-          };
-        }
-        return item;
+        const objectKey = `tasks/${task.id}/${createId("file")}.png`;
+        await files.put(objectKey, response.body, {
+          httpMetadata: { contentType: response.headers.get("Content-Type") || "image/png" }
+        });
+        return {
+          ...item,
+          url: objectKey,
+          stored: true,
+          source: "r2"
+        };
       } catch (err) {
         console.error(`[processor ${processId}] R2 store error for ${item.url}:`, err);
         return item;

@@ -21,6 +21,8 @@ interface UpstreamCallResult {
   credentialLimits: CredentialLimit[] | undefined;
 }
 
+const DEFAULT_STORAGE_TTL_SECONDS = 24 * 60 * 60;
+
 export async function handleAsyncImageGenerations(
   request: Request,
   env: Env,
@@ -39,6 +41,13 @@ export async function handleAsyncImageGenerations(
   if (body.response_format !== undefined && (typeof body.response_format !== "string" || !["url", "b64_json"].includes(body.response_format))) {
     throw invalidRequest('response_format must be "url" or "b64_json"', "response_format");
   }
+
+  if (body.store_output !== undefined && typeof body.store_output !== "boolean") {
+    throw invalidRequest("store_output must be a boolean", "store_output");
+  }
+
+  const storeOutput = body.store_output === true;
+  const storageTtlSeconds = normalizeStorageTtl(body.storage_ttl_seconds);
 
   // 校验图片输入
   if (body.image !== undefined) {
@@ -114,6 +123,8 @@ export async function handleAsyncImageGenerations(
     throw providerUnavailable(`No active provider route for model: ${requestedModelName}`);
   }
 
+  const providerBody = providerRequestBody(body);
+
   // 调用上游（含 fallback 重试）
   const callResult = await callUpstreamWithFallback({
     env,
@@ -123,7 +134,7 @@ export async function handleAsyncImageGenerations(
     primaryAlias: resolved.resolvedAlias,
     primaryRoute: route,
     fallbackAlias: resolved.fallbackAlias,
-    body,
+    body: providerBody,
     hasImageInput
   });
 
@@ -171,9 +182,9 @@ export async function handleAsyncImageGenerations(
         config: usedRoute.config
       },
       status: "queued",
-      input: { ...body, model: usedAlias },
-      store_output: true,
-      storage_ttl_seconds: 24 * 60 * 60,
+      input: { ...providerBody, model: usedAlias },
+      store_output: storeOutput,
+      storage_ttl_seconds: storageTtlSeconds,
       output_expires_at: null,
       callback_url: body.callback_url as string | undefined,
       metadata: body.metadata as Record<string, unknown> | undefined,
@@ -390,6 +401,31 @@ function selectRouteForImageAlias(
     return undefined;
   }
   return selectRoute(model, false);
+}
+
+function providerRequestBody(body: Record<string, unknown>): Record<string, unknown> {
+  const providerBody = { ...body };
+  delete providerBody.callback_url;
+  delete providerBody.metadata;
+  delete providerBody.store_output;
+  delete providerBody.storage_ttl_seconds;
+  return providerBody;
+}
+
+function normalizeStorageTtl(value: unknown): number {
+  if (value === undefined || value === null) {
+    return DEFAULT_STORAGE_TTL_SECONDS;
+  }
+
+  if (typeof value !== "number" || !Number.isInteger(value)) {
+    throw invalidRequest("storage_ttl_seconds must be an integer", "storage_ttl_seconds");
+  }
+
+  if (value < 1 || value > DEFAULT_STORAGE_TTL_SECONDS) {
+    throw invalidRequest("storage_ttl_seconds must be between 1 and 86400", "storage_ttl_seconds");
+  }
+
+  return value;
 }
 
 async function enqueueCreatedTask(env: Env, task: AsyncTaskRecord): Promise<void> {

@@ -12,7 +12,7 @@ const MANIFEST: ProviderPluginManifest = {
     "image": {
       execution_mode: "async_polling",
       result_delivery: "polling",
-      poll_interval_seconds: 2,
+      poll_interval_seconds: 1,
       supports_image_input: true,
       supports_mask: true,
       supports_strength: true,

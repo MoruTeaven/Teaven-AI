@@ -162,9 +162,18 @@ POST /v1/chat/completions
     "prompt_tokens": 12,
     "completion_tokens": 8,
     "total_tokens": 20
+  },
+  "model_average_speed": {
+    "model": "deepseek-chat",
+    "unit": "tokens_per_second",
+    "average_tokens_per_second": 18.42,
+    "sample_count": 12,
+    "updated_at": "2026-07-02T08:00:00.000Z"
   }
 }
 ```
+
+`model_average_speed` 返回本次调用开始前已统计的模型历史平均速度；没有历史样本时为 `null`。速度按成功聊天补全的 `completion_tokens / latency_ms` 聚合，单位为 tokens/s，本次调用完成后写入统计，供下一次同模型调用返回。命中模型分组时，会同时记录组别名和实际成员别名的速度样本，但对外响应仍返回用户请求的模型名。
 
 流式响应必须使用 OpenAI 兼容 SSE：
 
@@ -177,7 +186,7 @@ Connection: keep-alive
 事件示例：
 
 ```text
-data: {"id":"chatcmpl_xxx","object":"chat.completion.chunk","created":1730000000,"model":"deepseek-chat","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}
+data: {"id":"chatcmpl_xxx","object":"chat.completion.chunk","created":1730000000,"model":"deepseek-chat","model_average_speed":{"model":"deepseek-chat","unit":"tokens_per_second","average_tokens_per_second":18.42,"sample_count":12,"updated_at":"2026-07-02T08:00:00.000Z"},"choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}
 
 data: {"id":"chatcmpl_xxx","object":"chat.completion.chunk","created":1730000000,"model":"deepseek-chat","choices":[{"index":0,"delta":{"content":"你好"},"finish_reason":null}]}
 
@@ -834,7 +843,18 @@ Remote Plugin 必须遵循同一输入输出协议，并由平台做超时、重
 | cost | 成本或计费金额。 |
 | created_at | 创建时间。 |
 
-### 9.11 async_tasks
+### 9.11 model_speed_stats
+
+| 字段 | 说明 |
+| --- | --- |
+| model | 模型别名。命中分组时，组别名和实际成员别名会分别累计。 |
+| sample_count | 已计入平均速度的成功样本数。 |
+| total_completion_tokens | 已累计输出 token 数。 |
+| total_latency_ms | 已累计完整请求耗时毫秒数。 |
+| average_tokens_per_second | 平均输出速度，计算为 `total_completion_tokens * 1000 / total_latency_ms`。 |
+| updated_at | 最近更新时间。 |
+
+### 9.12 async_tasks
 
 | 字段 | 说明 |
 | --- | --- |

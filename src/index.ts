@@ -35,16 +35,16 @@ export default {
 
   // ── Queue Consumer 入口 ──
   async queue(batch: MessageBatch<AsyncTaskQueueMessage>, env: Env): Promise<void> {
-    for (const message of batch.messages) {
+    await Promise.all(batch.messages.map(async (message) => {
       try {
         await processTask(env, message.body.task_id);
-        message.ack();
       } catch (err) {
         console.error(`[consumer] unhandled error for task ${message.body.task_id}:`, err);
-        // 不 ack 的消息会被重试，但最大重试次数由队列配置控制
+        // processTask 内部负责持久化状态和重新入队；这里 ack 避免队列层重复重试。
+      } finally {
         message.ack();
       }
-    }
+    }));
   }
 };
 

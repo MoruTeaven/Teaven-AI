@@ -3,9 +3,10 @@ import { invalidRequest, permissionDenied, providerUnavailable } from "../http/e
 import { createProviderRegistry, resolveProviderCredential } from "../providers/registry";
 import { recordChatUsage } from "../admin/store";
 import { recordCredentialUsage } from "../admin/credentials-store";
+import { getModelSpeedSnapshot, recordModelSpeedSample } from "../admin/model-speed-store";
 import type { AuthContext, ChatCompletionRequest, CredentialLimit, Env, GatewayConfig, ProviderRouteConfig } from "../types";
 import { readJsonObject, requireString } from "../utils/request";
-import { rewriteModelInJsonResponse, rewriteModelInStreamResponse } from "../utils/model-rewrite";
+import { patchJsonResponse, patchStreamResponse } from "../utils/model-rewrite";
 
 export async function handleChatCompletions(
   request: Request,
@@ -50,6 +51,8 @@ export async function handleChatCompletions(
   if (streamRequested && model.supports_stream === false) {
     throw invalidRequest(`Model does not support stream: ${requestedModelName}`, "stream");
   }
+
+  const modelAverageSpeed = await getModelSpeedSnapshot(env, requestedModelName).catch(() => null);
 
   const route = selectRoute(model, streamRequested);
   if (!route) {
@@ -140,6 +143,7 @@ export async function handleChatCompletions(
   }
 
   const usage = streamRequested ? undefined : await readUsage(response.clone());
+  const latencyMs = Date.now() - startedAt;
   await recordChatUsage(env, {
     request_id: requestId,
     organization_id: auth.organization_id,
@@ -150,7 +154,7 @@ export async function handleChatCompletions(
     route: usedRoute,
     credential_ref: usedCredentialRef,
     status_code: response.status,
-    latency_ms: Date.now() - startedAt,
+    latency_ms: latencyMs,
     stream: streamRequested,
     usage
   });
@@ -163,15 +167,29 @@ export async function handleChatCompletions(
     await recordCredentialUsage(env, usedCredentialRef, usedCredentialLimits, tokens).catch(() => { /* 计数器失败不阻断响应 */ });
   }
 
-  // 命中分组时，把响应里的 model 字段重写回组别名
-  if (resolved.group) {
-    if (streamRequested) {
-      return rewriteModelInStreamResponse(response, requestedModelName);
-    }
-    return rewriteModelInJsonResponse(response, requestedModelName);
+  if (!streamRequested) {
+    await recordModelSpeedForAliases(env, requestedModelName, usedAlias, usage, latencyMs).catch(() => {
+      /* 速度统计失败不阻断响应 */
+    });
   }
 
-  return response;
+  const responseFields = { model_average_speed: modelAverageSpeed };
+  const targetModel = resolved.group ? requestedModelName : undefined;
+
+  if (streamRequested) {
+    return patchStreamResponse(response, {
+      targetModel,
+      firstEventFields: responseFields,
+      onComplete: async (streamUsage) => {
+        await recordModelSpeedForAliases(env, requestedModelName, usedAlias, streamUsage, Date.now() - startedAt);
+      }
+    });
+  }
+
+  return patchJsonResponse(response, {
+    targetModel,
+    fields: responseFields
+  });
 }
 
 /** 构造按优先级排列的候选 alias 列表（主候选 + 可选 fallback） */
@@ -206,4 +224,32 @@ async function readUsage(response: Response): Promise<unknown> {
   } catch {
     return undefined;
   }
+}
+
+async function recordModelSpeedForAliases(
+  env: Env,
+  requestedModel: string,
+  usedModel: string,
+  usage: unknown,
+  latencyMs: number
+): Promise<void> {
+  const completionTokens = completionTokensFromUsage(usage);
+  if (completionTokens <= 0 || latencyMs <= 0) {
+    return;
+  }
+
+  const models = new Set([requestedModel, usedModel].filter(Boolean));
+  await Promise.all([...models].map((model) => recordModelSpeedSample(env, model, {
+    completion_tokens: completionTokens,
+    latency_ms: latencyMs
+  })));
+}
+
+function completionTokensFromUsage(usage: unknown): number {
+  if (!usage || typeof usage !== "object") {
+    return 0;
+  }
+  const value = (usage as Record<string, unknown>).completion_tokens;
+  const tokens = typeof value === "number" ? value : Number(value || 0);
+  return Number.isFinite(tokens) ? tokens : 0;
 }

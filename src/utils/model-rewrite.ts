@@ -8,8 +8,23 @@
  * - SSE 流式响应：用 TransformStream 逐事件解析并替换 model。
  */
 
+export interface JsonResponsePatchOptions {
+  targetModel?: string;
+  fields?: Record<string, unknown>;
+}
+
+export interface StreamResponsePatchOptions extends JsonResponsePatchOptions {
+  firstEventFields?: Record<string, unknown>;
+  onComplete?: (usage: unknown | undefined) => void | Promise<void>;
+}
+
 /** 重写非流式 JSON 响应的 model 字段 */
 export async function rewriteModelInJsonResponse(response: Response, targetModel: string): Promise<Response> {
+  return patchJsonResponse(response, { targetModel });
+}
+
+/** 对非流式 JSON 响应做统一补丁：可改写 model，也可追加平台字段。 */
+export async function patchJsonResponse(response: Response, options: JsonResponsePatchOptions): Promise<Response> {
   const contentType = response.headers.get("Content-Type") || "";
   if (!contentType.includes("application/json")) {
     return response;
@@ -23,7 +38,13 @@ export async function rewriteModelInJsonResponse(response: Response, targetModel
   }
 
   if (body && typeof body === "object" && !Array.isArray(body)) {
-    (body as Record<string, unknown>).model = targetModel;
+    const output = body as Record<string, unknown>;
+    if (options.targetModel) {
+      output.model = options.targetModel;
+    }
+    if (options.fields) {
+      Object.assign(output, options.fields);
+    }
   }
 
   const headers = new Headers(response.headers);
@@ -40,6 +61,11 @@ export async function rewriteModelInJsonResponse(response: Response, targetModel
  * OpenAI 流式格式：`data: {...}\n\n`，最后是 `data: [DONE]\n\n`。
  */
 export function rewriteModelInStreamResponse(response: Response, targetModel: string): Response {
+  return patchStreamResponse(response, { targetModel });
+}
+
+/** 对 SSE 流式响应做统一补丁：可改写 model、给首个 JSON chunk 追加字段，并在完成时回传 usage。 */
+export function patchStreamResponse(response: Response, options: StreamResponsePatchOptions): Response {
   if (!response.body) {
     return response;
   }
@@ -47,6 +73,10 @@ export function rewriteModelInStreamResponse(response: Response, targetModel: st
   const decoder = new TextDecoder();
   const encoder = new TextEncoder();
   let buffer = "";
+  const state: StreamPatchState = {
+    injectedFirstEventFields: false,
+    usage: undefined
+  };
 
   const transformStream = new TransformStream<Uint8Array, Uint8Array>({
     transform(chunk, controller) {
@@ -56,12 +86,19 @@ export function rewriteModelInStreamResponse(response: Response, targetModel: st
       while ((separatorIndex = buffer.indexOf("\n\n")) !== -1) {
         const event = buffer.slice(0, separatorIndex + 2);
         buffer = buffer.slice(separatorIndex + 2);
-        controller.enqueue(encoder.encode(rewriteSseEvent(event, targetModel)));
+        controller.enqueue(encoder.encode(patchSseEvent(event, options, state)));
       }
     },
-    flush(controller) {
+    async flush(controller) {
       if (buffer.length > 0) {
-        controller.enqueue(encoder.encode(rewriteSseEvent(buffer, targetModel)));
+        controller.enqueue(encoder.encode(patchSseEvent(buffer, options, state)));
+      }
+      if (options.onComplete) {
+        try {
+          await options.onComplete(state.usage);
+        } catch (error) {
+          console.error("failed to run stream completion hook", error);
+        }
       }
     }
   });
@@ -76,11 +113,16 @@ export function rewriteModelInStreamResponse(response: Response, targetModel: st
   });
 }
 
+interface StreamPatchState {
+  injectedFirstEventFields: boolean;
+  usage: unknown | undefined;
+}
+
 /**
  * 处理单个 SSE 事件（可能包含多行 data:），把每行 JSON 中的 model 字段替换为目标值。
  * `data: [DONE]` 原样保留。
  */
-function rewriteSseEvent(event: string, targetModel: string): string {
+function patchSseEvent(event: string, options: StreamResponsePatchOptions, state: StreamPatchState): string {
   const lines = event.split("\n");
   const result: string[] = [];
 
@@ -93,8 +135,17 @@ function rewriteSseEvent(event: string, targetModel: string): string {
       }
       try {
         const parsed = JSON.parse(data);
-        if (parsed && typeof parsed === "object" && "model" in parsed) {
-          parsed.model = targetModel;
+        if (parsed && typeof parsed === "object") {
+          if (options.targetModel && "model" in parsed) {
+            parsed.model = options.targetModel;
+          }
+          if ("usage" in parsed) {
+            state.usage = parsed.usage;
+          }
+          if (!state.injectedFirstEventFields && options.firstEventFields) {
+            Object.assign(parsed, options.firstEventFields);
+            state.injectedFirstEventFields = true;
+          }
           result.push("data: " + JSON.stringify(parsed));
           continue;
         }

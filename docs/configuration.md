@@ -444,6 +444,7 @@ wrangler secret put OPENAI_COMPATIBLE_API_KEY
 5. 网关创建本地异步任务记录并返回 `202 Accepted` 和 `task_id` 给用户。
 6. 用户可通过 `GET /v1/tasks/{task_id}` 查询任务状态。
 7. 后台通过异步队列对已发送到上游的任务进行轮询，获取最终结果。
+8. `store_output` 默认为 `false`，成功后直接返回上游 URL；只有显式传 `store_output: true` 时才会等待下载并转存到 R2。
 
 ### 配置示例
 
@@ -495,7 +496,8 @@ curl -X POST http://localhost:8787/v1/async/images/generations \
     "n": 1,
     "width": 1024,
     "height": 1024,
-    "response_format": "url"
+    "response_format": "url",
+    "store_output": false
   }'
 ```
 
