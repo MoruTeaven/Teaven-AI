@@ -10,7 +10,8 @@ import {
   ACCOUNT_SESSION_TTL_SECONDS,
   createAccountSession
 } from "../auth/account";
-import { listModelGroups, listModels, listProviderRoutes, loadGatewayConfig, resetGatewayConfig, saveGatewayConfig, validateGatewayConfig } from "../config";
+import { enforceSameOriginForUnsafeRequest } from "../auth/csrf";
+import { listModelGroups, listModels, listProviderRoutes, loadGatewayConfig, loadGatewayConfigWithSource, resetGatewayConfig, saveGatewayConfig, validateGatewayConfig } from "../config";
 import { conflict, invalidRequest, notFound } from "../http/errors";
 import { jsonResponse } from "../http/response";
 // eslint-disable-next-line import/no-cycle -- admin.ts and account.ts share serialization helper
@@ -29,7 +30,7 @@ import {
   saveSiteSettings,
   summarizeUsage
 } from "../admin/store";
-import { createProviderRegistry, resolveProviderCredential } from "../providers/registry";
+import { createProviderRegistry, isAllowedProviderSecretName, resolveProviderCredential } from "../providers/registry";
 import type { ProviderPluginManifest } from "../providers/types";
 import { appendTaskEvent, lastTaskEvent, taskDiagnostics } from "../tasks/events";
 import { publicTaskOutput } from "../tasks/output";
@@ -111,6 +112,7 @@ export async function handleAdminRequest(
   }
 
   await authenticateAdmin(request, env);
+  enforceSameOriginForUnsafeRequest(request);
 
   const url = new URL(request.url);
 
@@ -396,16 +398,17 @@ async function handleAdminOverview(env: Env, requestId: string): Promise<Respons
 }
 
 async function handleAdminConfig(env: Env, requestId: string): Promise<Response> {
-  const config = await loadGatewayConfig(env);
+  const { config, source } = await loadGatewayConfigWithSource(env);
   const models = listModels(config);
   const routes = listProviderRoutes(config);
+  const safeConfig = redactGatewayConfig(config);
 
   return jsonResponse(
     {
-      source: env.MODEL_CONFIG_JSON ? "MODEL_CONFIG_JSON" : "环境默认值",
+      source,
       valid: true,
-      config,
-      config_json: JSON.stringify(config, null, 2),
+      config: safeConfig,
+      config_json: JSON.stringify(safeConfig, null, 2),
       summary: {
         upstreams_total: config.upstreams.length,
         models_total: models.length,
@@ -473,8 +476,13 @@ async function handleUpsertAdminUpstream(request: Request, env: Env, requestId: 
 
   const config = await loadGatewayConfig(env);
   const existing = config.upstreams.find((upstream) => upstream.id === upstreamInput.id);
+
+  // 前端编辑回填时内联密钥会被脱敏为 REDACTED_INLINE_CREDENTIAL 占位符。
+  // 如果用户未修改该字段就保存，需要保留已有的真实密钥，避免被占位符覆盖。
+  const resolvedInput = preserveExistingCredentials(upstreamInput, existing);
+
   const upstream: UpstreamConfig = {
-    ...upstreamInput,
+    ...resolvedInput,
     models: existing?.models || []
   };
   const nextUpstreams = config.upstreams.filter((item) => item.id !== upstream.id);
@@ -1183,7 +1191,7 @@ function publicModel(model: ModelConfig, env: Env): Record<string, unknown> {
       plugin_id: route.plugin_id,
       provider_model: route.provider_model,
       base_url_configured: Boolean(route.base_url),
-      credential_id: route.credential_id || null,
+      credential_id: redactCredentialId(route.credential_id),
       credential_configured: isRouteCredentialConfigured(env, route),
       modality: route.modality,
       supports_stream: route.supports_stream !== false,
@@ -1202,11 +1210,13 @@ function publicUpstream(upstream: UpstreamConfig, config: GatewayConfig, env: En
   const activeRoutes = routes.filter((route) => route.status !== "disabled");
 
   // 序列化多凭证配置。每个凭证的 credential_id 标注是否已配置（实际值是否能在 env 解析到）
+  // credential_id_plain 仅供管理后台编辑表单回填使用，不含脱敏。
   const credentials = Array.isArray(upstream.credentials) && upstream.credentials.length > 0
     ? upstream.credentials.map((cred) => ({
       id: cred.id,
       label: cred.label || null,
-      credential_id: cred.credential_id || null,
+      credential_id: redactCredentialId(cred.credential_id),
+      credential_id_plain: cred.credential_id || null,
       credential_configured: isCredentialIdConfigured(env, cred.credential_id),
       weight: cred.weight ?? 1,
       status: cred.status || "active",
@@ -1223,7 +1233,8 @@ function publicUpstream(upstream: UpstreamConfig, config: GatewayConfig, env: En
     name: upstream.name || upstream.id,
     plugin_id: upstream.plugin_id,
     base_url: upstream.base_url || null,
-    credential_id: upstream.credential_id || null,
+    credential_id: redactCredentialId(upstream.credential_id),
+    credential_id_plain: upstream.credential_id || null,
     credential_configured: isCredentialIdConfigured(env, upstream.credential_id),
     // 多凭证池：当为空数组时回退到上方单 credential_id 字段
     credentials,
@@ -1318,6 +1329,62 @@ function publicApiKey(apiKey: AdminApiKey): Record<string, unknown> {
     updated_at: apiKey.updated_at,
     last_used_at: apiKey.last_used_at || null
   };
+}
+
+function redactGatewayConfig(config: GatewayConfig): GatewayConfig {
+  return {
+    ...config,
+    upstreams: config.upstreams.map((upstream) => ({
+      ...upstream,
+      credential_id: redactCredentialId(upstream.credential_id) || undefined,
+      credentials: upstream.credentials?.map((credential) => ({
+        ...credential,
+        credential_id: redactCredentialId(credential.credential_id) || ""
+      }))
+    }))
+  };
+}
+
+/** 内联密钥脱敏后返回的占位符，前端编辑回填时会携带此值。 */
+const REDACTED_INLINE_CREDENTIAL = "inline:***";
+
+function redactCredentialId(credentialId: string | undefined): string | null {
+  if (!credentialId) {
+    return null;
+  }
+  if (credentialId.startsWith("env:")) {
+    return credentialId;
+  }
+  return REDACTED_INLINE_CREDENTIAL;
+}
+
+/**
+ * 当用户未修改脱敏后的 credential_id 就保存时，保留已有真实值。
+ * 覆盖单凭证 credential_id 和多凭证池 credentials[].credential_id 两种场景。
+ */
+function preserveExistingCredentials(
+  input: Omit<UpstreamConfig, "models">,
+  existing: UpstreamConfig | undefined
+): Omit<UpstreamConfig, "models"> {
+  const resolved = { ...input };
+
+  if (resolved.credential_id === REDACTED_INLINE_CREDENTIAL && existing?.credential_id) {
+    resolved.credential_id = existing.credential_id;
+  }
+
+  if (Array.isArray(resolved.credentials) && existing?.credentials) {
+    resolved.credentials = resolved.credentials.map((cred) => {
+      if (cred.credential_id === REDACTED_INLINE_CREDENTIAL) {
+        const existingCred = existing.credentials!.find((c) => c.id === cred.id);
+        if (existingCred?.credential_id) {
+          return { ...cred, credential_id: existingCred.credential_id };
+        }
+      }
+      return cred;
+    });
+  }
+
+  return resolved;
 }
 
 function normalizeUpstreamInput(value: unknown): Omit<UpstreamConfig, "models"> {
@@ -1817,7 +1884,7 @@ function buildProviderHealth(manifest: ProviderPluginManifest, config: GatewayCo
       upstream_id: route.upstream_id,
       upstream_name: route.upstream_name || null,
       provider_model: route.provider_model,
-      credential_id: route.credential_id || null,
+      credential_id: redactCredentialId(route.credential_id),
       credential_configured: isRouteCredentialConfigured(env, route),
       status: route.status || "active"
     })),
@@ -1993,12 +2060,14 @@ function isCredentialIdConfigured(env: Env | undefined, credentialId: string | u
   if (credentialId.startsWith("env:")) {
     if (!env) return false;
     const secretName = credentialId.slice(4);
+    if (!isAllowedProviderSecretName(env, secretName)) {
+      return false;
+    }
     const value = (env as unknown as Record<string, unknown>)[secretName];
     return typeof value === "string" && value.length > 0;
   }
 
-  // 无 env: 前缀 → 直接作为 API Key 使用，非空即为已配置
-  return credentialId.length > 0;
+  return env?.ALLOW_INLINE_PROVIDER_CREDENTIALS === "true" && credentialId.length > 0;
 }
 
 function isCancelableTask(task: AsyncTaskRecord): boolean {
@@ -2654,6 +2723,7 @@ const ADMIN_APP_HTML = `<!doctype html>
           <label>类型<select id="upstream-admin-plugin"></select></label>
           <label>基础地址<input id="upstream-admin-base-url" value="https://api.openai.com/v1"></label>
           <label>API Key（默认凭证，凭证池为空时使用）<input id="upstream-admin-credential" value="env:OPENAI_COMPATIBLE_API_KEY" placeholder="env:MY_SECRET 或直接填写 sk-..."></label>
+<span class="muted" style="font-size:11px;" id="upstream-admin-credential-hint"></span>
           <label>状态<select id="upstream-admin-status"><option value="active">启用</option><option value="degraded">降级</option><option value="disabled">停用</option></select></label>
         </div>
         <div class="credentials-pool-panel" style="margin-top: 18px; border-top: 1px dashed var(--border, #ddd); padding-top: 14px;">
@@ -3547,6 +3617,8 @@ const ADMIN_APP_HTML = `<!doctype html>
         if (pluginSelect.options.length > 0) pluginSelect.selectedIndex = 0;
         document.getElementById('upstream-admin-base-url').value = '';
         document.getElementById('upstream-admin-credential').value = '';
+        var credHint = document.getElementById('upstream-admin-credential-hint');
+        if (credHint) credHint.textContent = '';
         document.getElementById('upstream-admin-status').value = 'active';
         renderCredentialsList([]);
       }
@@ -3560,7 +3632,7 @@ const ADMIN_APP_HTML = `<!doctype html>
           return {
             id: cred.id || ('key' + (Math.random().toString(36).slice(2, 6))),
             label: cred.label || '',
-            credential_id: cred.credential_id || '',
+            credential_id: cred.credential_id_plain || cred.credential_id || '',
             weight: cred.weight == null ? 1 : cred.weight,
             status: cred.status || 'active',
             limits: Array.isArray(cred.limits) ? cred.limits.map(function (limit) {
@@ -3597,7 +3669,7 @@ const ADMIN_APP_HTML = `<!doctype html>
         return '<div class="credential-row" data-cred-row="' + index + '" style="border:1px solid var(--border, #ddd); border-radius:6px; padding:10px; margin-bottom:10px;">' +
           '<div style="display:grid; grid-template-columns: 1fr 2fr 80px 100px auto; gap:6px; align-items:end;">' +
             '<div><label style="font-size:11px;">跟踪 ID<input class="cred-id" data-cred="' + index + '" value="' + esc(cred.id) + '" placeholder="key1"></label></div>' +
-            '<div><label style="font-size:11px;">API Key（env:NAME 或 sk-...）<input class="cred-secret" data-cred="' + index + '" value="' + esc(cred.credential_id) + '" placeholder="env:OPENAI_COMPATIBLE_API_KEY"></label></div>' +
+            '<div><label style="font-size:11px;">API Key（env:SECRET_NAME）<input class="cred-secret" data-cred="' + index + '" value="' + esc(cred.credential_id) + '" placeholder="env:OPENAI_COMPATIBLE_API_KEY 或直接填写 sk-..."></label></div>' +
             '<div><label style="font-size:11px;">权重<input class="cred-weight" data-cred="' + index + '" type="number" min="0" step="1" value="' + esc(cred.weight) + '"></label></div>' +
             '<div><label style="font-size:11px;">状态<select class="cred-status" data-cred="' + index + '"><option value="active"' + (cred.status === 'active' ? ' selected' : '') + '>启用</option><option value="disabled"' + (cred.status === 'disabled' ? ' selected' : '') + '>停用</option></select></label></div>' +
             '<div><button class="compact danger" type="button" data-cred-remove="' + index + '">删除凭证</button></div>' +
@@ -3874,7 +3946,7 @@ const ADMIN_APP_HTML = `<!doctype html>
       function fillModelEditor(alias, editing) { var model = state.models.find(function (item) { return item.alias === alias; }); if (!model) return; state.editingModelAlias = editing ? alias : null; var route = model.routes && model.routes[0] ? model.routes[0] : {}; document.getElementById('model-json').value = JSON.stringify(toModelInput(model), null, 2); document.getElementById('model-alias').value = model.alias; document.getElementById('model-modality').value = model.modality; document.getElementById('model-type').value = model.model_type || 'ai'; toggleImageModeField(model.modality); toggleImageSizesSection(model.modality); toggleStreamField(model.modality); document.getElementById('model-image-mode').value = model.image_mode || 'text-to-image'; document.getElementById('model-status').value = model.status; document.getElementById('model-stream').value = String(model.supports_stream !== false); var select = document.getElementById('model-upstream-select'); if (select.options.length > 1) { select.value = route.upstream_id || ''; } document.getElementById('route-provider-model').value = route.provider_model || ''; document.getElementById('route-priority').value = route.priority || 1; document.getElementById('model-price').value = model.price || ''; document.getElementById('model-price-unit').value = model.price_unit || 'per_1m_tokens'; document.getElementById('image-sizes-list').innerHTML = ''; if (model.modality === 'image' && model.supported_image_sizes) { model.supported_image_sizes.forEach(function (preset) { appendImageSizeRow(preset); }); } }
       function viewModel(alias) { state.selectedModelAlias = alias; renderModelDetail(); setStatus('正在查看模型：' + alias, 'ok'); }
       function toModelInput(model) { var route = model.routes && model.routes[0] ? model.routes[0] : {}; return { original_alias: model.alias, upstream_id: route.upstream_id, alias: model.alias, provider_model: route.provider_model, modality: model.modality, model_type: model.model_type || 'ai', supports_stream: model.supports_stream, image_mode: model.image_mode || null, supported_image_sizes: model.supported_image_sizes || null, status: model.status, priority: route.priority, weight: route.weight, price: model.price || '', price_unit: model.price_unit || '' }; }
-      function fillUpstreamEditor(id) { var upstreams = (state.overview && state.overview.upstreams) || []; var upstream = upstreams.find(function (item) { return item.id === id; }); if (!upstream) return; document.getElementById('upstream-admin-id').value = upstream.id || ''; document.getElementById('upstream-admin-name').value = upstream.name || ''; document.getElementById('upstream-admin-plugin').value = upstream.plugin_id || ''; document.getElementById('upstream-admin-base-url').value = upstream.base_url || ''; document.getElementById('upstream-admin-credential').value = upstream.credential_id || ''; document.getElementById('upstream-admin-status').value = upstream.status || 'active'; renderCredentialsList(upstream.credentials || []); }
+      function fillUpstreamEditor(id) { var upstreams = (state.overview && state.overview.upstreams) || []; var upstream = upstreams.find(function (item) { return item.id === id; }); if (!upstream) return; document.getElementById('upstream-admin-id').value = upstream.id || ''; document.getElementById('upstream-admin-name').value = upstream.name || ''; document.getElementById('upstream-admin-plugin').value = upstream.plugin_id || ''; document.getElementById('upstream-admin-base-url').value = upstream.base_url || ''; document.getElementById('upstream-admin-credential').value = upstream.credential_id_plain || upstream.credential_id || ''; var credHint = document.getElementById('upstream-admin-credential-hint'); credHint.textContent = ''; document.getElementById('upstream-admin-status').value = upstream.status || 'active'; renderCredentialsList(upstream.credentials || []); }
       function viewUpstream(id) { var upstream = findOverviewUpstream(id); if (!upstream) { setStatus('未找到上游：' + id, 'error'); return; } var raw = findConfigUpstream(id) || upstream; var name = upstream.name || upstream.id; document.getElementById('upstream-view-title').textContent = '查看上游：' + name; document.getElementById('upstream-view-content').innerHTML = renderUpstreamDetail(upstream, raw); document.getElementById('upstream-view-json').textContent = JSON.stringify(toUpstreamDetailJson(upstream, raw), null, 2); openModal('upstream-view-modal', 'upstream-view-title', '查看上游：' + name); }
       function renderUpstreamDetail(upstream, raw) { var providers = (state.overview && state.overview.providers) || []; var plugin = findProvider(providers, upstream.plugin_id); var models = (raw && raw.models) || upstream.models || []; var modelRows = models.length ? models.map(function (model) { return '<tr><td><code>' + esc(model.alias) + '</code></td><td><code>' + esc(model.provider_model) + '</code></td><td>' + esc(modalityText(model.modality)) + '</td><td>' + (model.modality === 'image' ? esc(imageModeText(model.image_mode)) : '-') + '</td><td><span class="badge ' + statusClass(model.status || 'active') + '">' + esc(statusText(model.status || 'active')) + '</span></td><td>' + (model.supports_stream !== false ? '支持' : '不支持') + '</td><td>' + esc(model.priority == null ? '未设置' : model.priority) + '</td><td>' + esc(model.weight == null ? '未设置' : model.weight) + '</td><td>' + priceText(model.price, model.price_unit) + '</td></tr>'; }).join('') : '<tr><td colspan="9" class="empty">暂无模型。</td></tr>'; var credentials = upstream.credentials || []; var credRows = credentials.length ? credentials.map(function (cred) { var limits = Array.isArray(cred.limits) ? cred.limits : []; var limitText = limits.length ? limits.map(function (l) { return windowText(l.window) + '：' + (l.max_requests == null ? '∞ req' : (l.max_requests + ' req')) + ' / ' + (l.max_tokens == null ? '∞ tok' : (l.max_tokens + ' tok')); }).join('；') : '无限制'; return '<tr><td><code>' + esc(cred.id) + '</code>' + (cred.label ? '<br><span class="muted">' + esc(cred.label) + '</span>' : '') + '</td><td><code>' + esc(cred.credential_id || '未配置') + '</code><br><span class="badge ' + (cred.credential_configured ? 'ok' : 'danger') + '">' + (cred.credential_configured ? '已配置' : '缺少') + '</span></td><td>' + esc(cred.weight == null ? 1 : cred.weight) + '</td><td><span class="badge ' + statusClass(cred.status || 'active') + '">' + esc(statusText(cred.status || 'active')) + '</span></td><td style="font-size:12px;">' + esc(limitText) + '</td></tr>'; }).join('') : '<tr><td colspan="5" class="empty">未配置多凭证池，使用上方默认 API Key。</td></tr>'; return '<div class="entity-meta">' +
           '<div class="entity-row"><span>ID</span><code>' + esc(upstream.id) + '</code></div>' +

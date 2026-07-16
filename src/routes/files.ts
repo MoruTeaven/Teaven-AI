@@ -23,6 +23,9 @@ export async function handleGetFile(
   if (!task || task.organization_id !== auth.organization_id || !taskReferencesObjectKey(task, objectKey, effectiveBaseUrl, requestUrl)) {
     throw notFound("File not found");
   }
+  if (task.output_expires_at && task.output_expires_at <= new Date().toISOString()) {
+    throw notFound("File not found");
+  }
 
   if (!env.FILES) {
     throw notFound("File not found");

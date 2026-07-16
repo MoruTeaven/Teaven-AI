@@ -41,7 +41,7 @@ MVP 优先支持 Built-in Plugin 和 Private Plugin。Remote Plugin 后续用于
 
 | 对象 | 职责 | 示例 |
 | --- | --- | --- |
-| Provider Plugin | 实现协议转换和能力声明。 | `openai-compatible` |
+| Provider Plugin | 实现协议转换和能力声明。 | `openai-compatible`、`cloudflare-workers-ai` |
 | Upstream | 绑定协议类型、插件、endpoint、凭证、区域和健康状态。 | `siliconflow-cn` |
 | Upstream Model | 添加到某个上游下的模型条目，只包含平台别名、上游真实模型名和能力。 | `deepseek-chat` -> `deepseek-ai/DeepSeek-V3` |
 

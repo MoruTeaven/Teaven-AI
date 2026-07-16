@@ -34,8 +34,11 @@ OPENAI_COMPATIBLE_API_KEY=sk-replace-me
 | `OPENAI_COMPATIBLE_API_KEY` | 当前 MVP 默认 OpenAI 兼容上游的 API Key。 | 调用默认聊天补全必需 | 无 |
 | `OPENAI_COMPATIBLE_BASE_URL` | OpenAI 兼容上游的 API Base URL。请求会发到 `${BASE_URL}/chat/completions`。 | 可选 | `https://api.openai.com/v1` |
 | `OPENAI_COMPATIBLE_DEFAULT_MODEL` | 未配置 `MODEL_CONFIG_JSON` 时生成默认模型别名和上游模型名。 | 可选 | `gpt-4o-mini` |
+| `CLOUDFLARE_ACCOUNT_ID` | Cloudflare Workers AI 账号 ID。使用 `cloudflare-workers-ai` 插件且未显式配置 `base_url` 时需要。 | 可选 | 无 |
 | `FILES_PUBLIC_BASE_URL` | R2 文件公开访问域名或路径前缀，用于把任务 `output[].url` 中的 R2 key 组装成完整 URL。未配置时任务查询接口使用当前 Worker 域名生成 `/v1/files/...` 受控下载 URL。 | 可选 | 当前请求域名 + `/v1/files/` |
 | `MODEL_CONFIG_JSON` | 覆盖默认上游实例和上游模型配置。 | 可选 | 自动生成一个默认上游和默认模型 |
+| `PROVIDER_SECRET_ALLOWLIST` | 允许被 `credential_id: "env:SECRET_NAME"` 引用的上游 Secret 名称，逗号分隔。未配置时仅允许常见上游凭证命名，并禁止 `ADMIN_TOKEN`、`USER_CENTER_TOKEN`、`DEV_API_KEY` 等内部 Secret。 | 可选 | 默认安全白名单规则 |
+| `ALLOW_INLINE_PROVIDER_CREDENTIALS` | 是否允许在配置中直接写上游 API Key。生产环境不建议启用。 | 可选 | `false` |
 
 ## 配置分层
 
@@ -174,6 +177,68 @@ OPENAI_COMPATIBLE_DEFAULT_MODEL = "gpt-4o-mini"
 
 如果你只用 OpenAI 官方接口，并且默认模型就是 `gpt-4o-mini`，这两项可以删掉，不影响当前默认行为。
 
+## Cloudflare Workers AI 配置
+
+`cloudflare-workers-ai` 是内置的 Cloudflare Workers AI 文本 Provider Plugin，调用 Cloudflare 官方 OpenAI 兼容入口：
+
+```text
+https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1/chat/completions
+```
+
+配置要求：
+
+- `credential_id` 指向 Cloudflare API Token，建议使用 `env:CLOUDFLARE_API_TOKEN`。
+- `account_id` 可以写在 upstream 的 `config.account_id` 中，也可以通过环境变量 `CLOUDFLARE_ACCOUNT_ID` 提供。
+- `provider_model` 使用 Workers AI 模型名，例如 `@cf/meta/llama-3.1-8b-instruct`。
+- 如需走自定义代理或 Cloudflare AI Gateway OpenAI 兼容地址，可直接设置 upstream 的 `base_url`，此时不会读取 `account_id`。
+
+示例：
+
+```json
+{
+  "upstreams": [
+    {
+      "id": "cloudflare-workers-ai",
+      "name": "Cloudflare Workers AI",
+      "plugin_id": "cloudflare-workers-ai",
+      "credential_id": "env:CLOUDFLARE_API_TOKEN",
+      "config": {
+        "account_id": "your-cloudflare-account-id"
+      },
+      "status": "active",
+      "models": [
+        {
+          "alias": "cf-llama-3.1-8b",
+          "provider_model": "@cf/meta/llama-3.1-8b-instruct",
+          "modality": "text",
+          "supports_stream": true,
+          "priority": 1,
+          "weight": 100,
+          "status": "active"
+        }
+      ]
+    }
+  ]
+}
+```
+
+本地 `.dev.vars` 示例：
+
+```bash
+CLOUDFLARE_ACCOUNT_ID=your-cloudflare-account-id
+CLOUDFLARE_API_TOKEN=your-cloudflare-api-token
+PROVIDER_SECRET_ALLOWLIST=OPENAI_COMPATIBLE_API_KEY,CLOUDFLARE_API_TOKEN
+```
+
+请求时仍使用平台统一的 OpenAI 兼容接口：
+
+```json
+{
+  "model": "cf-llama-3.1-8b",
+  "messages": [{ "role": "user", "content": "hello" }]
+}
+```
+
 ## 什么时候需要改这些变量
 
 | 场景 | 应该改什么 |
@@ -181,6 +246,7 @@ OPENAI_COMPATIBLE_DEFAULT_MODEL = "gpt-4o-mini"
 | 只接 OpenAI 官方接口 | 只配置 `OPENAI_COMPATIBLE_API_KEY` 即可。 |
 | 改默认模型 | 设置 `OPENAI_COMPATIBLE_DEFAULT_MODEL`，例如 `gpt-4.1-mini`。 |
 | 接其他 OpenAI 兼容服务 | 设置 `OPENAI_COMPATIBLE_BASE_URL`、`OPENAI_COMPATIBLE_DEFAULT_MODEL` 和对应 API Key。 |
+| 接 Cloudflare Workers AI | 配置 `MODEL_CONFIG_JSON` 使用 `cloudflare-workers-ai` 插件，并设置 `CLOUDFLARE_ACCOUNT_ID` 与 `CLOUDFLARE_API_TOKEN`。 |
 | 暴露多个模型别名 | 配置 `MODEL_CONFIG_JSON`，在对应上游的 `models[]` 下添加模型条目。 |
 | 不想在本地传 Bearer Token | 设置 `AUTH_MODE=none`。不要在线上使用。 |
 
@@ -263,7 +329,7 @@ OPENAI_COMPATIBLE_DEFAULT_MODEL = "gpt-4o-mini"
 | --- | --- |
 | `id` | 凭证跟踪 ID（非密钥），用于 `credential_ref` 拼接和日志定位。同一 upstream 内不能重复。缺失时自动按索引生成 `key1` / `key2` ... |
 | `label` | 备注名（可选），例如「主账号」「免费额度」。仅用于管理后台展示。 |
-| `credential_id` | 真实凭证引用，与 upstream 的 `credential_id` 字段格式一致：`env:SECRET_NAME` 或直接填 `sk-...`。 |
+| `credential_id` | 真实凭证引用，与 upstream 的 `credential_id` 字段格式一致：`env:SECRET_NAME`。默认禁止直接填 `sk-...`，如需兼容旧配置必须显式设置 `ALLOW_INLINE_PROVIDER_CREDENTIALS=true`。 |
 | `weight` | 加权随机的权重，默认 1。设为 0 或负数等价于不参与抽取。 |
 | `status` | `active` / `disabled`，未设置视为 active。 |
 | `limits` | 配额上限数组（可选）。每个元素描述一个时间窗口的请求数或 Token 数上限。 |
@@ -427,6 +493,7 @@ OPENAI_COMPATIBLE_DEFAULT_MODEL = "gpt-4o-mini"
 wrangler secret put ADMIN_TOKEN
 wrangler secret put DEV_API_KEY
 wrangler secret put OPENAI_COMPATIBLE_API_KEY
+wrangler secret put CLOUDFLARE_API_TOKEN
 ```
 
 如果 `OPENAI_COMPATIBLE_BASE_URL` 和 `OPENAI_COMPATIBLE_DEFAULT_MODEL` 仍使用默认值，可以不写在 `wrangler.toml` 里。

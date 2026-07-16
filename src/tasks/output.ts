@@ -27,7 +27,7 @@ export async function publicTaskOutput(
 
     return {
       ...item,
-      url: buildStoredFileUrl(objectKey, effectiveBaseUrl, requestUrl)
+      url: buildStoredFileUrl(objectKey, requestUrl ? undefined : effectiveBaseUrl, requestUrl)
     };
   });
 }

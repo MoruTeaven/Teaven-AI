@@ -10,18 +10,21 @@ export async function saveTask(env: Env, task: AsyncTaskRecord): Promise<void> {
       await saveTaskToD1(env.DB, task, {
         includeEvents: true,
         includeRequestedModel: true,
-        includeCredentialRef: true
+        includeCredentialRef: true,
+        includeLease: true
       });
       return;
     } catch (error) {
       const missingEvents = isMissingD1ColumnError(error, "events");
       const missingRequestedModel = isMissingD1ColumnError(error, "requested_model");
       const missingCredentialRef = isMissingD1ColumnError(error, "credential_ref");
-      if (missingEvents || missingRequestedModel || missingCredentialRef) {
+      const missingLease = isMissingD1ColumnError(error, "lease_owner") || isMissingD1ColumnError(error, "lease_expires_at");
+      if (missingEvents || missingRequestedModel || missingCredentialRef || missingLease) {
         await saveTaskToD1(env.DB, task, {
           includeEvents: !missingEvents,
           includeRequestedModel: !missingRequestedModel,
-          includeCredentialRef: !missingCredentialRef
+          includeCredentialRef: !missingCredentialRef,
+          includeLease: !missingLease
         });
         return;
       }
@@ -62,6 +65,75 @@ export async function getTask(env: Env, taskId: string): Promise<AsyncTaskRecord
   return MEMORY_TASKS.get(taskId);
 }
 
+export interface TaskClaim {
+  task: AsyncTaskRecord;
+  previous_status: AsyncTaskRecord["status"];
+}
+
+export async function claimTask(
+  env: Env,
+  taskId: string,
+  leaseOwner: string,
+  leaseSeconds: number
+): Promise<TaskClaim | undefined> {
+  const now = new Date();
+  const nowIso = now.toISOString();
+  const leaseExpiresAt = new Date(now.getTime() + Math.max(1, leaseSeconds) * 1000).toISOString();
+
+  if (env.DB) {
+    try {
+      const current = await env.DB.prepare("SELECT status FROM async_tasks WHERE id = ?")
+        .bind(taskId)
+        .first<TaskRow>();
+      const previousStatus = current ? stringValue(current.status) as AsyncTaskRecord["status"] : undefined;
+      if (!previousStatus || !isProcessableStatus(previousStatus)) {
+        return undefined;
+      }
+
+      const result = await env.DB.prepare(`
+        UPDATE async_tasks
+        SET
+          status = CASE WHEN status = 'queued' THEN 'running' ELSE status END,
+          lease_owner = ?,
+          lease_expires_at = ?,
+          updated_at = ?
+        WHERE id = ?
+          AND status IN ('queued', 'running')
+          AND (lease_expires_at IS NULL OR lease_expires_at <= ? OR lease_owner = ?)
+      `).bind(leaseOwner, leaseExpiresAt, nowIso, taskId, nowIso, leaseOwner).run();
+
+      if (d1ChangedRows(result) <= 0) {
+        return undefined;
+      }
+
+      const row = await env.DB.prepare("SELECT * FROM async_tasks WHERE id = ?").bind(taskId).first<TaskRow>();
+      return row ? { task: taskFromRow(row), previous_status: previousStatus } : undefined;
+    } catch (error) {
+      if (!isMissingD1TableError(error, "async_tasks") && !isMissingD1ColumnError(error, "lease_owner") && !isMissingD1ColumnError(error, "lease_expires_at")) {
+        throw error;
+      }
+    }
+  }
+
+  const task = await getTask(env, taskId);
+  if (!task || !isProcessableStatus(task.status)) {
+    return undefined;
+  }
+  if (task.lease_expires_at && task.lease_expires_at > nowIso && task.lease_owner !== leaseOwner) {
+    return undefined;
+  }
+
+  const previousStatus = task.status;
+  if (task.status === "queued") {
+    task.status = "running";
+  }
+  task.lease_owner = leaseOwner;
+  task.lease_expires_at = leaseExpiresAt;
+  task.updated_at = nowIso;
+  await saveTask(env, task);
+  return { task, previous_status: previousStatus };
+}
+
 export async function listTasks(env: Env, limit = 25): Promise<AsyncTaskRecord[]> {
   const requestedLimit = Number.isFinite(limit) ? Math.trunc(limit) : 25;
   const boundedLimit = Math.min(Math.max(requestedLimit, 1), 100);
@@ -88,6 +160,79 @@ export async function listTasks(env: Env, limit = 25): Promise<AsyncTaskRecord[]
   return [...MEMORY_TASKS.values()].sort(compareTasksByCreatedAt).slice(0, boundedLimit);
 }
 
+export async function listTasksByOrganization(
+  env: Env,
+  organizationId: string,
+  limit = 25,
+  after?: string
+): Promise<AsyncTaskRecord[]> {
+  const requestedLimit = Number.isFinite(limit) ? Math.trunc(limit) : 25;
+  const boundedLimit = Math.min(Math.max(requestedLimit, 1), 100);
+
+  if (env.DB) {
+    try {
+      if (after) {
+        const cursor = await env.DB.prepare("SELECT created_at FROM async_tasks WHERE id = ? AND organization_id = ?")
+          .bind(after, organizationId)
+          .first<TaskRow>();
+        if (cursor?.created_at) {
+          const result = await env.DB.prepare(`
+            SELECT * FROM async_tasks
+            WHERE organization_id = ? AND created_at < ?
+            ORDER BY created_at DESC
+            LIMIT ?
+          `).bind(organizationId, stringValue(cursor.created_at), boundedLimit).all<TaskRow>();
+          return (result.results || []).map(taskFromRow);
+        }
+      }
+
+      const result = await env.DB.prepare(`
+        SELECT * FROM async_tasks
+        WHERE organization_id = ?
+        ORDER BY created_at DESC
+        LIMIT ?
+      `).bind(organizationId, boundedLimit).all<TaskRow>();
+      return (result.results || []).map(taskFromRow);
+    } catch (error) {
+      if (!isMissingD1TableError(error, "async_tasks")) {
+        throw error;
+      }
+    }
+  }
+
+  const tasks = (await listTasks(env, 100))
+    .filter((task) => task.organization_id === organizationId)
+    .sort(compareTasksByCreatedAt);
+  const start = after ? Math.max(0, findTaskIndexAfter(tasks, after)) : 0;
+  return tasks.slice(start, start + boundedLimit);
+}
+
+export async function getTaskByIdempotencyKey(
+  env: Env,
+  organizationId: string,
+  idempotencyKey: string
+): Promise<AsyncTaskRecord | undefined> {
+  if (!idempotencyKey) {
+    return undefined;
+  }
+
+  if (env.DB) {
+    try {
+      const row = await env.DB.prepare(
+        "SELECT * FROM async_tasks WHERE organization_id = ? AND idempotency_key = ? LIMIT 1"
+      ).bind(organizationId, idempotencyKey).first<TaskRow>();
+      return row ? taskFromRow(row) : undefined;
+    } catch (error) {
+      if (!isMissingD1TableError(error, "async_tasks")) {
+        throw error;
+      }
+    }
+  }
+
+  return (await listTasks(env, 100))
+    .find((task) => task.organization_id === organizationId && task.idempotency_key === idempotencyKey);
+}
+
 function taskKey(taskId: string): string {
   return `task:${taskId}`;
 }
@@ -95,7 +240,7 @@ function taskKey(taskId: string): string {
 async function saveTaskToD1(
   db: D1Database,
   task: AsyncTaskRecord,
-  options: { includeEvents: boolean; includeRequestedModel: boolean; includeCredentialRef: boolean }
+  options: { includeEvents: boolean; includeRequestedModel: boolean; includeCredentialRef: boolean; includeLease: boolean }
 ): Promise<void> {
   const extraColumns: string[] = [];
   const extraPlaceholders: string[] = [];
@@ -119,6 +264,12 @@ async function saveTaskToD1(
     extraPlaceholders.push("?");
     extraValues.push(jsonOrNull(task.events));
     extraUpdates.push("events = excluded.events");
+  }
+  if (options.includeLease) {
+    extraColumns.push("lease_owner", "lease_expires_at");
+    extraPlaceholders.push("?", "?");
+    extraValues.push(task.lease_owner || null, task.lease_expires_at || null);
+    extraUpdates.push("lease_owner = excluded.lease_owner", "lease_expires_at = excluded.lease_expires_at");
   }
 
   const extraColumnSql = extraColumns.length > 0 ? ",\n      " + extraColumns.join(",\n      ") : "";
@@ -233,10 +384,25 @@ function taskFromRow(row: TaskRow): AsyncTaskRecord {
     events: parseJsonArray(row.events) as AsyncTaskRecord["events"],
     idempotency_key: optionalString(row.idempotency_key),
     next_poll_at: optionalString(row.next_poll_at),
+    lease_owner: optionalString(row.lease_owner),
+    lease_expires_at: optionalString(row.lease_expires_at),
     created_at: stringValue(row.created_at),
     updated_at: stringValue(row.updated_at),
     completed_at: optionalString(row.completed_at)
   };
+}
+
+function isProcessableStatus(status: string): status is AsyncTaskRecord["status"] {
+  return status === "queued" || status === "running";
+}
+
+function d1ChangedRows(result: { meta?: { changes?: number } }): number {
+  return typeof result.meta?.changes === "number" ? result.meta.changes : 1;
+}
+
+function findTaskIndexAfter(tasks: AsyncTaskRecord[], after: string): number {
+  const index = tasks.findIndex((task) => task.id === after);
+  return index >= 0 ? index + 1 : 0;
 }
 
 function jsonOrNull(value: unknown): string | null {

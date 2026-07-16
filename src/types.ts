@@ -12,9 +12,13 @@ export interface Env {
   USER_CENTER_TOKEN?: string;
   DEV_API_KEY?: string;
   MODEL_CONFIG_JSON?: string;
+  PROVIDER_SECRET_ALLOWLIST?: string;
+  ALLOW_INLINE_PROVIDER_CREDENTIALS?: string;
   OPENAI_COMPATIBLE_API_KEY?: string;
   OPENAI_COMPATIBLE_BASE_URL?: string;
   OPENAI_COMPATIBLE_DEFAULT_MODEL?: string;
+  CLOUDFLARE_ACCOUNT_ID?: string;
+  CLOUDFLARE_API_TOKEN?: string;
   FILES_PUBLIC_BASE_URL?: string;
   API_ORIGIN?: string;
 }
@@ -325,6 +329,8 @@ export interface AsyncTaskRecord {
   events?: AsyncTaskEvent[];
   idempotency_key?: string;
   next_poll_at?: string;
+  lease_owner?: string;
+  lease_expires_at?: string;
   created_at: string;
   updated_at: string;
   completed_at?: string;

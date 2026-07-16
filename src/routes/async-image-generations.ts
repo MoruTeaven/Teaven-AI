@@ -4,10 +4,10 @@ import { createProviderRegistry, resolveProviderCredential } from "../providers/
 import { recordChatUsage } from "../admin/store";
 import { recordCredentialUsage } from "../admin/credentials-store";
 import { appendTaskEvent, taskDiagnostics } from "../tasks/events";
-import { saveTask } from "../tasks/store";
+import { getTaskByIdempotencyKey, saveTask } from "../tasks/store";
 import type { AuthContext, AsyncTaskRecord, CredentialLimit, Env, GatewayConfig, ImageGenerationRequest, ProviderRouteConfig } from "../types";
 import { createId } from "../utils/ids";
-import { readJsonObject, requireString, resolveImageInputs, resolveImageInput } from "../utils/request";
+import { optionalHttpsUrl, readJsonObject, requireString, resolveImageInputs, resolveImageInput } from "../utils/request";
 import { rewriteModelInJsonResponse } from "../utils/model-rewrite";
 import { resolveImageSize } from "../utils/image-size";
 
@@ -16,6 +16,14 @@ interface UpstreamCallResult {
   route: ProviderRouteConfig;
   usedAlias: string;
   /** 实际选中凭证的 secret 引用（env:... 或直接 key），用于回填 provider_context */
+  credentialId: string | undefined;
+  credentialRef: string | undefined;
+  credentialLimits: CredentialLimit[] | undefined;
+}
+
+interface UpstreamSelectionResult {
+  route: ProviderRouteConfig;
+  usedAlias: string;
   credentialId: string | undefined;
   credentialRef: string | undefined;
   credentialLimits: CredentialLimit[] | undefined;
@@ -48,6 +56,7 @@ export async function handleAsyncImageGenerations(
 
   const storeOutput = body.store_output === true;
   const storageTtlSeconds = normalizeStorageTtl(body.storage_ttl_seconds);
+  const callbackUrl = optionalHttpsUrl(body.callback_url, "callback_url");
 
   // 校验图片输入
   if (body.image !== undefined) {
@@ -124,11 +133,17 @@ export async function handleAsyncImageGenerations(
   }
 
   const providerBody = providerRequestBody(body);
+  const idempotencyKey = request.headers.get("Idempotency-Key") || undefined;
 
-  // 调用上游（含 fallback 重试）
-  const callResult = await callUpstreamWithFallback({
+  if (idempotencyKey) {
+    const existing = await getTaskByIdempotencyKey(env, auth.organization_id, idempotencyKey);
+    if (existing) {
+      return asyncTaskResponse(existing, requestedModelName, requestId, true);
+    }
+  }
+
+  const selection = await selectUpstreamWithFallback({
     env,
-    request,
     requestId,
     config,
     primaryAlias: resolved.resolvedAlias,
@@ -138,125 +153,61 @@ export async function handleAsyncImageGenerations(
     hasImageInput
   });
 
-  const upstreamResponse = callResult.response;
-  const usedRoute = callResult.route;
-  const usedAlias = callResult.usedAlias;
-  const usedCredentialId = callResult.credentialId;
-  const usedCredentialRef = callResult.credentialRef;
-  const usedCredentialLimits = callResult.credentialLimits;
-
-  // 解析上游响应
-  const upstreamData = await upstreamResponse.json() as Record<string, unknown>;
-
-  // 如果上游返回202异步响应，创建本地任务记录
-  if (upstreamResponse.status === 202) {
-    const providerTaskId = firstString(upstreamData.id, upstreamData.provider_task_id, upstreamData.task_id);
-    if (!providerTaskId) {
-      throw providerUnavailable("Upstream async response did not include provider_task_id");
-    }
-
-    const now = new Date().toISOString();
-    const task: AsyncTaskRecord = {
-      id: createId("task"),
-      object: "task",
-      organization_id: auth.organization_id,
-      api_key_id: auth.api_key_id,
-      type: "image",
-      // 内部存储实际命中的模型别名，便于 consumer 处理
-      model: usedAlias,
-      // 对外展示用组别名（若用户请求的是组）
-      requested_model: resolved.group ? requestedModelName : undefined,
-      upstream_id: usedRoute.upstream_id,
-      plugin_id: usedRoute.plugin_id,
-      // 记录选中的凭证跟踪 ID，多 key 排错用
-      credential_ref: usedCredentialRef,
-      provider_execution_mode: "async_polling",
-      provider_task_id: providerTaskId,
-      provider_context: {
-        upstream_model: usedRoute.provider_model,
-        request_id: requestId,
-        base_url: usedRoute.base_url,
-        // 回填实际选中的凭证引用，consumer 据此 re-resolve 同一个 key
-        credential_id: usedCredentialId || usedRoute.credential_id,
-        credential_ref: usedCredentialRef,
-        config: usedRoute.config
-      },
-      status: "queued",
-      input: { ...providerBody, model: usedAlias },
-      store_output: storeOutput,
-      storage_ttl_seconds: storageTtlSeconds,
-      output_expires_at: null,
-      callback_url: body.callback_url as string | undefined,
-      metadata: body.metadata as Record<string, unknown> | undefined,
-      idempotency_key: request.headers.get("Idempotency-Key") || undefined,
-      created_at: now,
-      updated_at: now
-    };
-
-    appendTaskEvent(task, {
-      stage: "task.created",
-      status: task.status,
+  const usedRoute = selection.route;
+  const usedAlias = selection.usedAlias;
+  const usedCredentialRef = selection.credentialRef;
+  const now = new Date().toISOString();
+  const task: AsyncTaskRecord = {
+    id: createId("task"),
+    object: "task",
+    organization_id: auth.organization_id,
+    api_key_id: auth.api_key_id,
+    type: "image",
+    model: usedAlias,
+    requested_model: resolved.group ? requestedModelName : undefined,
+    upstream_id: usedRoute.upstream_id,
+    plugin_id: usedRoute.plugin_id,
+    credential_ref: usedCredentialRef,
+    provider_context: {
+      upstream_model: usedRoute.provider_model,
       request_id: requestId,
-      credential_ref: usedCredentialRef || null,
-      provider_task_id: task.provider_task_id,
-      message: "Task created via /v1/async/images/generations"
-    });
+      base_url: usedRoute.base_url,
+      credential_id: selection.credentialId || usedRoute.credential_id,
+      credential_ref: usedCredentialRef,
+      credential_limits: selection.credentialLimits,
+      config: usedRoute.config
+    },
+    status: "queued",
+    input: { ...providerBody, model: usedAlias },
+    store_output: storeOutput,
+    storage_ttl_seconds: storageTtlSeconds,
+    output_expires_at: null,
+    callback_url: callbackUrl,
+    metadata: body.metadata as Record<string, unknown> | undefined,
+    idempotency_key: idempotencyKey,
+    created_at: now,
+    updated_at: now
+  };
 
+  appendTaskEvent(task, {
+    stage: "task.created",
+    status: task.status,
+    request_id: requestId,
+    credential_ref: usedCredentialRef || null,
+    message: "Task created via /v1/async/images/generations"
+  });
+
+  try {
     await saveTask(env, task);
-
-    // 将任务加入队列进行轮询
-    await enqueueCreatedTask(env, task);
-
-    // 累加凭证配额计数器（按请求数计，token 为 0）
-    if (usedCredentialRef) {
-      await recordCredentialUsage(env, usedCredentialRef, usedCredentialLimits, 0).catch(() => { /* 计数器失败不阻断 */ });
+  } catch (err) {
+    const existing = idempotencyKey ? await getTaskByIdempotencyKey(env, auth.organization_id, idempotencyKey) : undefined;
+    if (existing) {
+      return asyncTaskResponse(existing, requestedModelName, requestId, true);
     }
-
-    await recordChatUsage(env, {
-      request_id: requestId,
-      organization_id: auth.organization_id,
-      api_key_id: auth.api_key_id,
-      endpoint: "/v1/async/images/generations",
-      model: usedAlias,
-      requested_model: requestedModelName,
-      route: usedRoute,
-      credential_ref: usedCredentialRef,
-      status_code: 202,
-      latency_ms: Date.now() - startedAt,
-      stream: false,
-      usage: undefined
-    });
-
-    // 返回任务ID给客户端。对外展示用组别名（若有）
-    const responseModel = resolved.group ? requestedModelName : usedAlias;
-    return new Response(
-      JSON.stringify({
-        id: task.id,
-        object: "task",
-        type: "image",
-        model: responseModel,
-        status: task.status,
-        provider_task_id: task.provider_task_id,
-        diagnostics: taskDiagnostics(task),
-        events: task.events || [],
-        created_at: task.created_at,
-        updated_at: task.updated_at
-      }),
-      {
-        status: 202,
-        headers: {
-          "Content-Type": "application/json",
-          "X-Request-Id": requestId
-        }
-      }
-    );
+    throw err;
   }
 
-  // 如果上游直接返回结果（同步模式），转发响应
-  // 累加凭证配额计数器（按请求数计）
-  if (usedCredentialRef) {
-    await recordCredentialUsage(env, usedCredentialRef, usedCredentialLimits, 0).catch(() => { /* 计数器失败不阻断 */ });
-  }
+  await enqueueCreatedTask(env, task);
 
   await recordChatUsage(env, {
     request_id: requestId,
@@ -267,24 +218,120 @@ export async function handleAsyncImageGenerations(
     requested_model: requestedModelName,
     route: usedRoute,
     credential_ref: usedCredentialRef,
-    status_code: upstreamResponse.status,
+    status_code: 202,
     latency_ms: Date.now() - startedAt,
     stream: false,
     usage: undefined
   });
 
-  // 命中分组时，把响应里的 model 字段重写回组别名
-  const response = new Response(JSON.stringify(upstreamData), {
-    status: upstreamResponse.status,
-    headers: {
-      "Content-Type": "application/json",
-      "X-Request-Id": requestId
+  return asyncTaskResponse(task, resolved.group ? requestedModelName : usedAlias, requestId, false);
+}
+
+async function selectUpstreamWithFallback(params: {
+  env: Env;
+  requestId: string;
+  config: GatewayConfig;
+  primaryAlias: string;
+  primaryRoute: ProviderRouteConfig;
+  fallbackAlias?: string;
+  body: Record<string, unknown>;
+  hasImageInput: boolean;
+}): Promise<UpstreamSelectionResult> {
+  const candidates: Array<{ alias: string; route: ProviderRouteConfig }> = [
+    { alias: params.primaryAlias, route: params.primaryRoute }
+  ];
+  if (params.fallbackAlias && params.fallbackAlias !== params.primaryAlias) {
+    const fallbackRoute = selectRouteForImageAlias(params.config, params.fallbackAlias);
+    if (fallbackRoute) {
+      candidates.push({ alias: params.fallbackAlias, route: fallbackRoute });
     }
-  });
-  if (resolved.group) {
-    return rewriteModelInJsonResponse(response, requestedModelName);
   }
-  return response;
+
+  for (let index = 0; index < candidates.length; index++) {
+    const candidate = candidates[index];
+    const isLast = index === candidates.length - 1;
+    const registry = createProviderRegistry(params.env);
+    const plugin = registry.get(candidate.route.plugin_id);
+    const adapter = plugin.createAdapter(params.env);
+
+    if (!adapter.imageGenerations) {
+      if (isLast) {
+        throw providerUnavailable(`Provider plugin does not support image generation: ${candidate.route.plugin_id}`);
+      }
+      continue;
+    }
+
+    if (params.hasImageInput) {
+      const imageCap = plugin.manifest.capabilities["image"];
+      if (imageCap && imageCap.supports_image_input === false) {
+        if (isLast) {
+          throw invalidRequest(
+            `Provider plugin does not support image-to-image: ${candidate.route.plugin_id}`,
+            "image",
+            "unsupported_image_input"
+          );
+        }
+        continue;
+      }
+    }
+
+    const upstream = findUpstream(params.config, candidate.route.upstream_id);
+    const picked = upstream ? await pickAvailableCredential(params.env, upstream) : undefined;
+    if (!picked) {
+      if (isLast) {
+        throw providerUnavailable(`No available credential for upstream: ${candidate.route.upstream_id}`);
+      }
+      continue;
+    }
+
+    return {
+      route: candidate.route,
+      usedAlias: candidate.alias,
+      credentialId: picked.credential.credential_id,
+      credentialRef: picked.ref,
+      credentialLimits: picked.credential.limits
+    };
+  }
+
+  throw providerUnavailable("No upstream candidate succeeded");
+}
+
+function asyncTaskResponse(
+  task: AsyncTaskRecord,
+  requestedModelName: string,
+  requestId: string,
+  idempotentReplay: boolean
+): Response {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    "X-Request-Id": requestId
+  };
+  if (idempotentReplay) {
+    headers["Idempotent-Replayed"] = "true";
+  }
+
+  return new Response(
+    JSON.stringify({
+      id: task.id,
+      object: "task",
+      type: task.type,
+      model: task.requested_model || requestedModelName || task.model,
+      status: task.status,
+      provider_task_id: task.provider_task_id || null,
+      diagnostics: taskDiagnostics(task),
+      events: task.events || [],
+      created_at: task.created_at,
+      updated_at: task.updated_at
+    }),
+    {
+      status: isTerminalTask(task) ? 200 : 202,
+      headers
+    }
+  );
+}
+
+function isTerminalTask(task: AsyncTaskRecord): boolean {
+  return ["succeeded", "failed", "canceled", "expired"].includes(task.status);
 }
 
 /** 调用上游接口，主候选失败（5xx/429/网络错误）时按 fallback 重试 */
@@ -437,7 +484,7 @@ async function enqueueCreatedTask(env: Env, task: AsyncTaskRecord): Promise<void
     });
     task.updated_at = new Date().toISOString();
     await saveTask(env, task);
-    return;
+    throw providerUnavailable("TASK_QUEUE binding is not configured");
   }
 
   try {

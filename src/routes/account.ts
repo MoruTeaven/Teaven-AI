@@ -7,12 +7,14 @@ import {
   isAccountCenterConfigured,
   verifyAccountAccessToken
 } from "../auth/account";
+import { enforceSameOriginForUnsafeRequest } from "../auth/csrf";
 import { listModels, loadGatewayConfig, findModel, selectRoute } from "../config";
-import { conflict, invalidRequest, notFound } from "../http/errors";
+import { conflict, invalidRequest, notFound, providerUnavailable } from "../http/errors";
 import { jsonResponse } from "../http/response";
 import {
   createAdminApiKey,
   createAdminUser,
+  deleteAdminApiKey,
   getAdminApiKey,
   listAdminApiKeys,
   listUsageRecords,
@@ -27,7 +29,7 @@ import {
 } from "../admin/store";
 import { appendTaskEvent, lastTaskEvent, taskDiagnostics } from "../tasks/events";
 import { normalizeStoredObjectKey, publicTaskOutput } from "../tasks/output";
-import { getTask, listTasks, saveTask } from "../tasks/store";
+import { getTask, listTasksByOrganization, saveTask } from "../tasks/store";
 import { createProviderRegistry, resolveProviderCredential } from "../providers/registry";
 import type { AsyncTaskOutputItem, AsyncTaskRecord, Env, ModelConfig } from "../types";
 import { createId } from "../utils/ids";
@@ -79,6 +81,7 @@ export async function handleAccountRequest(request: Request, env: Env, requestId
   }
 
   const user = await authenticateAccount(request, env);
+  enforceSameOriginForUnsafeRequest(request);
   const url = new URL(request.url);
 
   if (request.method === "GET" && pathname === "/account/api/profile") {
@@ -112,7 +115,7 @@ export async function handleAccountRequest(request: Request, env: Env, requestId
       return handleUpdateAccountApiKey(user, apiKeyId, request, env, requestId);
     }
     if (request.method === "DELETE") {
-      return handleDisableAccountApiKey(user, apiKeyId, env, requestId);
+      return handleDeleteAccountApiKey(user, apiKeyId, env, requestId);
     }
   }
 
@@ -179,12 +182,12 @@ async function handleAccountProfile(user: AdminUser, env: Env, requestId: string
   const [apiKeys, usageRecords, tasks, config] = await Promise.all([
     listUserApiKeys(env, user),
     listUsageRecords(env),
-    listTasks(env, MAX_TASK_LIMIT),
+    listTasksByOrganization(env, user.organization_id, MAX_TASK_LIMIT),
     loadGatewayConfig(env)
   ]);
   const userApiKeyIds = new Set(apiKeys.map((apiKey) => apiKey.id));
   const usage = summarizeUsage(usageRecords.filter((record) => record.organization_id === user.organization_id && userApiKeyIds.has(record.api_key_id)));
-  const userTasks = tasks.filter((task) => task.organization_id === user.organization_id).slice(0, DEFAULT_TASK_LIMIT);
+  const userTasks = tasks.slice(0, DEFAULT_TASK_LIMIT);
   const models = listModels(config)
     .filter((model) => model.status !== "disabled")
     .map((model) => ({
@@ -256,7 +259,7 @@ async function handleAccountUsage(user: AdminUser, env: Env, requestId: string):
 
 async function handleAccountTasks(user: AdminUser, searchParams: URLSearchParams, env: Env, requestId: string): Promise<Response> {
   const limit = normalizeTaskLimit(searchParams.get("limit"));
-  const tasks = (await listTasks(env, MAX_TASK_LIMIT)).filter((task) => task.organization_id === user.organization_id).slice(0, limit);
+  const tasks = await listTasksByOrganization(env, user.organization_id, limit);
 
   return jsonResponse(
     {
@@ -336,15 +339,14 @@ async function handleUpdateAccountApiKey(
   );
 }
 
-async function handleDisableAccountApiKey(user: AdminUser, apiKeyId: string, env: Env, requestId: string): Promise<Response> {
+async function handleDeleteAccountApiKey(user: AdminUser, apiKeyId: string, env: Env, requestId: string): Promise<Response> {
   const apiKey = await requireOwnedApiKey(env, user, apiKeyId);
-  apiKey.status = "disabled";
-  apiKey.updated_at = new Date().toISOString();
-  await saveAdminApiKey(env, apiKey);
+  await deleteAdminApiKey(env, apiKey);
 
   return jsonResponse(
     {
-      api_key: publicApiKey(apiKey)
+      deleted: true,
+      api_key_id: apiKey.id
     },
     {
       headers: {
@@ -458,6 +460,9 @@ async function handleGetAccountFile(
 
   const task = await getTask(env, taskId);
   if (!task || task.organization_id !== user.organization_id || !taskReferencesAccountObjectKey(task, objectKey, env, requestUrl)) {
+    throw notFound("文件不存在");
+  }
+  if (task.output_expires_at && task.output_expires_at <= new Date().toISOString()) {
     throw notFound("文件不存在");
   }
   if (!env.FILES) {
@@ -683,7 +688,7 @@ async function enqueueAccountTestTask(env: Env, task: AsyncTaskRecord): Promise<
     });
     task.updated_at = new Date().toISOString();
     await saveTask(env, task);
-    return;
+    throw providerUnavailable("TASK_QUEUE binding is not configured");
   }
 
   try {
@@ -704,7 +709,7 @@ async function enqueueAccountTestTask(env: Env, task: AsyncTaskRecord): Promise<
     });
     task.updated_at = new Date().toISOString();
     await saveTask(env, task);
-    // 任务已持久化到 D1，入队失败不抛异常，通过事件记录供排障
+    throw err;
   }
 }
 
@@ -1573,7 +1578,7 @@ function renderAccountAppHtml(env: Env): string {
             <div class="card-head">
               <div>
                 <h3>我的 API Key</h3>
-                <p class="subtitle">创建、查看和禁用用于调用 /v1 接口的密钥。</p>
+                <p class="subtitle">创建、查看、禁用和删除用于调用 /v1 接口的密钥。</p>
               </div>
               <button id="openKeyModal" type="button">新建 API Key</button>
             </div>
@@ -2209,7 +2214,7 @@ Content-Type: application/json</code></pre></div>
       }
 
     function renderKeys() {
-      $('#keyList').innerHTML = state.api_keys.length ? state.api_keys.map((key) => '<article class="item"><header><div><strong>' + escapeHtml(key.name) + '</strong><div class="muted"><code>' + escapeHtml(key.key_prefix) + '...</code></div></div><span class="badge ' + escapeHtml(key.status) + '">' + escapeHtml(key.status) + '</span></header><div class="entity-meta"><div class="entity-row"><span>模型</span><span>' + escapeHtml(key.allowed_models.length ? key.allowed_models.join(', ') : '全部模型') + '</span></div><div class="entity-row"><span>过期</span><span>' + escapeHtml(key.expires_at ? formatDate(key.expires_at) : '永不过期') + '</span></div><div class="entity-row"><span>最后使用</span><span>' + escapeHtml(key.last_used_at ? formatDate(key.last_used_at) : '尚未使用') + '</span></div></div><div class="actions"><button class="compact" data-reveal-key="' + escapeHtml(key.id) + '">查看密钥</button><button class="compact danger" data-disable-key="' + escapeHtml(key.id) + '" ' + (key.status === 'disabled' ? 'disabled' : '') + '>禁用</button></div><div id="reveal-' + escapeHtml(key.id) + '" class="secret" style="display:none;"></div></article>').join('') : '<div class="notice">还没有 API Key。创建第一个密钥后即可调用 /v1 接口。</div>';
+      $('#keyList').innerHTML = state.api_keys.length ? state.api_keys.map((key) => '<article class="item"><header><div><strong>' + escapeHtml(key.name) + '</strong><div class="muted"><code>' + escapeHtml(key.key_prefix) + '...</code></div></div><span class="badge ' + escapeHtml(key.status) + '">' + escapeHtml(key.status) + '</span></header><div class="entity-meta"><div class="entity-row"><span>模型</span><span>' + escapeHtml(key.allowed_models.length ? key.allowed_models.join(', ') : '全部模型') + '</span></div><div class="entity-row"><span>过期</span><span>' + escapeHtml(key.expires_at ? formatDate(key.expires_at) : '永不过期') + '</span></div><div class="entity-row"><span>最后使用</span><span>' + escapeHtml(key.last_used_at ? formatDate(key.last_used_at) : '尚未使用') + '</span></div></div><div class="actions"><button class="compact" data-reveal-key="' + escapeHtml(key.id) + '">查看密钥</button><button class="compact" data-toggle-key="' + escapeHtml(key.id) + '">' + (key.status === 'disabled' ? '启用' : '禁用') + '</button><button class="compact danger" data-delete-key="' + escapeHtml(key.id) + '">删除</button></div><div id="reveal-' + escapeHtml(key.id) + '" class="secret" style="display:none;"></div></article>').join('') : '<div class="notice">还没有 API Key。创建第一个密钥后即可调用 /v1 接口。</div>';
     }
 
     function renderUsage() {
@@ -2718,9 +2723,17 @@ Content-Type: application/json</code></pre></div>
         return;
       }
 
-      const disableKey = event.target.closest('[data-disable-key]');
-      if (disableKey && confirm('确定禁用这个 API Key？')) {
-        await api('/account/api/api-keys/' + encodeURIComponent(disableKey.dataset.disableKey), { method: 'DELETE' });
+      const toggleKey = event.target.closest('[data-toggle-key]');
+      if (toggleKey) {
+        const key = state.api_keys.find((item) => item.id === toggleKey.dataset.toggleKey);
+        if (key) {
+          await api('/account/api/api-keys/' + encodeURIComponent(key.id), { method: 'PATCH', body: JSON.stringify({ status: key.status === 'active' ? 'disabled' : 'active' }) });
+          await load();
+        }
+      }
+      const deleteKey = event.target.closest('[data-delete-key]');
+      if (deleteKey && confirm('确定删除这个 API Key？删除后不可恢复。')) {
+        await api('/account/api/api-keys/' + encodeURIComponent(deleteKey.dataset.deleteKey), { method: 'DELETE' });
         await load();
       }
       const revealKey = event.target.closest('[data-reveal-key]');

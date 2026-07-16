@@ -524,6 +524,31 @@ export async function touchAdminApiKey(env: Env, apiKey: AdminApiKey): Promise<v
   await saveAdminApiKey(env, apiKey);
 }
 
+export async function deleteAdminApiKey(env: Env, apiKey: AdminApiKey): Promise<void> {
+  if (env.DB) {
+    try {
+      await env.DB.prepare("DELETE FROM api_keys WHERE id = ?").bind(apiKey.id).run();
+    } catch (error) {
+      if (!isMissingD1TableError(error, "api_keys")) {
+        throw error;
+      }
+    }
+  }
+
+  MEMORY.apiKeys.delete(apiKey.id);
+  if (apiKey.key_hash) {
+    MEMORY.apiKeyHashes.delete(apiKey.key_hash);
+  }
+
+  if (env.AI_GATEWAY_KV) {
+    const tasks: Promise<unknown>[] = [env.AI_GATEWAY_KV.delete(`${API_KEY_PREFIX}${apiKey.id}`)];
+    if (apiKey.key_hash) {
+      tasks.push(env.AI_GATEWAY_KV.delete(`${API_KEY_HASH_PREFIX}${apiKey.key_hash}`));
+    }
+    await Promise.all(tasks);
+  }
+}
+
 export async function recordChatUsage(
   env: Env,
   input: {

@@ -7,49 +7,42 @@
  * 每一步的耗时、状态变更都会记录在 AsyncTaskRecord.updated_at 和 events 上，
  * 可通过 GET /v1/tasks/:id 实时查询状态链。
  */
-import type { AsyncTaskOutputItem, AsyncTaskRecord, Env, ProviderRouteConfig } from "../types";
+import type { AsyncTaskOutputItem, AsyncTaskRecord, CredentialLimit, Env, ProviderRouteConfig } from "../types";
 import type { ImageGenerationRequest } from "../types";
 import { ApiError } from "../http/errors";
 import type { ProviderCredential, ProviderRequestContext, TaskPollResult } from "../providers/types";
 import { createProviderRegistry, resolveProviderCredential } from "../providers/registry";
 import { appendTaskEvent, taskDiagnostics } from "../tasks/events";
 import { publicTaskOutput } from "../tasks/output";
-import { getTask, saveTask } from "../tasks/store";
+import { claimTask, saveTask } from "../tasks/store";
 import { recordTaskUsage } from "../admin/store";
+import { recordCredentialUsage } from "../admin/credentials-store";
 import { createId } from "../utils/ids";
 
 /** 最多轮询次数，超过后任务标记为 expired */
 const MAX_POLL_ATTEMPTS = 300;
 /** 上游创建阶段最多重试次数，避免无 provider_task_id 的 running 任务永久卡住 */
 const MAX_CREATE_ATTEMPTS = 10;
+/** 单个 processor 对任务的处理租约，避免队列重复投递并发执行同一任务。 */
+const TASK_LEASE_SECONDS = 5 * 60;
 
 export async function processTask(env: Env, taskId: string): Promise<void> {
   const processId = createId("proc");
   const startedAt = Date.now();
 
-  // ── 1. 加载任务 ──
-  const task = await loadTask(env, taskId);
-  if (!task) {
-    console.warn(`[processor ${processId}] task not found: ${taskId}, skipping`);
+  // ── 1. 原子领取任务 ──
+  const claimed = await claimTask(env, taskId, processId, TASK_LEASE_SECONDS);
+  if (!claimed) {
+    console.log(`[processor ${processId}] task ${taskId} is not claimable, skipping`);
     return;
   }
+  const task = claimed.task;
 
-  // ── 2. 状态守卫：只处理 queued / running ──
-  if (!isProcessable(task.status)) {
-    console.log(
-      `[processor ${processId}] task ${taskId} is in terminal state "${task.status}", skipping`
-    );
-    return;
-  }
-
-  // ── 3. 把 queued 转为 running ──
-  if (task.status === "queued") {
-    const previousStatus = task.status;
-    task.status = "running";
-    task.updated_at = new Date().toISOString();
+  // ── 2. 记录首次进入 running ──
+  if (claimed.previous_status === "queued") {
     appendTaskEvent(task, {
       stage: "processor.started",
-      previous_status: previousStatus,
+      previous_status: claimed.previous_status,
       status: task.status,
       process_id: processId,
       message: "Queue consumer picked up the task"
@@ -57,7 +50,7 @@ export async function processTask(env: Env, taskId: string): Promise<void> {
     await saveTask(env, task);
   }
 
-  // ── 4. 没有插件上下文的任务无法处理 ──
+  // ── 3. 没有插件上下文的任务无法处理 ──
   if (!task.plugin_id || !task.provider_context) {
     markFailed(task, {
       message: "Task has no plugin_id or provider_context, cannot be processed by consumer"
@@ -70,7 +63,7 @@ export async function processTask(env: Env, taskId: string): Promise<void> {
     return;
   }
 
-  // ── 5. 没有 provider_task_id 的任务：需要先调用上游创建 ──
+  // ── 4. 没有 provider_task_id 的任务：需要先调用上游创建 ──
   if (!task.provider_task_id) {
     const createAttempt = readCounter(task.provider_context._create_attempt_count) + 1;
     task.provider_context._create_attempt_count = createAttempt;
@@ -110,7 +103,10 @@ export async function processTask(env: Env, taskId: string): Promise<void> {
     // 创建后重新入队（下一轮 consumer 拿到 provider_task_id 后开始轮询）。
     // 如果创建阶段只是临时异常，也重新入队重试，避免任务停在 running 且没有 provider_task_id。
     if (!isTerminal(task.status)) {
+      await persistTask(env, task, startedAt);
       await reEnqueue(env, task);
+      await persistTask(env, task, startedAt);
+      return;
     }
     await persistTask(env, task, startedAt);
     if (isCallbackTerminal(task.status)) {
@@ -119,7 +115,7 @@ export async function processTask(env: Env, taskId: string): Promise<void> {
     return;
   }
 
-  // ── 6. 检查轮询次数是否超限 ──
+  // ── 5. 检查轮询次数是否超限 ──
   const pollCount = (task.provider_context._poll_count as number) || 0;
   if (pollCount >= MAX_POLL_ATTEMPTS) {
     task.status = "expired";
@@ -137,7 +133,7 @@ export async function processTask(env: Env, taskId: string): Promise<void> {
     return;
   }
 
-  // ── 7. 重建路由上下文 → 调用 Provider.pollTask ──
+  // ── 6. 重建路由上下文 → 调用 Provider.pollTask ──
   const ctx = buildRequestContext(env, task, processId);
   if (!ctx) {
     markFailed(task, { message: "Cannot build provider request context from task record" }, {
@@ -188,7 +184,7 @@ export async function processTask(env: Env, taskId: string): Promise<void> {
     return;
   }
 
-  // ── 8. 更新轮询计数 ──
+  // ── 7. 更新轮询计数 ──
   task.provider_context._poll_count = pollAttempt;
   const previousProviderStatus = task.provider_context._last_provider_status;
   if (pollResult.provider_status) {
@@ -231,7 +227,7 @@ export async function processTask(env: Env, taskId: string): Promise<void> {
     });
   }
 
-  // ── 9. 按上游状态走分支 ──
+  // ── 8. 按上游状态走分支 ──
   const now = new Date().toISOString();
 
   switch (pollResult.status) {
@@ -312,7 +308,7 @@ export async function processTask(env: Env, taskId: string): Promise<void> {
       break;
   }
 
-  // ── 10. 持久化 & 回调 ──
+  // ── 9. 持久化 & 回调 ──
   await persistTask(env, task, startedAt);
 
   if (isCallbackTerminal(task.status)) {
@@ -321,14 +317,6 @@ export async function processTask(env: Env, taskId: string): Promise<void> {
 }
 
 // ── 内部辅助函数 ──
-
-async function loadTask(env: Env, taskId: string): Promise<AsyncTaskRecord | undefined> {
-  return getTask(env, taskId);
-}
-
-function isProcessable(status: string): boolean {
-  return status === "queued" || status === "running";
-}
 
 function markFailed(
   task: AsyncTaskRecord,
@@ -359,6 +347,11 @@ function markFailed(
 
 async function persistTask(env: Env, task: AsyncTaskRecord, startedAt: number): Promise<void> {
   task.updated_at = new Date().toISOString();
+  task.lease_owner = undefined;
+  task.lease_expires_at = undefined;
+  if (isTerminal(task.status)) {
+    task.next_poll_at = undefined;
+  }
   await saveTask(env, task);
 
   // 记录用量（终态时），requested_model 便于通过 request_id 反查组别名
@@ -394,7 +387,7 @@ async function reEnqueue(env: Env, task: AsyncTaskRecord, requestedDelaySeconds?
       delay_seconds: delaySeconds,
       message: "TASK_QUEUE binding is not configured"
     });
-    return;
+    throw new Error("TASK_QUEUE binding is not configured");
   }
 
   // 通过 msg 的 delay 字段推迟消息投递（仅在支持 delay 的 queue 实现上生效）
@@ -423,6 +416,7 @@ async function reEnqueue(env: Env, task: AsyncTaskRecord, requestedDelaySeconds?
         delay_seconds: delaySeconds,
         error: errorMessage(err)
       });
+      throw err;
     }
   }
 }
@@ -525,6 +519,7 @@ async function createUpstreamTask(env: Env, task: AsyncTaskRecord, processId: st
 
     const response = await adapter.imageGenerations(reqBody, ctx);
     const data = (await response.json()) as Record<string, unknown>;
+    await recordTaskCredentialUsage(env, task, processId);
     const providerStatus = firstString(data.status, readObject(data.data)?.status);
     const providerCode = firstString(data.code);
     task.provider_context = task.provider_context || {};
@@ -568,7 +563,30 @@ async function createUpstreamTask(env: Env, task: AsyncTaskRecord, processId: st
       // 上游同步返回了结果 → 直接完成
       task.status = "succeeded";
       task.completed_at = new Date().toISOString();
-      task.output = extractOutputFromResponse(data, task);
+      const output = extractOutputFromResponse(data, task);
+      if (task.store_output && output.length > 0) {
+        appendTaskEvent(task, {
+          stage: "output.store.started",
+          status: task.status,
+          process_id: processId,
+          details: { output_count: output.length }
+        });
+      }
+      task.output = await storeOutputFiles(env, task, output, processId);
+      if (task.store_output && task.output.length > 0) {
+        const expiresAt = new Date(Date.now() + task.storage_ttl_seconds * 1000).toISOString();
+        task.output_expires_at = expiresAt;
+        appendTaskEvent(task, {
+          stage: "output.store.completed",
+          status: task.status,
+          process_id: processId,
+          details: {
+            output_count: task.output.length,
+            stored_count: task.output.filter((item) => item.stored).length,
+            output_expires_at: expiresAt
+          }
+        });
+      }
       appendTaskEvent(task, {
         stage: "upstream.create.completed_sync",
         status: task.status,
@@ -598,6 +616,20 @@ async function createUpstreamTask(env: Env, task: AsyncTaskRecord, processId: st
       message: "Unsupported task type for upstream creation"
     });
   }
+}
+
+async function recordTaskCredentialUsage(env: Env, task: AsyncTaskRecord, processId: string): Promise<void> {
+  if (!task.credential_ref) {
+    return;
+  }
+  await recordCredentialUsage(env, task.credential_ref, readCredentialLimits(task), 0).catch((err) => {
+    console.warn(`[processor ${processId}] credential usage record failed for ${task.id}:`, err);
+  });
+}
+
+function readCredentialLimits(task: AsyncTaskRecord): CredentialLimit[] | undefined {
+  const value = task.provider_context?.credential_limits;
+  return Array.isArray(value) ? value as CredentialLimit[] : undefined;
 }
 
 function extractOutputFromResponse(data: Record<string, unknown>, task: AsyncTaskRecord): AsyncTaskOutputItem[] {

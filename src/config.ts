@@ -17,15 +17,34 @@ import type {
   UpstreamModelConfig
 } from "./types";
 
+export type GatewayConfigSource = "managed" | "MODEL_CONFIG_JSON" | "environment_default";
+
 export async function loadGatewayConfig(env: Env): Promise<GatewayConfig> {
+  return (await loadGatewayConfigWithSource(env)).config;
+}
+
+export async function loadGatewayConfigWithSource(env: Env): Promise<{ config: GatewayConfig; source: GatewayConfigSource }> {
   const managedConfig = await loadManagedGatewayConfig(env);
   if (managedConfig) {
     validateGatewayConfig(managedConfig);
-    return managedConfig;
+    return { config: managedConfig, source: "managed" };
+  }
+
+  if (env.MODEL_CONFIG_JSON) {
+    let parsed: GatewayConfig;
+    try {
+      parsed = JSON.parse(env.MODEL_CONFIG_JSON) as GatewayConfig;
+    } catch {
+      throw invalidRequest("MODEL_CONFIG_JSON must be valid JSON", "MODEL_CONFIG_JSON");
+    }
+    validateGatewayConfig(parsed);
+    return { config: parsed, source: "MODEL_CONFIG_JSON" };
   }
 
   const model = env.OPENAI_COMPATIBLE_DEFAULT_MODEL || "gpt-4o-mini";
   return {
+    source: "environment_default",
+    config: {
     upstreams: [
       {
         id: createId("up"),
@@ -47,6 +66,7 @@ export async function loadGatewayConfig(env: Env): Promise<GatewayConfig> {
         ]
       }
     ]
+    }
   };
 }
 
@@ -308,9 +328,36 @@ export function listModelGroups(config: GatewayConfig): ModelGroup[] {
 }
 
 export function selectRoute(model: ModelConfig, stream = false): ProviderRouteConfig | undefined {
-  return model.routes
+  const candidates = model.routes
     .filter((route) => route.status !== "disabled" && (!stream || route.supports_stream !== false))
-    .sort((left, right) => (left.priority || 100) - (right.priority || 100))[0];
+    .sort((left, right) => (left.priority || 100) - (right.priority || 100));
+  if (candidates.length === 0) {
+    return undefined;
+  }
+
+  const priority = candidates[0].priority || 100;
+  return pickWeightedRoute(candidates.filter((route) => (route.priority || 100) === priority));
+}
+
+function pickWeightedRoute(routes: ProviderRouteConfig[]): ProviderRouteConfig | undefined {
+  const candidates = routes.filter((route) => route.weight === undefined || route.weight > 0);
+  if (candidates.length === 0) {
+    return undefined;
+  }
+
+  const totalWeight = candidates.reduce((sum, route) => sum + (route.weight ?? 1), 0);
+  if (totalWeight <= 0) {
+    return undefined;
+  }
+
+  let remaining = Math.random() * totalWeight;
+  for (const route of candidates) {
+    remaining -= route.weight ?? 1;
+    if (remaining < 0) {
+      return route;
+    }
+  }
+  return candidates[candidates.length - 1];
 }
 
 export function validateGatewayConfig(config: GatewayConfig): void {
@@ -546,12 +593,13 @@ function validateModelGroups(
 }
 
 function toProviderRoute(upstream: UpstreamConfig, model: UpstreamModelConfig): ProviderRouteConfig {
+  const defaultCredential = upstream.credential_id || listUpstreamCredentials(upstream)[0]?.credential_id;
   return {
     upstream_id: upstream.id,
     upstream_name: upstream.name,
     plugin_id: upstream.plugin_id,
     provider_model: model.provider_model,
-    credential_id: upstream.credential_id,
+    credential_id: defaultCredential,
     base_url: upstream.base_url,
     config: upstream.config,
     modality: model.modality,

@@ -1,13 +1,13 @@
-import { findModel, loadGatewayConfig, resolveModelAlias, selectRoute } from "../config";
-import { conflict, invalidRequest, notFound, permissionDenied } from "../http/errors";
+import { findModel, findUpstream, loadGatewayConfig, pickAvailableCredential, resolveModelAlias, selectRoute } from "../config";
+import { conflict, invalidRequest, notFound, permissionDenied, providerUnavailable } from "../http/errors";
 import { jsonResponse } from "../http/response";
 import { recordTaskUsage } from "../admin/store";
 import { appendTaskEvent, taskDiagnostics } from "../tasks/events";
 import { publicTaskOutput } from "../tasks/output";
-import { getTask, listTasks, saveTask } from "../tasks/store";
+import { getTask, getTaskByIdempotencyKey, listTasksByOrganization, saveTask } from "../tasks/store";
 import type { AsyncTaskRecord, AuthContext, Env } from "../types";
 import { createId } from "../utils/ids";
-import { optionalString, readJsonObject, requireObject, requireString } from "../utils/request";
+import { optionalHttpsUrl, readJsonObject, requireObject, requireString } from "../utils/request";
 
 const DEFAULT_STORAGE_TTL_SECONDS = 24 * 60 * 60;
 
@@ -17,52 +17,65 @@ export async function handleCreateTask(request: Request, env: Env, auth: AuthCon
   const type = requireString(body.type, "type");
   const requestedModelName = requireString(body.model, "model");
   const input = requireObject(body.input, "input");
-  const callbackUrl = optionalString(body.callback_url, "callback_url");
+  const callbackUrl = optionalHttpsUrl(body.callback_url, "callback_url");
   const metadata = body.metadata === undefined ? undefined : requireObject(body.metadata, "metadata");
   const storeOutput = body.store_output === true;
   const storageTtlSeconds = normalizeStorageTtl(body.storage_ttl_seconds);
+  const idempotencyKey = request.headers.get("Idempotency-Key") || undefined;
   const now = new Date().toISOString();
 
   if (body.store_output !== undefined && typeof body.store_output !== "boolean") {
     throw invalidRequest("store_output must be a boolean", "store_output");
   }
 
-  // 尝试解析模型 → 路由 → 插件，为 Queue Consumer 提供上游上下文
   let upstreamId: string | undefined;
   let pluginId: string | undefined;
   let providerContext: Record<string, unknown> | undefined;
   let resolvedModel = requestedModelName;
   let hitGroup = false;
 
-  try {
-    const config = await loadGatewayConfig(env);
-    const resolved = resolveModelAlias(config, requestedModelName);
-    resolvedModel = resolved.resolvedAlias;
-    hitGroup = Boolean(resolved.group);
-
-    const modelCfg = findModel(config, resolvedModel);
-    if (modelCfg) {
-      const route = selectRoute(modelCfg, false);
-      if (route) {
-        upstreamId = route.upstream_id;
-        pluginId = route.plugin_id;
-        providerContext = {
-          upstream_model: route.provider_model,
-          request_id: requestId,
-          base_url: route.base_url,
-          credential_id: route.credential_id,
-          config: route.config
-        };
-      }
-    }
-  } catch {
-    // 配置加载失败不阻塞任务创建，consumer 会跳过无法处理的任务
-  }
-
   // 权限校验：检查用户请求的原始 model 字段（可能是组别名）
   if (auth.allowed_models && !auth.allowed_models.includes(requestedModelName)) {
     throw permissionDenied(`API key cannot access model: ${requestedModelName}`);
   }
+
+  if (idempotencyKey) {
+    const existing = await getTaskByIdempotencyKey(env, auth.organization_id, idempotencyKey);
+    if (existing) {
+      return taskJsonResponse(existing, env, request.url, requestId, true);
+    }
+  }
+
+  const config = await loadGatewayConfig(env);
+  const resolved = resolveModelAlias(config, requestedModelName);
+  resolvedModel = resolved.resolvedAlias;
+  hitGroup = Boolean(resolved.group);
+
+  const modelCfg = findModel(config, resolvedModel);
+  if (!modelCfg) {
+    throw invalidRequest(`Unknown model: ${requestedModelName}`, "model", "model_not_found");
+  }
+  const route = selectRoute(modelCfg, false);
+  if (!route) {
+    throw providerUnavailable(`No active provider route for model: ${requestedModelName}`);
+  }
+  const upstream = findUpstream(config, route.upstream_id);
+  const picked = upstream ? await pickAvailableCredential(env, upstream) : undefined;
+  if (!picked) {
+    throw providerUnavailable(`No available credential for upstream: ${route.upstream_id}`);
+  }
+
+  upstreamId = route.upstream_id;
+  pluginId = route.plugin_id;
+  providerContext = {
+    upstream_model: route.provider_model,
+    request_id: requestId,
+    base_url: route.base_url,
+    credential_id: picked.credential.credential_id,
+    credential_ref: picked.ref,
+    credential_limits: picked.credential.limits,
+    config: route.config
+  };
 
   const task: AsyncTaskRecord = {
     id: createId("task"),
@@ -76,6 +89,7 @@ export async function handleCreateTask(request: Request, env: Env, auth: AuthCon
     requested_model: hitGroup ? requestedModelName : undefined,
     upstream_id: upstreamId,
     plugin_id: pluginId,
+    credential_ref: picked.ref,
     provider_context: providerContext,
     status: "queued",
     input: { ...input, model: resolvedModel },
@@ -84,7 +98,7 @@ export async function handleCreateTask(request: Request, env: Env, auth: AuthCon
     output_expires_at: null,
     callback_url: callbackUrl,
     metadata,
-    idempotency_key: request.headers.get("Idempotency-Key") || undefined,
+    idempotency_key: idempotencyKey,
     created_at: now,
     updated_at: now
   };
@@ -96,7 +110,15 @@ export async function handleCreateTask(request: Request, env: Env, auth: AuthCon
     message: "Task created via /v1/tasks"
   });
 
-  await saveTask(env, task);
+  try {
+    await saveTask(env, task);
+  } catch (err) {
+    const existing = idempotencyKey ? await getTaskByIdempotencyKey(env, auth.organization_id, idempotencyKey) : undefined;
+    if (existing) {
+      return taskJsonResponse(existing, env, request.url, requestId, true);
+    }
+    throw err;
+  }
 
   await enqueueCreatedTask(env, task);
 
@@ -107,12 +129,7 @@ export async function handleCreateTask(request: Request, env: Env, auth: AuthCon
     console.error(`[${requestId}] recordTaskUsage failed for task ${task.id}:`, err);
   }
 
-  return jsonResponse(await publicTask(task, env, request.url), {
-    status: 202,
-    headers: {
-      "X-Request-Id": requestId
-    }
-  });
+  return taskJsonResponse(task, env, request.url, requestId, false);
 }
 
 export async function handleListTasks(request: Request, env: Env, auth: AuthContext, requestId: string): Promise<Response> {
@@ -120,26 +137,9 @@ export async function handleListTasks(request: Request, env: Env, auth: AuthCont
   const limit = Math.min(Math.max(parseInt(url.searchParams.get("limit") || "25", 10) || 25, 1), 100);
   const after = url.searchParams.get("after") || undefined;
 
-  const allTasks = await listTasks(env, limit + 1);
-  const myTasks = allTasks.filter((t) => t.organization_id === auth.organization_id);
-
-  let hasMore = false;
-  if (after) {
-    const afterIndex = myTasks.findIndex((t) => t.id === after);
-    const slice = afterIndex >= 0 ? myTasks.slice(afterIndex + 1) : myTasks;
-    hasMore = slice.length > limit;
-    const result = slice.slice(0, limit);
-    return jsonResponse({
-      object: "list",
-      data: await Promise.all(result.map((task) => publicTask(task, env, request.url, false))),
-      has_more: hasMore,
-      first_id: result[0]?.id || null,
-      last_id: result[result.length - 1]?.id || null
-    }, { headers: { "X-Request-Id": requestId } });
-  }
-
-  hasMore = myTasks.length > limit;
-  const result = myTasks.slice(0, limit);
+  const tasks = await listTasksByOrganization(env, auth.organization_id, limit + 1, after);
+  const hasMore = tasks.length > limit;
+  const result = tasks.slice(0, limit);
   return jsonResponse({
     object: "list",
     data: await Promise.all(result.map((task) => publicTask(task, env, request.url, false))),
@@ -230,7 +230,7 @@ async function enqueueCreatedTask(env: Env, task: AsyncTaskRecord): Promise<void
     });
     task.updated_at = new Date().toISOString();
     await saveTask(env, task);
-    return;
+    throw providerUnavailable("TASK_QUEUE binding is not configured");
   }
 
   try {
@@ -251,8 +251,29 @@ async function enqueueCreatedTask(env: Env, task: AsyncTaskRecord): Promise<void
     });
     task.updated_at = new Date().toISOString();
     await saveTask(env, task);
-    // 任务已持久化到 D1，入队失败不抛异常，通过事件记录供排障
+    throw err;
   }
+}
+
+async function taskJsonResponse(
+  task: AsyncTaskRecord,
+  env: Env,
+  requestUrl: string,
+  requestId: string,
+  idempotentReplay: boolean
+): Promise<Response> {
+  const headers: Record<string, string> = { "X-Request-Id": requestId };
+  if (idempotentReplay) {
+    headers["Idempotent-Replayed"] = "true";
+  }
+  return jsonResponse(await publicTask(task, env, requestUrl), {
+    status: isTerminalTask(task) ? 200 : 202,
+    headers
+  });
+}
+
+function isTerminalTask(task: AsyncTaskRecord): boolean {
+  return ["succeeded", "failed", "canceled", "expired"].includes(task.status);
 }
 
 async function publicTask(task: AsyncTaskRecord, env: Env, requestUrl?: string, includeEvents = true): Promise<Record<string, unknown>> {

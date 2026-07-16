@@ -37,6 +37,24 @@ export function optionalString(value: unknown, name: string): string | undefined
   return value;
 }
 
+export function optionalHttpsUrl(value: unknown, name: string): string | undefined {
+  const raw = optionalString(value, name);
+  if (!raw) {
+    return undefined;
+  }
+
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw invalidRequest(`${name} must be a valid HTTPS URL`, name);
+  }
+  if (url.protocol !== "https:") {
+    throw invalidRequest(`${name} must be a HTTPS URL`, name);
+  }
+  return url.href;
+}
+
 export function requireObject(value: unknown, name: string): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw invalidRequest(`${name} must be an object`, name);
