@@ -90,14 +90,18 @@ function appendVary(headers: Headers, value: string): void {
 
 export function errorResponse(error: unknown, requestId: string, request?: Request): Response {
   const apiError = toApiError(error);
+  const errorBody: Record<string, unknown> = {
+    message: apiError.message,
+    type: apiError.type,
+    param: apiError.param,
+    code: apiError.code
+  };
+  if (apiError.hint) {
+    errorBody.hint = apiError.hint;
+  }
   return jsonResponse(
     {
-      error: {
-        message: apiError.message,
-        type: apiError.type,
-        param: apiError.param,
-        code: apiError.code
-      }
+      error: errorBody
     },
     {
       status: apiError.status,
