@@ -204,3 +204,13 @@ CREATE TABLE IF NOT EXISTS model_speed_stats (
   updated_at                TEXT    NOT NULL DEFAULT (to_char(now() AT TIME ZONE 'UTC','YYYY-MM-DD HH24:MI:SS'))
 );
 CREATE INDEX IF NOT EXISTS idx_model_speed_updated ON model_speed_stats(updated_at);
+
+-- ============================================================
+-- kv_store — KV 兼容层（迁移自 Workers KV）
+-- ============================================================
+CREATE TABLE IF NOT EXISTS kv_store (
+  key        TEXT PRIMARY KEY,
+  value      TEXT NOT NULL,
+  expires_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_kv_expires ON kv_store(expires_at);

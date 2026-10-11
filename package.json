@@ -13,10 +13,13 @@
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20240620.0",
+    "@types/pg": "^8.23.1",
     "typescript": "^5.8.3",
     "wrangler": "^4.20.0"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1149.0",
+    "pg": "^8.23.1",
     "uuid": "^14.0.0"
   }
 }
