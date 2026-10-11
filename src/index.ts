@@ -47,7 +47,7 @@ export default {
   }
 };
 
-async function routeRequest(request: Request, env: Env, requestId: string): Promise<Response> {
+export async function routeRequest(request: Request, env: Env, requestId: string): Promise<Response> {
   const url = new URL(request.url);
   const pathname = normalizePath(url.pathname);
 
