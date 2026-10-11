@@ -13,7 +13,7 @@ job "teaven-ai" {
     shutdown_delay = "5s"
 
     network {
-      port "http" { static = 3009 to = 3009 }
+      port "http" { static = 3010 to = 3010 }
     }
 
     restart { attempts = 5 interval = "5m" delay = "10s" mode = "delay" }
