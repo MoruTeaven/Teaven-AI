@@ -5,3 +5,6 @@ dist/
 *.log
 wrangler.toml
 .mnemon/
+d1_dump.sql
+data_pg.sql
+*.dump.sql
