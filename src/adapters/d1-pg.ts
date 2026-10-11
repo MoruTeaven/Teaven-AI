@@ -34,5 +34,11 @@ export function createD1Pg(pool: Pool) {
 
 function toPgPlaceholders(sql: string): string {
   let n = 0;
-  return sql.replace(/\?/g, () => `$${++n}`);
+  let s = sql.replace(/\?/g, () => `$${++n}`);
+  // SQLite 方言 INSERT OR IGNORE → PG ON CONFLICT DO NOTHING
+  if (/INSERT\s+OR\s+IGNORE\s+INTO/i.test(s)) {
+    s = s.replace(/INSERT\s+OR\s+IGNORE\s+INTO/i, 'INSERT INTO');
+    s = s.replace(/;\s*$/, '').trimEnd() + ' ON CONFLICT DO NOTHING';
+  }
+  return s;
 }
