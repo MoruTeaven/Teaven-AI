@@ -4,7 +4,9 @@
 
 Teaven AI Gateway 是一个多租户 AI API 网关。对外提供 OpenAI 兼容文本接口和统一异步任务接口，内部通过 Provider Plugin 适配不同上游模型服务。
 
-现行生产形态是**自建 Node 22 + esbuild**（Nomad exec，端口 3010，域名 `model.chenyande.com`）。项目源自 Cloudflare Workers，`src/index.ts` 的 Worker 风格 `fetch`/`queue` 入口被两种运行时共用，Worker 形态作为回滚通道保留。部署流程见 `docs/deployment.md`。
+现行生产形态是**自建 Node 22 + esbuild**（Nomad exec，端口 3010，域名 `model.chenyande.com`）。
+
+⚠️ **这是过渡态。目标运行时已定为 celld / workerd（2026-10-12 定版，不走 Node LTS），本项目是 9 个服务里第一个迁移目标。** 迁移中必须保留 PostgreSQL + Patroni 与 HAProxy :6432（celld 官方 compat 表 Hyperdrive = No，无连接池）。路由与部署流程见 `docs/deployment.md`。
 
 核心原则：
 
@@ -15,13 +17,14 @@ Teaven AI Gateway 是一个多租户 AI API 网关。对外提供 OpenAI 兼容�
 
 ## 技术栈
 
-- Runtime: Node.js 22（生产），Cloudflare Workers（回滚/调试）
+- Runtime: Node.js 22（**当前生产，过渡态**）→ 目标 celld / workerd（Workers 编程模型）
 - Language: TypeScript, ESM
 - Bundler: esbuild（`dist/server.js`）
 - Process: Nomad `exec`，静态端口 3010
-- Database: PostgreSQL（node-postgres）
+- Database: PostgreSQL + Patroni（celld 路线下**继续保留**，经 HAProxy :6432）
 - Storage: Cloudflare R2（S3 兼容直连）
-- Cloudflare（回滚形态）: Wrangler 4, D1, KV, R2, Queues
+- Workers 形态: Wrangler 4, celld, D1, KV, R2, Queues
+- 配置格式: `wrangler.json`（celld 不接受 toml）
 
 ## 常用命令
 
@@ -40,9 +43,9 @@ npm run dev           # 本地跑 CF Worker 形态（wrangler dev）
 
 ## 重要目录
 
-- `src/index.ts`: 共用 HTTP 入口和 Queue Consumer 入口，两种运行时都走它。
-- `src/server/node-entry.ts`: Node 自建运行时入口，用 pg / S3 适配层构造 `Env` 后转交 `src/index.ts`。
-- `src/adapters/`: 自建形态的绑定适配（`d1-pg.ts`、`kv-pg.ts`、`r2-s3.ts`、`task-queue.ts`），把 Workers 绑定映射到 PostgreSQL/S3。**必需件，不要当残留删除。**
+- `src/index.ts`: 共用 HTTP 入口和 Queue Consumer 入口。当前 Node 形态经 `node-entry.ts` 转交它，celld 直接跑它。
+- `src/server/node-entry.ts`: Node 自建运行时入口，用 pg / S3 适配层构造 `Env`。**过渡期专属**，迁 celld 后由 Worker 入口取代。
+- `src/adapters/`: 数据库与对象存储适配（`d1-pg.ts`、`kv-pg.ts`、`r2-s3.ts`、`task-queue.ts`），把 Workers 绑定映射到 PostgreSQL/S3。**迁 celld 后依然保留**——celld 替代的是平台适配层，不是数据库适配层。不要当残留删除。
 - `src/routes/`: HTTP 路由处理，包括管理后台、用户中心、模型、聊天、任务、文件和图片生成。
 - `src/providers/`: Provider Plugin、Provider Registry 和上游协议适配。
 - `src/tasks/`: 异步任务存储、处理、事件和输出处理。
@@ -51,13 +54,14 @@ npm run dev           # 本地跑 CF Worker 形态（wrangler dev）
 - `src/admin/`: 管理后台配置与存储逻辑。
 - `migrations/`: Cloudflare D1 数据库迁移（回滚形态；生产用 `migrations_pg/schema.sql`）。
 - `deploy/`: 自建部署产物（`start.sh`、`deploy.nomad`、nginx 站点配置、`.env.example`）。
+- `wrangler.json`: Workers 形态绑定配置。celld 只接受 json/jsonc，不接受 wrangler.toml。
 - `docs/`: 技术设计、配置说明、部署手册和 Provider 插件指南。
 
 ## 关键文档
 
 - `README.md`: 项目定位、本地开发、当前接口和使用示例。
 - `docs/technical-design.md`: 架构、产品边界、数据模型和 API 设计。
-- `docs/deployment.md`: 自建部署、产物同步、发版（stop + run）与回滚。
+- `docs/deployment.md`: 运行时路线（Node 现状 → celld 目标）、产物同步、发版（stop + run）与回滚。
 - `docs/configuration.md`: 环境变量、绑定和模型配置分层。
 - `docs/provider-plugin-guide.md`: 新增上游 Provider Plugin 的规范。
 - `docs/image-to-image-design.md`: 图生图能力设计。
@@ -102,7 +106,7 @@ MOARK_API_KEY=replace-me
 - 线上密钥放 `/opt/apps/teaven-ai/.env`（权限 600，模板见 `deploy/.env.example`），由 Node `--env-file` 注入；该文件不进仓库。
 - CF Worker 形态的密钥用 `wrangler secret put`。
 - `credential_id` 支持 `env:SECRET_NAME` 格式，由运行时从 `Env` 读取。
-- `wrangler.toml` 只应保存非敏感 Worker 配置和 Cloudflare 绑定，不含密钥。
+- `wrangler.json` 只应保存非敏感 Worker 配置和绑定，不含密钥。**不要新增白名单外的顶层键**——celld 遇到 `observability`、`routes` 等未列出的键会直接拒绝部署（白名单见 `docs/deployment.md`）。
 
 ## 开发规范
 
@@ -161,7 +165,7 @@ Provider Adapter 负责：
 - R2（S3 兼容）用于文件上传、任务输出和受控下载。
 - 异步任务队列是库内表，由 `src/adapters/task-queue.ts` 轮询。
 
-CF Worker 形态（回滚/调试）：
+CF Worker / celld 形态（当前生产未用；迁移目标）：
 
 - D1 schema 变更必须新增 `migrations/*.sql`，不要直接修改已发布迁移。
 - KV 可用于管理后台配置、模型和轻量状态，但本地未绑定时可能回退到内存，仅适合开发。
@@ -175,11 +179,13 @@ CF Worker 形态（回滚/调试）：
 npm run release      # typecheck + build
 ```
 
-涉及 Worker 路由或 Cloudflare 绑定时，尽量再运行：
+改了 Worker 绑定或 `wrangler.json` 时，再运行：
 
 ```bash
-npm run dev          # wrangler dev
+npx wrangler deploy --dry-run    # 校验配置可解析、绑定齐全
 ```
+
+涉及 Worker 路由时，尽量再运行 `npm run dev`（wrangler dev）。
 
 如果无法运行验证，需要在交付说明中写明原因和风险。
 

@@ -8,12 +8,14 @@
 
 | 文件 | 用途 | 是否提交真实值 |
 | --- | --- | --- |
-| `deploy/.env.example` | 自建（生产）环境变量模板。 | 只提交占位值；真实值放服务器 `/opt/apps/teaven-ai/.env`（权限 600），`.env` 不进仓库。 |
+| `deploy/.env.example` | 自建（当前生产）环境变量模板。 | 只提交占位值；真实值放服务器 `/opt/apps/teaven-ai/.env`（权限 600），`.env` 不进仓库。 |
 | `.dev.vars.example` | 本地 `wrangler dev` 环境变量模板。 | 只提交占位值。 |
 | `.dev.vars` | 本地 `wrangler dev` 使用的环境变量。 | 不提交真实密钥。 |
-| `wrangler.toml` | CF Worker 绑定配置和非敏感 `[vars]`。 | 可以提交非敏感默认值；**不要写密钥**。 |
+| `wrangler.json` | Workers 形态绑定配置和非敏感 `vars`。 | 可以提交非敏感默认值；**不要写密钥**。 |
 
-密钥不要写进 `wrangler.toml` 或 `deploy/.env.example`。自建形态的密钥放服务器 `.env`，CF Worker 形态用 `wrangler secret put`。
+配置用 `wrangler.json` 而非 `wrangler.toml`：celld 官方 `docs/cloudflare-compat.md` 明确 `celld deploy` 只接受 json/jsonc，且只接受白名单内的顶层键（多一个键，含 `routes`，即拒绝部署）。完整白名单见 [部署手册](deployment.md)。
+
+密钥不要写进 `wrangler.json` 或 `deploy/.env.example`。自建形态的密钥放服务器 `.env`，CF Worker 形态用 `wrangler secret put`。
 
 ## 本地最小配置
 
@@ -170,12 +172,15 @@ OPENAI_COMPATIBLE_API_KEY=sk-replace-me
 }
 ```
 
-因此，当前 `wrangler.toml` 里的这两项只是显式写出了代码默认值：
+因此，当前 `wrangler.json` 里的这两项只是显式写出了代码默认值：
 
-```toml
-[vars]
-OPENAI_COMPATIBLE_BASE_URL = "https://api.openai.com/v1"
-OPENAI_COMPATIBLE_DEFAULT_MODEL = "gpt-4o-mini"
+```json
+{
+  "vars": {
+    "OPENAI_COMPATIBLE_BASE_URL": "https://api.openai.com/v1",
+    "OPENAI_COMPATIBLE_DEFAULT_MODEL": "gpt-4o-mini"
+  }
+}
 ```
 
 如果你只用 OpenAI 官方接口，并且默认模型就是 `gpt-4o-mini`，这两项可以删掉，不影响当前默认行为。
@@ -478,7 +483,7 @@ PROVIDER_SECRET_ALLOWLIST=OPENAI_COMPATIBLE_API_KEY,CLOUDFLARE_API_TOKEN
 | `DB` | 后台状态、租户、API Key、配额、计费和异步任务记录的持久化。 | `src/adapters/d1-pg.ts` → PostgreSQL |
 | `FILES` | R2 文件转存和受控读取。任务输出转存后会以 R2 object key 存储，查询任务时返回带域名的访问 URL。 | `src/adapters/r2-s3.ts` → S3 兼容客户端 |
 
-CF Worker 形态下这四个名称对应原生 D1 / KV / Queues / R2 绑定，见 `wrangler.toml`。
+CF Worker / celld 形态下这四个名称对应原生 D1 / KV / Queues / R2 绑定，见 `wrangler.json`。
 
 管理后台会展示这些绑定是否存在，并在缺少关键配置时给出 warning。
 
@@ -505,14 +510,17 @@ DEV_API_KEY=...
 
 拉代码后必须 `npm run build` 再重启，`dist/` 不进仓库。详见 [部署手册](deployment.md)。
 
-### CF Worker 形态（回滚/调试）
+### CF Worker / celld 形态（回滚与迁移目标）
 
-非敏感默认值可以放在 `wrangler.toml` 的 `[vars]`：
+非敏感默认值可以放在 `wrangler.json` 的 `vars`：
 
-```toml
-[vars]
-OPENAI_COMPATIBLE_BASE_URL = "https://api.openai.com/v1"
-OPENAI_COMPATIBLE_DEFAULT_MODEL = "gpt-4o-mini"
+```json
+{
+  "vars": {
+    "OPENAI_COMPATIBLE_BASE_URL": "https://api.openai.com/v1",
+    "OPENAI_COMPATIBLE_DEFAULT_MODEL": "gpt-4o-mini"
+  }
+}
 ```
 
 敏感值用 Secret：
@@ -524,7 +532,7 @@ wrangler secret put OPENAI_COMPATIBLE_API_KEY
 wrangler secret put CLOUDFLARE_API_TOKEN
 ```
 
-CF 部署已改为手动触发（`.github/workflows/deploy.yml` 的 `workflow_dispatch`），常规发版不要用它。
+CF 部署已改为手动触发（`.github/workflows/deploy.yml` 的 `workflow_dispatch`），常规发版不要用它。celld 部署用 `celld deploy`，读同一份 `wrangler.json`。
 
 ## 模力方舟异步接口配置
 

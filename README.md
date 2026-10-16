@@ -7,7 +7,7 @@ Teaven AI Gateway 是一个多租户 AI 基础设施项目。它面向平台用�
 - 文本 LLM：兼容 OpenAI API，支持流式响应。
 - 图片、视频及其他文件类能力：统一为异步任务，不走同步流式接口。
 - 多用户、多 API Key、多上游插件、多上游模型路由。
-- 现行生产形态为**自建 Node 22 + esbuild**（Nomad exec，端口 3010）；项目源自 Cloudflare Workers，Worker 形态作为回滚通道保留。部署细节见 [部署手册](docs/deployment.md)。
+- 现行生产形态为**自建 Node 22 + esbuild**（Nomad exec，端口 3010）。⚠️ 这是过渡态——**目标运行时已定为 celld / workerd**，本项目是 9 个服务里第一个迁移目标。部署细节见 [部署手册](docs/deployment.md)。
 
 ## 核心目标
 
@@ -76,7 +76,11 @@ Provider Adapter 还需要声明上游能力和执行模式，例如文本是否
 - Nomad `exec`：进程管理与健康检查，静态端口 3010。
 - nginx + EdgeOne：域名入口与 SSE 流式透传。
 
-已保留的 Cloudflare Workers 形态（本地调试与回滚用）：D1、KV、R2、Queues 原生绑定，以及 `wrangler.toml`。`src/adapters/` 下的 `d1-pg.ts`、`kv-pg.ts`、`r2-s3.ts`、`task-queue.ts` 把这些绑定映射到 PostgreSQL/S3，是自建形态的必需件。
+**目标运行时：celld / workerd**（2026-10-12 定版，不走 Node LTS）。注意 celld 路线**保留 PostgreSQL + Patroni 与 HAProxy :6432**，celld 官方 compat 表 Hyperdrive = No，反而更需要连接池。
+
+`src/adapters/` 下的 `d1-pg.ts`、`kv-pg.ts`、`r2-s3.ts`、`task-queue.ts` 是**数据库与对象存储适配层**，迁 celld 后依然保留——celld 替代的是「平台适配层」，不是「数据库适配层」。
+
+Worker 形态配置为 `wrangler.json`（celld 只接受 json/jsonc，不接受 toml）。
 
 ## 文档
 
@@ -109,7 +113,7 @@ npm run release      # 等价于 npm run typecheck && npm run build
 npm run dev:node     # 等价于 npm run build && npm start
 ```
 
-### 走 Cloudflare Worker 形态（调试用）
+### 走 Worker 形态（调试用）
 
 复制本地环境变量示例并填入真实密钥：
 
@@ -117,6 +121,8 @@ npm run dev:node     # 等价于 npm run build && npm start
 cp .dev.vars.example .dev.vars
 npm run dev          # wrangler dev，默认端口 8787
 ```
+
+配置读 `wrangler.json`。
 
 当前 MVP 已实现：
 
