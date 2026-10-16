@@ -1,16 +1,19 @@
 # 配置说明
 
-本文档说明项目当前识别的环境变量、Cloudflare 绑定，以及当前采用的"插件 -> 上游 -> 模型"配置分层。
+本文档说明项目当前识别的环境变量、运行时绑定，以及当前采用的"插件 -> 上游 -> 模型"配置分层。
+
+现行生产形态是自建 Node 22 + esbuild，环境变量来自服务器上的 `.env`（模板见 `deploy/.env.example`），由 Node `--env-file` 注入。项目同时保留 Cloudflare Workers 形态用于调试与回滚。部署细节见 [部署手册](deployment.md)。
 
 ## 配置文件
 
 | 文件 | 用途 | 是否提交真实值 |
 | --- | --- | --- |
-| `wrangler.toml` | Worker 基础配置和非敏感 `[vars]`。 | 可以提交非敏感默认值。 |
+| `deploy/.env.example` | 自建（生产）环境变量模板。 | 只提交占位值；真实值放服务器 `/opt/apps/teaven-ai/.env`（权限 600），`.env` 不进仓库。 |
+| `.dev.vars.example` | 本地 `wrangler dev` 环境变量模板。 | 只提交占位值。 |
 | `.dev.vars` | 本地 `wrangler dev` 使用的环境变量。 | 不提交真实密钥。 |
-| `.dev.vars.example` | 本地环境变量模板。 | 只提交占位值。 |
+| `wrangler.toml` | CF Worker 绑定配置和非敏感 `[vars]`。 | 可以提交非敏感默认值；**不要写密钥**。 |
 
-密钥不要写进 `wrangler.toml`。本地开发放在 `.dev.vars`，线上部署建议用 Cloudflare Worker Secret。
+密钥不要写进 `wrangler.toml` 或 `deploy/.env.example`。自建形态的密钥放服务器 `.env`，CF Worker 形态用 `wrangler secret put`。
 
 ## 本地最小配置
 
@@ -35,7 +38,7 @@ OPENAI_COMPATIBLE_API_KEY=sk-replace-me
 | `OPENAI_COMPATIBLE_BASE_URL` | OpenAI 兼容上游的 API Base URL。请求会发到 `${BASE_URL}/chat/completions`。 | 可选 | `https://api.openai.com/v1` |
 | `OPENAI_COMPATIBLE_DEFAULT_MODEL` | 未配置 `MODEL_CONFIG_JSON` 时生成默认模型别名和上游模型名。 | 可选 | `gpt-4o-mini` |
 | `CLOUDFLARE_ACCOUNT_ID` | Cloudflare Workers AI 账号 ID。使用 `cloudflare-workers-ai` 插件且未显式配置 `base_url` 时需要。 | 可选 | 无 |
-| `FILES_PUBLIC_BASE_URL` | R2 文件公开访问域名或路径前缀，用于把任务 `output[].url` 中的 R2 key 组装成完整 URL。未配置时任务查询接口使用当前 Worker 域名生成 `/v1/files/...` 受控下载 URL。 | 可选 | 当前请求域名 + `/v1/files/` |
+| `FILES_PUBLIC_BASE_URL` | R2 文件公开访问域名或路径前缀，用于把任务 `output[].url` 中的 R2 key 组装成完整 URL。未配置时任务查询接口使用当前请求域名生成 `/v1/files/...` 受控下载 URL。 | 可选 | 当前请求域名 + `/v1/files/` |
 | `MODEL_CONFIG_JSON` | 覆盖默认上游实例和上游模型配置。 | 可选 | 自动生成一个默认上游和默认模型 |
 | `PROVIDER_SECRET_ALLOWLIST` | 允许被 `credential_id: "env:SECRET_NAME"` 引用的上游 Secret 名称，逗号分隔。未配置时仅允许常见上游凭证命名，并禁止 `ADMIN_TOKEN`、`USER_CENTER_TOKEN`、`DEV_API_KEY` 等内部 Secret。 | 可选 | 默认安全白名单规则 |
 | `ALLOW_INLINE_PROVIDER_CREDENTIALS` | 是否允许在配置中直接写上游 API Key。生产环境不建议启用。 | 可选 | `false` |
@@ -464,20 +467,45 @@ PROVIDER_SECRET_ALLOWLIST=OPENAI_COMPATIBLE_API_KEY,CLOUDFLARE_API_TOKEN
 }
 ```
 
-## Cloudflare 绑定
+## 运行时绑定
 
-这些不是普通 `[vars]`，而是 Cloudflare Worker 绑定。当前代码会识别以下绑定名称：
+这些不是普通 `[vars]`，而是运行时注入的绑定对象。当前代码会识别以下绑定名称：
 
-| 绑定 | 当前作用 |
-| --- | --- |
-| `AI_GATEWAY_KV` | 保存后台模型配置、用户、API Key 哈希、用量记录和异步任务记录。未绑定时退回内存存储，跨 isolate 可能丢失。 |
-| `TASK_QUEUE` | 创建异步任务后发送队列消息。未绑定时只保存任务，不入队。 |
-| `DB` | 当前 MVP 主要用于后台状态和告警展示，租户、API Key、配额和计费持久化尚未实现。 |
-| `FILES` | R2 文件转存和受控读取。任务输出转存后会以 R2 object key 存储，查询任务时返回带域名的访问 URL。 |
+| 绑定 | 当前作用 | 自建形态的实现 |
+| --- | --- | --- |
+| `AI_GATEWAY_KV` | 保存后台模型配置、用户、API Key 哈希、用量记录和异步任务记录。未绑定时退回内存存储，跨进程可能丢失。 | `src/adapters/kv-pg.ts` → PostgreSQL |
+| `TASK_QUEUE` | 创建异步任务后发送队列消息。未绑定时只保存任务，不入队。 | `src/adapters/task-queue.ts` → 库内队列表 + 进程内轮询 |
+| `DB` | 后台状态、租户、API Key、配额、计费和异步任务记录的持久化。 | `src/adapters/d1-pg.ts` → PostgreSQL |
+| `FILES` | R2 文件转存和受控读取。任务输出转存后会以 R2 object key 存储，查询任务时返回带域名的访问 URL。 | `src/adapters/r2-s3.ts` → S3 兼容客户端 |
+
+CF Worker 形态下这四个名称对应原生 D1 / KV / Queues / R2 绑定，见 `wrangler.toml`。
 
 管理后台会展示这些绑定是否存在，并在缺少关键配置时给出 warning。
 
 ## 线上部署建议
+
+### 自建形态（现行生产）
+
+全部配置放服务器上的 `/opt/apps/teaven-ai/.env`，权限 600，不进仓库：
+
+```bash
+PORT=3010
+DATABASE_URL=postgresql://user:password@host:5432/dbname
+S3_ENDPOINT=https://<account>.r2.cloudflarestorage.com
+S3_ACCESS_KEY_ID=...
+S3_SECRET_ACCESS_KEY=...
+S3_BUCKET=teaven-ai
+S3_REGION=auto
+ADMIN_TOKEN=...
+USER_CENTER_TOKEN=...
+DEV_API_KEY=...
+```
+
+`OPENAI_COMPATIBLE_BASE_URL` 和 `OPENAI_COMPATIBLE_DEFAULT_MODEL` 有代码内默认值，不配也能跑。
+
+拉代码后必须 `npm run build` 再重启，`dist/` 不进仓库。详见 [部署手册](deployment.md)。
+
+### CF Worker 形态（回滚/调试）
 
 非敏感默认值可以放在 `wrangler.toml` 的 `[vars]`：
 
@@ -496,7 +524,7 @@ wrangler secret put OPENAI_COMPATIBLE_API_KEY
 wrangler secret put CLOUDFLARE_API_TOKEN
 ```
 
-如果 `OPENAI_COMPATIBLE_BASE_URL` 和 `OPENAI_COMPATIBLE_DEFAULT_MODEL` 仍使用默认值，可以不写在 `wrangler.toml` 里。
+CF 部署已改为手动触发（`.github/workflows/deploy.yml` 的 `workflow_dispatch`），常规发版不要用它。
 
 ## 模力方舟异步接口配置
 

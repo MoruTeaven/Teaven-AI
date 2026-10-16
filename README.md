@@ -1,13 +1,13 @@
 # Teaven AI Gateway
 
-Teaven AI Gateway 是一个计划部署在 Cloudflare 上的多租户 AI 基础设施项目。它面向平台用户提供统一的 OpenAI 兼容调用入口，并通过插件化 Provider 架构适配各种上游模型服务商。
+Teaven AI Gateway 是一个多租户 AI 基础设施项目。它面向平台用户提供统一的 OpenAI 兼容调用入口，并通过插件化 Provider 架构适配各种上游模型服务商。
 
 项目定位类似 NewAPI，但目标范围更聚焦：
 
 - 文本 LLM：兼容 OpenAI API，支持流式响应。
 - 图片、视频及其他文件类能力：统一为异步任务，不走同步流式接口。
 - 多用户、多 API Key、多上游插件、多上游模型路由。
-- 在 Cloudflare Workers 体系内优先实现低运维、边缘化、高可用的网关能力。
+- 现行生产形态为**自建 Node 22 + esbuild**（Nomad exec，端口 3010）；项目源自 Cloudflare Workers，Worker 形态作为回滚通道保留。部署细节见 [部署手册](docs/deployment.md)。
 
 ## 核心目标
 
@@ -66,25 +66,28 @@ Teaven AI Gateway 是一个计划部署在 Cloudflare 上的多租户 AI 基础�
 
 Provider Adapter 还需要声明上游能力和执行模式，例如文本是否支持流式、图片生成是同步还是异步、异步结果需要轮询还是 webhook。平台根据这些声明选择执行流程，但不改变对外 API 形态。
 
-## Cloudflare 部署设想
+## 部署形态
 
-- Cloudflare Workers：统一 API 网关、OpenAI 兼容接口、上游代理。
-- Cloudflare D1：租户、用户、Key、上游模型路由、任务、账单汇总等关系型数据。
-- Cloudflare KV：模型配置、路由配置、短期缓存和开关配置。
-- Cloudflare R2：上传文件、需要转存的异步任务输出、日志归档；业务文件默认最多保存 24 小时。
-- Cloudflare Queues：异步媒体任务调度、webhook 投递、日志后处理。
-- Durable Objects：可选，用于强一致的 per-key 限流、并发控制或流式连接状态管理。
-- Cron Triggers：任务补偿、超时检查、用量汇总和清理。
+现行生产为自建 Node 22 + esbuild，完整流程见 [部署手册](docs/deployment.md)：
+
+- Node 22 + esbuild：HTTP 服务，产物为 `dist/server.js`。
+- PostgreSQL：租户、用户、Key、上游模型路由、任务、账单汇总等关系型数据（schema 见 `migrations_pg/schema.sql`）。
+- Cloudflare R2：上传文件与需要转存的异步任务输出，经 S3 兼容协议直连，业务文件默认最多保存 24 小时。
+- Nomad `exec`：进程管理与健康检查，静态端口 3010。
+- nginx + EdgeOne：域名入口与 SSE 流式透传。
+
+已保留的 Cloudflare Workers 形态（本地调试与回滚用）：D1、KV、R2、Queues 原生绑定，以及 `wrangler.toml`。`src/adapters/` 下的 `d1-pg.ts`、`kv-pg.ts`、`r2-s3.ts`、`task-queue.ts` 把这些绑定映射到 PostgreSQL/S3，是自建形态的必需件。
 
 ## 文档
 
 - [技术设计](docs/technical-design.md)
+- [部署手册](docs/deployment.md)
 - [Provider 插件开发指南](docs/provider-plugin-guide.md)
 - [配置说明](docs/configuration.md)
 
 ## 本地开发
 
-要求 Node.js 22+，Wrangler 4 需要该版本或更高版本。
+要求 Node.js 22+；Wrangler 4 需要该版本或更高版本。
 
 安装依赖：
 
@@ -92,22 +95,27 @@ Provider Adapter 还需要声明上游能力和执行模式，例如文本是否
 npm install
 ```
 
+类型检查与构建（生产形态的产物）：
+
+```bash
+npm run release      # 等价于 npm run typecheck && npm run build
+```
+
+### 走自建形态（与生产一致）
+
+需要本地 PostgreSQL，`.env` 中配 `DATABASE_URL` 与 `S3_*`：
+
+```bash
+npm run dev:node     # 等价于 npm run build && npm start
+```
+
+### 走 Cloudflare Worker 形态（调试用）
+
 复制本地环境变量示例并填入真实密钥：
 
 ```bash
 cp .dev.vars.example .dev.vars
-```
-
-启动 Worker：
-
-```bash
-npm run dev
-```
-
-类型检查：
-
-```bash
-npm run typecheck
+npm run dev          # wrangler dev，默认端口 8787
 ```
 
 当前 MVP 已实现：
@@ -181,14 +189,14 @@ http://localhost:8787/account
 
 | 项目 | 说明 |
 | --- | --- |
-| Base URL | 本地开发为 `http://localhost:8787`，线上按 Worker 部署域名替换 |
+| Base URL | 本地 `wrangler dev` 为 `http://localhost:8787`，本地自建形态为 `http://localhost:3010`，线上为 `https://model.chenyande.com` |
 | 页面入口 | `GET /account`，未登录会跳转到 `/account/login` |
 | 鉴权方式 | 用户中心 JSON API 使用 `teaven_account_session` Cookie 会话鉴权，不使用 `Authorization: Bearer` |
 | 会话有效期 | 7 天，Cookie 属性为 `HttpOnly; SameSite=Lax; Path=/account`，HTTPS 下自动增加 `Secure` |
 | 登录口令 | 推荐配置 `USER_CENTER_TOKEN`；代码未配置时会退回使用 `ADMIN_TOKEN` 作为访问口令 |
 | JSON 请求头 | 带 JSON 请求体的接口必须使用 `Content-Type: application/json` |
 | 响应头 | JSON API 会返回 `Content-Type: application/json; charset=utf-8` 和 `X-Request-Id` |
-| 存储 | 绑定 `AI_GATEWAY_KV` 时为持久化存储；未绑定时退回内存，仅适合本地开发 |
+| 存储 | 绑定 `AI_GATEWAY_KV` 时为持久化存储；自建形态由 `src/adapters/kv-pg.ts` 映射到 PostgreSQL。未绑定时退回内存，仅适合本地开发 |
 
 网页登录接口：
 

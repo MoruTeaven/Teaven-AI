@@ -2,7 +2,9 @@
 
 ## 项目概览
 
-Teaven AI Gateway 是一个部署在 Cloudflare Workers 上的多租户 AI API 网关。对外提供 OpenAI 兼容文本接口和统一异步任务接口，内部通过 Provider Plugin 适配不同上游模型服务。
+Teaven AI Gateway 是一个多租户 AI API 网关。对外提供 OpenAI 兼容文本接口和统一异步任务接口，内部通过 Provider Plugin 适配不同上游模型服务。
+
+现行生产形态是**自建 Node 22 + esbuild**（Nomad exec，端口 3010，域名 `model.chenyande.com`）。项目源自 Cloudflare Workers，`src/index.ts` 的 Worker 风格 `fetch`/`queue` 入口被两种运行时共用，Worker 形态作为回滚通道保留。部署流程见 `docs/deployment.md`。
 
 核心原则：
 
@@ -13,45 +15,50 @@ Teaven AI Gateway 是一个部署在 Cloudflare Workers 上的多租户 AI API �
 
 ## 技术栈
 
-- Runtime: Cloudflare Workers
+- Runtime: Node.js 22（生产），Cloudflare Workers（回滚/调试）
 - Language: TypeScript, ESM
-- Cloudflare: Wrangler 4, D1, KV, R2, Queues
-- Node.js: 22+
+- Bundler: esbuild（`dist/server.js`）
+- Process: Nomad `exec`，静态端口 3010
+- Database: PostgreSQL（node-postgres）
+- Storage: Cloudflare R2（S3 兼容直连）
+- Cloudflare（回滚形态）: Wrangler 4, D1, KV, R2, Queues
 
 ## 常用命令
 
 ```bash
 npm install
-npm run dev
+npm run release       # 发版门禁：typecheck + build
 npm run typecheck
-npm run deploy
+npm run build         # esbuild → dist/server.js
+npm run dev:node      # 本地跑自建形态（需 PG）
+npm run dev           # 本地跑 CF Worker 形态（wrangler dev）
 ```
 
-本地开发前复制环境变量模板：
+本地开发前按形态复制环境变量模板：Worker 形态用 `cp .dev.vars.example .dev.vars`，自建形态参照 `deploy/.env.example` 配 `.env`。
 
-```bash
-cp .dev.vars.example .dev.vars
-```
-
-只提交 `.dev.vars.example` 中的占位值，不提交 `.dev.vars` 或真实密钥。
+只提交 `.dev.vars.example` 与 `deploy/.env.example` 中的占位值，不提交 `.dev.vars`、`.env` 或真实密钥。
 
 ## 重要目录
 
-- `src/index.ts`: Worker HTTP 入口和 Queue Consumer 入口。
+- `src/index.ts`: 共用 HTTP 入口和 Queue Consumer 入口，两种运行时都走它。
+- `src/server/node-entry.ts`: Node 自建运行时入口，用 pg / S3 适配层构造 `Env` 后转交 `src/index.ts`。
+- `src/adapters/`: 自建形态的绑定适配（`d1-pg.ts`、`kv-pg.ts`、`r2-s3.ts`、`task-queue.ts`），把 Workers 绑定映射到 PostgreSQL/S3。**必需件，不要当残留删除。**
 - `src/routes/`: HTTP 路由处理，包括管理后台、用户中心、模型、聊天、任务、文件和图片生成。
 - `src/providers/`: Provider Plugin、Provider Registry 和上游协议适配。
 - `src/tasks/`: 异步任务存储、处理、事件和输出处理。
 - `src/auth/`: 用户 API Key、管理员和用户中心鉴权。
 - `src/http/`: 统一响应和错误处理。
 - `src/admin/`: 管理后台配置与存储逻辑。
-- `migrations/`: Cloudflare D1 数据库迁移。
-- `docs/`: 技术设计、配置说明和 Provider 插件指南。
+- `migrations/`: Cloudflare D1 数据库迁移（回滚形态；生产用 `migrations_pg/schema.sql`）。
+- `deploy/`: 自建部署产物（`start.sh`、`deploy.nomad`、nginx 站点配置、`.env.example`）。
+- `docs/`: 技术设计、配置说明、部署手册和 Provider 插件指南。
 
 ## 关键文档
 
 - `README.md`: 项目定位、本地开发、当前接口和使用示例。
 - `docs/technical-design.md`: 架构、产品边界、数据模型和 API 设计。
-- `docs/configuration.md`: 环境变量、Cloudflare 绑定和模型配置分层。
+- `docs/deployment.md`: 自建部署、产物同步、发版（stop + run）与回滚。
+- `docs/configuration.md`: 环境变量、绑定和模型配置分层。
 - `docs/provider-plugin-guide.md`: 新增上游 Provider Plugin 的规范。
 - `docs/image-to-image-design.md`: 图生图能力设计。
 
@@ -92,9 +99,10 @@ MOARK_API_KEY=replace-me
 注意事项：
 
 - 不要把真实 API Key、Token、Cookie、数据库 ID 之外的敏感凭证写入文档或代码。
-- 线上密钥优先使用 Cloudflare Worker Secret。
+- 线上密钥放 `/opt/apps/teaven-ai/.env`（权限 600，模板见 `deploy/.env.example`），由 Node `--env-file` 注入；该文件不进仓库。
+- CF Worker 形态的密钥用 `wrangler secret put`。
 - `credential_id` 支持 `env:SECRET_NAME` 格式，由运行时从 `Env` 读取。
-- `wrangler.toml` 只应保存非敏感 Worker 配置和 Cloudflare 绑定。
+- `wrangler.toml` 只应保存非敏感 Worker 配置和 Cloudflare 绑定，不含密钥。
 
 ## 开发规范
 
@@ -105,7 +113,7 @@ MOARK_API_KEY=replace-me
 - Provider 相关变更优先扩展 `src/providers/types.ts` 中的插件能力，不要把上游私有协议泄漏到路由层。
 - 媒体和文件类能力应映射到异步任务生命周期，不要新增长耗时同步返回路径。
 - API Key 明文只应展示一次，持久化时保存哈希、前缀或必要元数据。
-- 新增环境变量时同步更新 `.dev.vars.example`、`docs/configuration.md` 和必要的类型定义。
+- 新增环境变量时同步更新 `.dev.vars.example`、`deploy/.env.example`、`docs/configuration.md` 和必要的类型定义。
 
 ## Provider 变更指南
 
@@ -146,9 +154,17 @@ Provider Adapter 负责：
 
 ## 数据与迁移
 
+生产使用 PostgreSQL：
+
+- PG schema 变更追加到 `migrations_pg/schema.sql`，不要修改已发布结构。
+- `src/adapters/d1-pg.ts` / `kv-pg.ts` 把代码里的 SQLite 风格 `?` 占位符转成 PG `$n`，并处理 `INSERT OR IGNORE` → `ON CONFLICT DO NOTHING`。
+- R2（S3 兼容）用于文件上传、任务输出和受控下载。
+- 异步任务队列是库内表，由 `src/adapters/task-queue.ts` 轮询。
+
+CF Worker 形态（回滚/调试）：
+
 - D1 schema 变更必须新增 `migrations/*.sql`，不要直接修改已发布迁移。
 - KV 可用于管理后台配置、模型和轻量状态，但本地未绑定时可能回退到内存，仅适合开发。
-- R2 用于文件上传、任务输出和受控下载。
 - Queues 用于异步任务调度和后台处理。
 
 ## 验证要求
@@ -156,21 +172,21 @@ Provider Adapter 负责：
 常规代码变更后至少运行：
 
 ```bash
-npm run typecheck
+npm run release      # typecheck + build
 ```
 
 涉及 Worker 路由或 Cloudflare 绑定时，尽量再运行：
 
 ```bash
-npm run dev
+npm run dev          # wrangler dev
 ```
 
 如果无法运行验证，需要在交付说明中写明原因和风险。
 
 ## 协作注意事项
 
-- 不要修改 `node_modules/`、`.wrangler/` 或本地状态文件。
-- 不要提交 `.dev.vars`、真实密钥、生成的本地数据库文件或日志。
+- 不要修改 `node_modules/`、`.wrangler/`、`dist/` 或本地状态文件。
+- 不要提交 `.dev.vars`、`.env`、真实密钥、生成的本地数据库文件或日志。
 - 仓库可能存在未提交的用户改动，处理任务时不要回滚无关文件。
 - 文档更新应保持中文为主，与现有 README 和 docs 风格一致。
 - 变更公共行为时同步更新 README 或对应 `docs/` 文档。

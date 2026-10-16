@@ -1,10 +1,21 @@
-name: Deploy
+name: Deploy to Cloudflare Workers (legacy rollback channel)
 
+# 现行生产是自建 Node 22 + esbuild（Nomad exec，端口 3010），见 docs/deployment.md。
+#
+# 本 workflow 只保留 Cloudflare Workers 形态的**手动**部署，用途只有两个：
+#   1. CF Worker 版本在回滚保留期内，作为自建节点的回退目标；
+#   2. 排查时把 src/index.ts 以原生 Worker 绑定（D1/KV/R2/Queues）跑一遍。
+#
+# 已于 2026-10-16 移除 push 自动触发。此前每次推 main 都会重发 Worker，
+# 会把回滚基线不断前推，让「保留旧版本用于回滚」失去意义。
+# 常规发版走 Nomad，不要用这个 workflow。
 on:
-  push:
-    branches:
-      - main
   workflow_dispatch:
+    inputs:
+      note:
+        description: '部署说明（回滚原因 / 版本号）'
+        required: false
+        type: string
 
 jobs:
   deploy:

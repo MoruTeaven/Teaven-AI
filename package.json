@@ -8,10 +8,14 @@
   },
   "scripts": {
     "dev": "wrangler dev",
-    "deploy": "wrangler deploy",
+    "dev:worker": "wrangler dev",
+    "dev:node": "npm run build && npm start",
     "typecheck": "tsc --noEmit",
-    "build": "esbuild src/server/node-entry.ts --bundle --platform=node --format=esm --outfile=dist/server.js --external:pg --external:@aws-sdk/client-s3",
-    "start": "node --env-file=.env dist/server.js"
+    "build": "esbuild src/server/node-entry.ts --bundle --platform=node --format=esm --outfile=dist/server.js --external:pg --external:@aws-sdk/client-s3 && node scripts/write-build-stamp.mjs",
+    "start": "node --env-file=.env dist/server.js",
+    "release": "npm run typecheck && npm run build",
+    "deploy": "wrangler deploy",
+    "deploy:worker": "wrangler deploy"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20240620.0",
