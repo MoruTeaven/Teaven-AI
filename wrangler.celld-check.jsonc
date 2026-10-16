@@ -1,0 +1,24 @@
+// 仅用于**打包校验**，不是部署配置。
+//
+// 目的：在真正部署到 celld 之前，就能验证 src/server/celld-entry.ts 能否在
+// Workers 运行时下打包成功——尤其是 celld 未实现的 node:net / node:tls 有没有被
+// 意外引入（postgres.js 必须走 workerd 条件导出换成 Workers TCP socket，
+// node-postgres 则完全不能用）。
+//
+// 跑法：npm run check:celld
+//
+// ⚠️ celld 部署时读的是 wrangler.json / wrangler.jsonc（不接受本文件，也不接受
+// wrangler.toml）。真正切到 celld 时，要把 wrangler.json 的 main 从
+// src/index.ts 改成 src/server/celld-entry.ts，并把 PG_* 走 secret 注入。
+{
+  "name": "teaven-ai-celld-check",
+  "main": "src/server/celld-entry.ts",
+  "compatibility_date": "2026-07-03",
+  "compatibility_flags": ["nodejs_compat"],
+  "r2_buckets": [
+    {
+      "binding": "FILES",
+      "bucket_name": "teaven-ai"
+    }
+  ]
+}

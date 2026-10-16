@@ -1,13 +1,15 @@
-import { Pool } from "pg";
+import type { SqlExecutor } from "./sql";
 
 /**
- * D1 兼容层：把 Workers D1 的 prepare().bind().first()/all()/run() 适配到 node-postgres。
+ * D1 兼容层：把 Workers D1 的 prepare().bind().first()/all()/run() 适配到 PostgreSQL。
  * - SQLite ? 占位符自动转 PG $n
  * - ON CONFLICT ... DO UPDATE SET x = excluded.x（PG 原生支持，无需转换）
  * - first() → 取首行；all() → { results }；run() → { meta: { changes: rowCount } }
  * 业务代码已用 if(env.DB) 守卫，注入此对象后无需改动。
+ *
+ * 只依赖 SqlExecutor，不关心底层是 node-postgres 还是 postgres.js。
  */
-export function createD1Pg(pool: Pool) {
+export function createD1Pg(pool: SqlExecutor) {
   return {
     prepare(sql: string) {
       const text = toPgPlaceholders(sql);

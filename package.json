@@ -13,7 +13,8 @@
     "typecheck": "tsc --noEmit",
     "build": "esbuild src/server/node-entry.ts --bundle --platform=node --format=esm --outfile=dist/server.js --external:pg --external:@aws-sdk/client-s3 && node scripts/write-build-stamp.mjs",
     "start": "node --env-file=.env dist/server.js",
-    "release": "npm run typecheck && npm run build",
+    "release": "npm run typecheck && npm run build && npm run check:celld",
+    "check:celld": "wrangler deploy --dry-run --config wrangler.celld-check.jsonc --outdir dist-celld-check",
     "deploy": "wrangler deploy",
     "deploy:worker": "wrangler deploy"
   },
@@ -26,6 +27,7 @@
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1149.0",
     "pg": "^8.23.1",
+    "postgres": "^3.4.9",
     "uuid": "^14.0.0"
   }
 }

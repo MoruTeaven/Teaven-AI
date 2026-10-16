@@ -146,23 +146,57 @@ worker_loaders  containers  define  rules
 
 ⚠️ wrangler 4 在 `wrangler.toml` 与 `wrangler.json` **并存**时会静默优先读 JSON 且**不告警**（已实测：向 JSON 注入探针变量生效，TOML 无任何提示）。所以只保留 JSON，不要把 TOML 加回来。
 
-### celld 上的绑定策略（尚未定案）
+### celld 形态：代码已就绪（2026-10-16）
 
-上表四个绑定在 celld 里原生都可用（D1/KV/Queues/R2 均为 Yes），但**本项目并不打算全用**：
+`src/server/celld-entry.ts` 已实现并通过打包校验。与 `node-entry.ts` 的差别只有「东西从哪来」，业务逻辑（`src/index.ts` 及全部路由）完全共用。
 
-- `DB` / `AI_GATEWAY_KV`：目标库是 PG，倾向继续注入 `d1-pg.ts` / `kv-pg.ts` 适配结果，而非用 celld 的 D1 / KV。
-- `FILES`：对象存储倾向 SeaweedFS（S3 兼容），`r2-s3.ts` 适配器同理。
-- `TASK_QUEUE`：库内队列表 + 进程内轮询已够用。
+| | Node 自建（当前生产） | celld（迁移目标） |
+| --- | --- | --- |
+| 入口 | `src/server/node-entry.ts` | `src/server/celld-entry.ts` |
+| PG 驱动 | node-postgres（`pg`） | **postgres.js**（`postgres`） |
+| FILES | `r2-s3.ts` + `@aws-sdk/client-s3` | celld 原生 R2 绑定 |
+| 组装 | 共用 `src/server/env-factory.ts` | 同左 |
 
-即 celld 替代的是 Node 那一层（`node:http` + 手写 Env 拼装），数据库与对象存储的适配层**原样保留**。具体怎么在 celld 里注入这些适配对象（service binding / 改入口）仍待 PoC 后定案。
+**为什么必须换掉 `pg`**：celld 的 Node 兼容是 **Partial**，只实现 `node:assert` / `async_hooks` / `buffer` / `diagnostics_channel` / `events` / `fs` / `os` / `path` / `stream` / `timers/promises` / `util`，**没有 `node:net` 与 `node:tls`**——而 `pg` 正是靠这两个建连接。postgres.js 的包 exports 带 `"workerd": "./cf/src/index.js"` 条件导出，该构建用 polyfill 把 `net.Socket` / `tls.connect` 换成 Workers 原生 TCP socket。
+
+因此新增了 `src/adapters/sql.ts` 的 `SqlExecutor` 最小接口：`d1-pg.ts` / `kv-pg.ts` / `task-queue.ts` 只依赖它，换驱动时一行不用改（`sql.unsafe(text, args)` 的签名与 `pool.query(text, values)` 对齐）。
+
+**定时轮询的坑**：Worker isolate 随时可能被回收，`setInterval` 不保证存活。因此 `task-queue.ts` 把单次扫描抽成 `pollTaskQueue()` 导出，celld 侧由 `scheduled` handler 驱动（配 `wrangler.json` 的 `triggers.crons`），不依赖常驻定时器。
+
+### 校验方式
+
+```bash
+npm run check:celld    # wrangler deploy --dry-run --config wrangler.celld-check.jsonc
+```
+
+`wrangler.celld-check.jsonc` 只是**打包校验用**，不是部署配置。它验证 `celld-entry.ts` 能否在 Workers 运行时打包成功——尤其是 `node:net` / `node:tls` 有没有被意外引入。
+
+已实测产物 `764.90 KiB / gzip 160.15 KiB`，且包内：
+
+| 检查 | 结果 |
+| --- | --- |
+| 用 postgres.js 的 workerd 构建（polyfills 垫片） | ✅ 在 |
+| `node:net` / `node:tls` | ✅ 不在 |
+| `@aws-sdk/client-s3` | ✅ 不在（FILES 走原生 R2 绑定） |
+| node-postgres | ✅ 不在 |
+
+### 切到 celld 还要做的事
+
+1. **改 `main`**：`wrangler.json` 的 `main` 从 `src/index.ts` 改成 `src/server/celld-entry.ts`（celld 只读 wrangler.json/jsonc）。
+2. **PG 凭据走 secret**：`PG_HOST` / `PG_PORT` / `PG_DATABASE` / `PG_USER` / `PG_PASSWORD` 全部走 celld secret，**绝不能写进 wrangler.json**（PoC 阶段曾明文写过，是已知遗留问题）。
+3. **FILES 存储归属待定案**：换成 celld 原生 R2 绑定后，业务文件会落到 celld 的对象存储，而不是当前的 Cloudflare R2。**存量文件如何迁移、是否接受这个变更，需先定案**——这是本项目迁 celld 最大的未决问题。
+4. **轮询间隔对齐**：`triggers.crons` 最细只能到 1 分钟，而 Node 形态的 `POLL_INTERVAL_MS` 是 5 秒。上线前需确认 1 分钟对任务时效是否够（异步媒体任务通常够，但需实测）。
+5. **celld 侧前置条件**（不属本仓库）：降权运行（现以 root 跑、CapEff 41 项全开无 Seccomp）、`CELLD_MAX_RSS_MB` 必须显式设、Nginx 反代（现仅监听 127.0.0.1）、SeaweedFS 完整 `celld diagnose`。详见评估卡 `t-mv3ulbev-sq9ru3`。
 
 ## CF Worker 残留：哪些保留、哪些忽略
 
 | 文件 | 状态 | 说明 |
 | --- | --- | --- |
 | `wrangler.json` | 保留 | 绑定配置，服务本地 `wrangler dev` 调试、回滚部署，以及未来的 celld 部署。 |
-| `src/index.ts` | 保留 | 共用 HTTP/Queue 入口，celld 与 CF Worker 都直接跑它。 |
-| `src/server/node-entry.ts` | 过渡期 | Node 自建入口；迁 celld 后由 Worker 入口取代。 |
+| `wrangler.celld-check.jsonc` | 保留 | 仅供 `npm run check:celld` 做 celld 打包校验，不是部署配置。 |
+| `src/index.ts` | 保留 | 共用 HTTP/Queue 入口，CF Worker 直接跑它；celld 经 `celld-entry.ts` 转交。 |
+| `src/server/node-entry.ts` | 过渡期 | Node 自建入口；迁 celld 后由 `celld-entry.ts` 取代。 |
+| `src/adapters/sql.ts` | 保留 | PG 驱动抽象，让同一套适配层同时支持 node-postgres 与 postgres.js。 |
 | `src/providers/cloudflare-workers-ai.ts` | 保留 | 该上游走 Workers AI 网关，自建形态下照常可用。 |
 | `migrations/*.sql` | 保留 | D1 schema 记录；生产实际用 `migrations_pg/schema.sql`。 |
 | `deploy/.env.example` 中的 `CLOUDFLARE_*` | 保留 | 供 `cloudflare-workers-ai` 插件与 R2 S3 凭证使用。 |

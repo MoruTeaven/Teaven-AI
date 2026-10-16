@@ -30,9 +30,10 @@ Teaven AI Gateway 是一个多租户 AI API 网关。对外提供 OpenAI 兼容�
 
 ```bash
 npm install
-npm run release       # 发版门禁：typecheck + build
+npm run release       # 发版门禁：typecheck + build + check:celld
 npm run typecheck
-npm run build         # esbuild → dist/server.js
+npm run build         # esbuild → dist/server.js（Node 形态）
+npm run check:celld   # celld 形态打包校验（不部署）
 npm run dev:node      # 本地跑自建形态（需 PG）
 npm run dev           # 本地跑 CF Worker 形态（wrangler dev）
 ```
@@ -43,8 +44,11 @@ npm run dev           # 本地跑 CF Worker 形态（wrangler dev）
 
 ## 重要目录
 
-- `src/index.ts`: 共用 HTTP 入口和 Queue Consumer 入口。当前 Node 形态经 `node-entry.ts` 转交它，celld 直接跑它。
-- `src/server/node-entry.ts`: Node 自建运行时入口，用 pg / S3 适配层构造 `Env`。**过渡期专属**，迁 celld 后由 Worker 入口取代。
+- `src/index.ts`: 共用 HTTP 入口和 Queue Consumer 入口。CF Worker 直接跑它；Node 与 celld 两种自建入口都转交它。
+- `src/server/node-entry.ts`: Node 自建入口（**当前生产**），node-postgres + S3。
+- `src/server/celld-entry.ts`: celld 入口（**迁移目标，已实现**），postgres.js + 原生 R2 绑定。
+- `src/server/env-factory.ts`: 两种入口共用的 Env 组装。
+- `src/adapters/sql.ts`: PG 驱动抽象（`SqlExecutor`）。**celld 未实现 node:net/node:tls，`pg` 在 celld 下不可用，必须走 postgres.js**；这个接口让适配层对驱动无感知。
 - `src/adapters/`: 数据库与对象存储适配（`d1-pg.ts`、`kv-pg.ts`、`r2-s3.ts`、`task-queue.ts`），把 Workers 绑定映射到 PostgreSQL/S3。**迁 celld 后依然保留**——celld 替代的是平台适配层，不是数据库适配层。不要当残留删除。
 - `src/routes/`: HTTP 路由处理，包括管理后台、用户中心、模型、聊天、任务、文件和图片生成。
 - `src/providers/`: Provider Plugin、Provider Registry 和上游协议适配。
@@ -167,6 +171,8 @@ Provider Adapter 负责：
 
 CF Worker / celld 形态（当前生产未用；迁移目标）：
 
+- `src/server/celld-entry.ts` 的 PG 连接走 **postgres.js**，不能改回 node-postgres。
+- Worker isolate 随时可能被回收，`setInterval` 不保证存活——celld 侧轮询靠 `scheduled` handler（`triggers.crons`），不要改回常驻定时器。
 - D1 schema 变更必须新增 `migrations/*.sql`，不要直接修改已发布迁移。
 - KV 可用于管理后台配置、模型和轻量状态，但本地未绑定时可能回退到内存，仅适合开发。
 - Queues 用于异步任务调度和后台处理。
@@ -176,13 +182,15 @@ CF Worker / celld 形态（当前生产未用；迁移目标）：
 常规代码变更后至少运行：
 
 ```bash
-npm run release      # typecheck + build
+npm run release      # typecheck + build + check:celld
 ```
+
+`check:celld` 会验证 celld 入口在 Workers 运行时下能打包，且没把 celld 未实现的 `node:net` / `node:tls` 引进包内。
 
 改了 Worker 绑定或 `wrangler.json` 时，再运行：
 
 ```bash
-npx wrangler deploy --dry-run    # 校验配置可解析、绑定齐全
+npx wrangler deploy --dry-run    # 校验 CF 配置可解析、绑定齐全
 ```
 
 涉及 Worker 路由时，尽量再运行 `npm run dev`（wrangler dev）。
