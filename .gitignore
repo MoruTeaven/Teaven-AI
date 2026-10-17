@@ -9,3 +9,4 @@ dist-celld-check/
 d1_dump.sql
 data_pg.sql
 *.dump.sql
+wrangler.prod.json*
