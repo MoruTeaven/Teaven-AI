@@ -1,7 +1,7 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "teaven-ai",
-  "main": "src/index.ts",
+  "main": "src/server/celld-entry.ts",
   "compatibility_date": "2026-07-03",
   "compatibility_flags": ["nodejs_compat"],
   "d1_databases": [
